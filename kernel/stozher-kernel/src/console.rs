@@ -1083,7 +1083,7 @@ fn preview(bytes: &[u8]) -> String {
         .last()
         .map_or(0, |(index, _)| index);
     format!(
-        "{}\n… truncated; the full payload is at GET /v1/payloads/",
+        "{}\n… truncated for display; the whole payload is served by GET /v1/payloads/<hash>",
         &pretty[..cut]
     )
 }
