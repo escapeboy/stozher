@@ -1,0 +1,85 @@
+{
+  "v": "stozher/0.1",
+  "kind": "jcs-invalid",
+  "description": "Inputs a conformant canonicalizer MUST reject, with the normative error code (spec 01 section 3.1). Parsing `input-json` MUST fail with `error`.",
+  "vectors": [
+    {
+      "name": "duplicate-key",
+      "description": "duplicate member names are forbidden",
+      "input-json": "{\"a\":1,\"a\":2}",
+      "error": "jcs-duplicate-key"
+    },
+    {
+      "name": "duplicate-key-nested",
+      "description": "duplicates are rejected at any depth, even with equal values",
+      "input-json": "{\"o\":{\"x\":1,\"x\":1}}",
+      "error": "jcs-duplicate-key"
+    },
+    {
+      "name": "lone-high-surrogate",
+      "description": "unpaired high surrogate",
+      "input-json": "{\"a\":\"\\ud800\"}",
+      "error": "jcs-lone-surrogate"
+    },
+    {
+      "name": "lone-low-surrogate",
+      "description": "unpaired low surrogate",
+      "input-json": "{\"a\":\"\\udc00x\"}",
+      "error": "jcs-lone-surrogate"
+    },
+    {
+      "name": "lone-surrogate-in-name",
+      "description": "an unpaired surrogate in a member name is equally invalid",
+      "input-json": "{\"\\ud83d\":1}",
+      "error": "jcs-lone-surrogate"
+    },
+    {
+      "name": "nan-literal",
+      "description": "NaN is not an RFC 8259 literal",
+      "input-json": "{\"a\":NaN}",
+      "error": "jcs-malformed-json"
+    },
+    {
+      "name": "infinity-literal",
+      "description": "Infinity is not an RFC 8259 literal",
+      "input-json": "{\"a\":Infinity}",
+      "error": "jcs-malformed-json"
+    },
+    {
+      "name": "number-overflows-binary64",
+      "description": "a literal outside the binary64 range has no canonical form",
+      "input-json": "{\"a\":1e400}",
+      "error": "jcs-malformed-json"
+    },
+    {
+      "name": "trailing-comma",
+      "description": "trailing commas are not JSON",
+      "input-json": "{\"a\":1,}",
+      "error": "jcs-malformed-json"
+    },
+    {
+      "name": "unquoted-name",
+      "description": "member names must be strings",
+      "input-json": "{a:1}",
+      "error": "jcs-malformed-json"
+    },
+    {
+      "name": "single-quotes",
+      "description": "single quotes are not JSON",
+      "input-json": "{'a':1}",
+      "error": "jcs-malformed-json"
+    },
+    {
+      "name": "truncated",
+      "description": "truncated input",
+      "input-json": "{\"a\":",
+      "error": "jcs-malformed-json"
+    },
+    {
+      "name": "empty-input",
+      "description": "empty input is not a JSON value",
+      "input-json": "",
+      "error": "jcs-malformed-json"
+    }
+  ]
+}

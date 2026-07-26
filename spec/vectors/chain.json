@@ -1,0 +1,1094 @@
+{
+  "v": "stozher/0.1",
+  "kind": "chain",
+  "description": "Hash chain construction and verification (spec 04 section 2). Verify the envelopes in order: signature, seq continuity, prev-hash linkage, stream identity. On success return the head hash. Verification MUST NOT consult evidence payloads -- none are supplied here, and the expected head hash is the same one the payload-binding vectors produce with payloads present.",
+  "keys": [
+    {
+      "label": "agent:claude-code/ivan-mbp",
+      "secret-key": "1b7d882b4eb6415fa19c689b623c361ca034011ad7437f255c83053a9a377d0d",
+      "public-key": "4a0beffbc56f699c7fc1eb522d5298e2e4210d054a0a33dbeea70751f61e2bfc",
+      "key-id": "ed25519:4a0beffbc56f699c7fc1eb522d5298e2e4210d054a0a33dbeea70751f61e2bfc"
+    }
+  ],
+  "vectors": [
+    {
+      "name": "valid-four-envelope-chain",
+      "description": "effect, cognition, aggregate, gated effect; verification returns the head hash",
+      "stream": "gw:ivan-mbp:0001",
+      "envelopes": [
+        {
+          "v": "stozher/0.1",
+          "kind": "effect",
+          "emitted-at": "2026-07-26T09:15:01.300Z",
+          "stream": "gw:ivan-mbp:0001",
+          "seq": 0,
+          "prev-hash": null,
+          "identity": {
+            "subject": "agent:claude-code/ivan-mbp",
+            "key": "ed25519:4a0beffbc56f699c7fc1eb522d5298e2e4210d054a0a33dbeea70751f61e2bfc",
+            "component": "gateway"
+          },
+          "mandate-ref": "1111111111111111111111111111111111111111111111111111111111111111",
+          "policy-version": "2026.07.1",
+          "classification": "consequential",
+          "execution": {
+            "action": "github.create_issue",
+            "target": "repo:acme/backend",
+            "args-hash": "fe4edc2cdfcaee172af990012c944c32c884657dfb56dfce12e197597cb651f8",
+            "outcome": "applied",
+            "started-at": "2026-07-26T09:15:00.000Z",
+            "finished-at": "2026-07-26T09:15:01.250Z"
+          },
+          "evidence": {
+            "schema": "github.create_issue.v1",
+            "media-type": "application/json",
+            "payload-hash": "8ce5dc39ae3c21a22d1009d3ee3ec7e5c662d3d7e9c749f60f9264dcceb6d2d7",
+            "retain-until": "2027-07-26T00:00:00.000Z"
+          },
+          "sig": {
+            "alg": "ed25519",
+            "key": "ed25519:4a0beffbc56f699c7fc1eb522d5298e2e4210d054a0a33dbeea70751f61e2bfc",
+            "value": "4b9288efbae719f57e5e6bef5aebf3e26c066126e06882898c829792b9f00dcf02e9d1c6189e837f5bf91a78fdc6d812726aaf4291f5b305d12b64c07de33b0e"
+          }
+        },
+        {
+          "v": "stozher/0.1",
+          "kind": "cognition",
+          "emitted-at": "2026-07-26T09:16:00.000Z",
+          "stream": "gw:ivan-mbp:0001",
+          "seq": 1,
+          "prev-hash": "94158a992320d09ca77ee0ee5252f2d2518825f11840290bd4638f2db3223571",
+          "identity": {
+            "subject": "agent:claude-code/ivan-mbp",
+            "key": "ed25519:4a0beffbc56f699c7fc1eb522d5298e2e4210d054a0a33dbeea70751f61e2bfc",
+            "component": "gateway"
+          },
+          "mandate-ref": "1111111111111111111111111111111111111111111111111111111111111111",
+          "resource": {
+            "kind": "model",
+            "name": "claude-opus-5"
+          },
+          "cost": {
+            "tokens-in": 18422,
+            "tokens-out": 1200,
+            "money-eur": "0.41",
+            "wall-clock-ms": 9310
+          },
+          "sig": {
+            "alg": "ed25519",
+            "key": "ed25519:4a0beffbc56f699c7fc1eb522d5298e2e4210d054a0a33dbeea70751f61e2bfc",
+            "value": "8a37281ad3a2a1d43384580976401d634d0512d2bec83707fcb27d6cabec95f7240be78594631dd00325c12dfb5390a1cd5fa08fea381e43631725f798b6f60d"
+          }
+        },
+        {
+          "v": "stozher/0.1",
+          "kind": "aggregate",
+          "emitted-at": "2026-07-26T09:20:00.000Z",
+          "stream": "gw:ivan-mbp:0001",
+          "seq": 2,
+          "prev-hash": "d859d1a485c32b7f8493420a0c9a9a0005885509bd551774ed693a27ff8955f1",
+          "identity": {
+            "subject": "agent:claude-code/ivan-mbp",
+            "key": "ed25519:4a0beffbc56f699c7fc1eb522d5298e2e4210d054a0a33dbeea70751f61e2bfc",
+            "component": "gateway"
+          },
+          "mandate-ref": "1111111111111111111111111111111111111111111111111111111111111111",
+          "policy-version": "2026.07.1",
+          "classification": "read",
+          "window": {
+            "from": "2026-07-26T09:15:00.000Z",
+            "to": "2026-07-26T09:20:00.000Z"
+          },
+          "counts": {
+            "total": 412,
+            "by-action": {
+              "github.get_file": 380,
+              "github.list_issues": 32
+            }
+          },
+          "sample-hashes": [
+            "fe4edc2cdfcaee172af990012c944c32c884657dfb56dfce12e197597cb651f8",
+            "8ce5dc39ae3c21a22d1009d3ee3ec7e5c662d3d7e9c749f60f9264dcceb6d2d7"
+          ],
+          "sig": {
+            "alg": "ed25519",
+            "key": "ed25519:4a0beffbc56f699c7fc1eb522d5298e2e4210d054a0a33dbeea70751f61e2bfc",
+            "value": "09b2256698441b6ca7f1db4db148cb7a6481f2fcd9f8ccfb19652a3ad0059c008e4fb8625079a3fb8473e5662630e176cbe0845bca42f17fe02112ef62e01704"
+          }
+        },
+        {
+          "v": "stozher/0.1",
+          "kind": "effect",
+          "emitted-at": "2026-07-26T09:15:01.300Z",
+          "stream": "gw:ivan-mbp:0001",
+          "seq": 3,
+          "prev-hash": "b3d818cb2f70f89cf3ac4fab24a42092b64308e590e46e076475c6966ba6bd28",
+          "identity": {
+            "subject": "agent:claude-code/ivan-mbp",
+            "key": "ed25519:4a0beffbc56f699c7fc1eb522d5298e2e4210d054a0a33dbeea70751f61e2bfc",
+            "component": "gateway"
+          },
+          "mandate-ref": "1111111111111111111111111111111111111111111111111111111111111111",
+          "policy-version": "2026.07.1",
+          "classification": "consequential",
+          "execution": {
+            "action": "github.create_issue",
+            "target": "repo:acme/backend",
+            "args-hash": "fe4edc2cdfcaee172af990012c944c32c884657dfb56dfce12e197597cb651f8",
+            "outcome": "applied",
+            "started-at": "2026-07-26T09:15:00.000Z",
+            "finished-at": "2026-07-26T09:15:01.250Z"
+          },
+          "evidence": {
+            "schema": "github.create_issue.v1",
+            "media-type": "application/json",
+            "payload-hash": "8ce5dc39ae3c21a22d1009d3ee3ec7e5c662d3d7e9c749f60f9264dcceb6d2d7",
+            "retain-until": "2027-07-26T00:00:00.000Z"
+          },
+          "authorization": {
+            "request": {
+              "v": "stozher/0.1",
+              "kind": "action-request",
+              "requested-at": "2026-07-26T09:14:40.000Z",
+              "subject": "agent:claude-code/ivan-mbp",
+              "key": "ed25519:4a0beffbc56f699c7fc1eb522d5298e2e4210d054a0a33dbeea70751f61e2bfc",
+              "component": "gateway",
+              "mandate-ref": "1111111111111111111111111111111111111111111111111111111111111111",
+              "policy-version": "2026.07.1",
+              "classification": "consequential",
+              "action": "github.create_issue",
+              "target": "repo:acme/backend",
+              "args-hash": "fe4edc2cdfcaee172af990012c944c32c884657dfb56dfce12e197597cb651f8",
+              "nonce": "7c1d4f9a2b8e0c3d5a6f1e2b4c8d9e0f",
+              "not-after": "2026-07-26T10:14:40.000Z"
+            },
+            "decision": {
+              "v": "stozher/0.1",
+              "kind": "gate-decision",
+              "request-hash": "227b3fca002190d67a196f05f95e27acc20c6c4de17df7616d06529137e10b5c",
+              "decision": "approve",
+              "decided-at": "2026-07-26T09:14:58.000Z",
+              "not-after": "2026-07-26T09:29:58.000Z",
+              "single-use": true,
+              "reason": null,
+              "sig": {
+                "alg": "ed25519",
+                "key": "ed25519:09b3c43478cc065aeeeba98ee919e6b007ff3ff122f86e0a4a3fbc5898092d3a",
+                "value": "b0d908cb4bf3ac285f89ce4049c7f0fa45c242697ac79fef1f534feab6a2eda9e5311c6156787291228c594a3bfe985a805cd05190ff1f06b76fae40864c9502"
+              }
+            }
+          },
+          "correlation-ref": "claude-code:session/8f31",
+          "sig": {
+            "alg": "ed25519",
+            "key": "ed25519:4a0beffbc56f699c7fc1eb522d5298e2e4210d054a0a33dbeea70751f61e2bfc",
+            "value": "c141e195cc0d84f391f43acfc638870a2bee92f0587646488d211f821c00a96f39e53173e27044ca95abc39054b9261643f4af34e202fa75a780bd99cd94d308"
+          }
+        }
+      ],
+      "expected": {
+        "valid": true,
+        "error": null,
+        "head-hash": "1e7e5286e253e04e4cb2bff1ea090265bd6fdfee6abaea8f851d690c0f04622b",
+        "anchored": true,
+        "count": 4
+      }
+    },
+    {
+      "name": "single-genesis-envelope",
+      "description": "a one-envelope chain is a valid chain",
+      "stream": "gw:ivan-mbp:0001",
+      "envelopes": [
+        {
+          "v": "stozher/0.1",
+          "kind": "effect",
+          "emitted-at": "2026-07-26T09:15:01.300Z",
+          "stream": "gw:ivan-mbp:0001",
+          "seq": 0,
+          "prev-hash": null,
+          "identity": {
+            "subject": "agent:claude-code/ivan-mbp",
+            "key": "ed25519:4a0beffbc56f699c7fc1eb522d5298e2e4210d054a0a33dbeea70751f61e2bfc",
+            "component": "gateway"
+          },
+          "mandate-ref": "1111111111111111111111111111111111111111111111111111111111111111",
+          "policy-version": "2026.07.1",
+          "classification": "consequential",
+          "execution": {
+            "action": "github.create_issue",
+            "target": "repo:acme/backend",
+            "args-hash": "fe4edc2cdfcaee172af990012c944c32c884657dfb56dfce12e197597cb651f8",
+            "outcome": "applied",
+            "started-at": "2026-07-26T09:15:00.000Z",
+            "finished-at": "2026-07-26T09:15:01.250Z"
+          },
+          "evidence": {
+            "schema": "github.create_issue.v1",
+            "media-type": "application/json",
+            "payload-hash": "8ce5dc39ae3c21a22d1009d3ee3ec7e5c662d3d7e9c749f60f9264dcceb6d2d7",
+            "retain-until": "2027-07-26T00:00:00.000Z"
+          },
+          "sig": {
+            "alg": "ed25519",
+            "key": "ed25519:4a0beffbc56f699c7fc1eb522d5298e2e4210d054a0a33dbeea70751f61e2bfc",
+            "value": "4b9288efbae719f57e5e6bef5aebf3e26c066126e06882898c829792b9f00dcf02e9d1c6189e837f5bf91a78fdc6d812726aaf4291f5b305d12b64c07de33b0e"
+          }
+        }
+      ],
+      "expected": {
+        "valid": true,
+        "error": null,
+        "head-hash": "94158a992320d09ca77ee0ee5252f2d2518825f11840290bd4638f2db3223571",
+        "anchored": true,
+        "count": 1
+      }
+    },
+    {
+      "name": "broken-prev-hash",
+      "description": "envelope 2 points at a hash that is not its predecessor's, and is validly re-signed -- so only the chain rule catches it",
+      "stream": "gw:ivan-mbp:0001",
+      "envelopes": [
+        {
+          "v": "stozher/0.1",
+          "kind": "effect",
+          "emitted-at": "2026-07-26T09:15:01.300Z",
+          "stream": "gw:ivan-mbp:0001",
+          "seq": 0,
+          "prev-hash": null,
+          "identity": {
+            "subject": "agent:claude-code/ivan-mbp",
+            "key": "ed25519:4a0beffbc56f699c7fc1eb522d5298e2e4210d054a0a33dbeea70751f61e2bfc",
+            "component": "gateway"
+          },
+          "mandate-ref": "1111111111111111111111111111111111111111111111111111111111111111",
+          "policy-version": "2026.07.1",
+          "classification": "consequential",
+          "execution": {
+            "action": "github.create_issue",
+            "target": "repo:acme/backend",
+            "args-hash": "fe4edc2cdfcaee172af990012c944c32c884657dfb56dfce12e197597cb651f8",
+            "outcome": "applied",
+            "started-at": "2026-07-26T09:15:00.000Z",
+            "finished-at": "2026-07-26T09:15:01.250Z"
+          },
+          "evidence": {
+            "schema": "github.create_issue.v1",
+            "media-type": "application/json",
+            "payload-hash": "8ce5dc39ae3c21a22d1009d3ee3ec7e5c662d3d7e9c749f60f9264dcceb6d2d7",
+            "retain-until": "2027-07-26T00:00:00.000Z"
+          },
+          "sig": {
+            "alg": "ed25519",
+            "key": "ed25519:4a0beffbc56f699c7fc1eb522d5298e2e4210d054a0a33dbeea70751f61e2bfc",
+            "value": "4b9288efbae719f57e5e6bef5aebf3e26c066126e06882898c829792b9f00dcf02e9d1c6189e837f5bf91a78fdc6d812726aaf4291f5b305d12b64c07de33b0e"
+          }
+        },
+        {
+          "v": "stozher/0.1",
+          "kind": "cognition",
+          "emitted-at": "2026-07-26T09:16:00.000Z",
+          "stream": "gw:ivan-mbp:0001",
+          "seq": 1,
+          "prev-hash": "94158a992320d09ca77ee0ee5252f2d2518825f11840290bd4638f2db3223571",
+          "identity": {
+            "subject": "agent:claude-code/ivan-mbp",
+            "key": "ed25519:4a0beffbc56f699c7fc1eb522d5298e2e4210d054a0a33dbeea70751f61e2bfc",
+            "component": "gateway"
+          },
+          "mandate-ref": "1111111111111111111111111111111111111111111111111111111111111111",
+          "resource": {
+            "kind": "model",
+            "name": "claude-opus-5"
+          },
+          "cost": {
+            "tokens-in": 18422,
+            "tokens-out": 1200,
+            "money-eur": "0.41",
+            "wall-clock-ms": 9310
+          },
+          "sig": {
+            "alg": "ed25519",
+            "key": "ed25519:4a0beffbc56f699c7fc1eb522d5298e2e4210d054a0a33dbeea70751f61e2bfc",
+            "value": "8a37281ad3a2a1d43384580976401d634d0512d2bec83707fcb27d6cabec95f7240be78594631dd00325c12dfb5390a1cd5fa08fea381e43631725f798b6f60d"
+          }
+        },
+        {
+          "v": "stozher/0.1",
+          "kind": "aggregate",
+          "emitted-at": "2026-07-26T09:20:00.000Z",
+          "stream": "gw:ivan-mbp:0001",
+          "seq": 2,
+          "prev-hash": "abababababababababababababababababababababababababababababababab",
+          "identity": {
+            "subject": "agent:claude-code/ivan-mbp",
+            "key": "ed25519:4a0beffbc56f699c7fc1eb522d5298e2e4210d054a0a33dbeea70751f61e2bfc",
+            "component": "gateway"
+          },
+          "mandate-ref": "1111111111111111111111111111111111111111111111111111111111111111",
+          "policy-version": "2026.07.1",
+          "classification": "read",
+          "window": {
+            "from": "2026-07-26T09:15:00.000Z",
+            "to": "2026-07-26T09:20:00.000Z"
+          },
+          "counts": {
+            "total": 412,
+            "by-action": {
+              "github.get_file": 380,
+              "github.list_issues": 32
+            }
+          },
+          "sample-hashes": [
+            "fe4edc2cdfcaee172af990012c944c32c884657dfb56dfce12e197597cb651f8",
+            "8ce5dc39ae3c21a22d1009d3ee3ec7e5c662d3d7e9c749f60f9264dcceb6d2d7"
+          ],
+          "sig": {
+            "alg": "ed25519",
+            "key": "ed25519:4a0beffbc56f699c7fc1eb522d5298e2e4210d054a0a33dbeea70751f61e2bfc",
+            "value": "d9052c0b0f05df9bf73c6951cd0a0b177244e8108d16ca46efa510e8482d40ca2785c2c152e971acab2979ce3669d581e96583a9baf4113cbb3441d4b9e7d305"
+          }
+        },
+        {
+          "v": "stozher/0.1",
+          "kind": "effect",
+          "emitted-at": "2026-07-26T09:15:01.300Z",
+          "stream": "gw:ivan-mbp:0001",
+          "seq": 3,
+          "prev-hash": "250d52be6af246c27477773a0758596e4370f3c78494ef896ae4c108e3e4874d",
+          "identity": {
+            "subject": "agent:claude-code/ivan-mbp",
+            "key": "ed25519:4a0beffbc56f699c7fc1eb522d5298e2e4210d054a0a33dbeea70751f61e2bfc",
+            "component": "gateway"
+          },
+          "mandate-ref": "1111111111111111111111111111111111111111111111111111111111111111",
+          "policy-version": "2026.07.1",
+          "classification": "consequential",
+          "execution": {
+            "action": "github.create_issue",
+            "target": "repo:acme/backend",
+            "args-hash": "fe4edc2cdfcaee172af990012c944c32c884657dfb56dfce12e197597cb651f8",
+            "outcome": "applied",
+            "started-at": "2026-07-26T09:15:00.000Z",
+            "finished-at": "2026-07-26T09:15:01.250Z"
+          },
+          "evidence": {
+            "schema": "github.create_issue.v1",
+            "media-type": "application/json",
+            "payload-hash": "8ce5dc39ae3c21a22d1009d3ee3ec7e5c662d3d7e9c749f60f9264dcceb6d2d7",
+            "retain-until": "2027-07-26T00:00:00.000Z"
+          },
+          "authorization": {
+            "request": {
+              "v": "stozher/0.1",
+              "kind": "action-request",
+              "requested-at": "2026-07-26T09:14:40.000Z",
+              "subject": "agent:claude-code/ivan-mbp",
+              "key": "ed25519:4a0beffbc56f699c7fc1eb522d5298e2e4210d054a0a33dbeea70751f61e2bfc",
+              "component": "gateway",
+              "mandate-ref": "1111111111111111111111111111111111111111111111111111111111111111",
+              "policy-version": "2026.07.1",
+              "classification": "consequential",
+              "action": "github.create_issue",
+              "target": "repo:acme/backend",
+              "args-hash": "fe4edc2cdfcaee172af990012c944c32c884657dfb56dfce12e197597cb651f8",
+              "nonce": "7c1d4f9a2b8e0c3d5a6f1e2b4c8d9e0f",
+              "not-after": "2026-07-26T10:14:40.000Z"
+            },
+            "decision": {
+              "v": "stozher/0.1",
+              "kind": "gate-decision",
+              "request-hash": "227b3fca002190d67a196f05f95e27acc20c6c4de17df7616d06529137e10b5c",
+              "decision": "approve",
+              "decided-at": "2026-07-26T09:14:58.000Z",
+              "not-after": "2026-07-26T09:29:58.000Z",
+              "single-use": true,
+              "reason": null,
+              "sig": {
+                "alg": "ed25519",
+                "key": "ed25519:09b3c43478cc065aeeeba98ee919e6b007ff3ff122f86e0a4a3fbc5898092d3a",
+                "value": "b0d908cb4bf3ac285f89ce4049c7f0fa45c242697ac79fef1f534feab6a2eda9e5311c6156787291228c594a3bfe985a805cd05190ff1f06b76fae40864c9502"
+              }
+            }
+          },
+          "correlation-ref": "claude-code:session/8f31",
+          "sig": {
+            "alg": "ed25519",
+            "key": "ed25519:4a0beffbc56f699c7fc1eb522d5298e2e4210d054a0a33dbeea70751f61e2bfc",
+            "value": "88dd07e6c2e828891d25e3d9c9000e72fbc02b062b11fbcd9fb0175e902fe1af9f3fbe41108d58277d2525227e05483de4d6026a7966b69a4c183d52413cf70f"
+          }
+        }
+      ],
+      "expected": {
+        "valid": false,
+        "error": "chain-prev-hash-mismatch",
+        "failed-at-seq": 2
+      }
+    },
+    {
+      "name": "seq-gap",
+      "description": "seq jumps from 1 to 3: an envelope is missing and the gap is mechanical",
+      "stream": "gw:ivan-mbp:0001",
+      "envelopes": [
+        {
+          "v": "stozher/0.1",
+          "kind": "effect",
+          "emitted-at": "2026-07-26T09:15:01.300Z",
+          "stream": "gw:ivan-mbp:0001",
+          "seq": 0,
+          "prev-hash": null,
+          "identity": {
+            "subject": "agent:claude-code/ivan-mbp",
+            "key": "ed25519:4a0beffbc56f699c7fc1eb522d5298e2e4210d054a0a33dbeea70751f61e2bfc",
+            "component": "gateway"
+          },
+          "mandate-ref": "1111111111111111111111111111111111111111111111111111111111111111",
+          "policy-version": "2026.07.1",
+          "classification": "consequential",
+          "execution": {
+            "action": "github.create_issue",
+            "target": "repo:acme/backend",
+            "args-hash": "fe4edc2cdfcaee172af990012c944c32c884657dfb56dfce12e197597cb651f8",
+            "outcome": "applied",
+            "started-at": "2026-07-26T09:15:00.000Z",
+            "finished-at": "2026-07-26T09:15:01.250Z"
+          },
+          "evidence": {
+            "schema": "github.create_issue.v1",
+            "media-type": "application/json",
+            "payload-hash": "8ce5dc39ae3c21a22d1009d3ee3ec7e5c662d3d7e9c749f60f9264dcceb6d2d7",
+            "retain-until": "2027-07-26T00:00:00.000Z"
+          },
+          "sig": {
+            "alg": "ed25519",
+            "key": "ed25519:4a0beffbc56f699c7fc1eb522d5298e2e4210d054a0a33dbeea70751f61e2bfc",
+            "value": "4b9288efbae719f57e5e6bef5aebf3e26c066126e06882898c829792b9f00dcf02e9d1c6189e837f5bf91a78fdc6d812726aaf4291f5b305d12b64c07de33b0e"
+          }
+        },
+        {
+          "v": "stozher/0.1",
+          "kind": "cognition",
+          "emitted-at": "2026-07-26T09:16:00.000Z",
+          "stream": "gw:ivan-mbp:0001",
+          "seq": 1,
+          "prev-hash": "94158a992320d09ca77ee0ee5252f2d2518825f11840290bd4638f2db3223571",
+          "identity": {
+            "subject": "agent:claude-code/ivan-mbp",
+            "key": "ed25519:4a0beffbc56f699c7fc1eb522d5298e2e4210d054a0a33dbeea70751f61e2bfc",
+            "component": "gateway"
+          },
+          "mandate-ref": "1111111111111111111111111111111111111111111111111111111111111111",
+          "resource": {
+            "kind": "model",
+            "name": "claude-opus-5"
+          },
+          "cost": {
+            "tokens-in": 18422,
+            "tokens-out": 1200,
+            "money-eur": "0.41",
+            "wall-clock-ms": 9310
+          },
+          "sig": {
+            "alg": "ed25519",
+            "key": "ed25519:4a0beffbc56f699c7fc1eb522d5298e2e4210d054a0a33dbeea70751f61e2bfc",
+            "value": "8a37281ad3a2a1d43384580976401d634d0512d2bec83707fcb27d6cabec95f7240be78594631dd00325c12dfb5390a1cd5fa08fea381e43631725f798b6f60d"
+          }
+        },
+        {
+          "v": "stozher/0.1",
+          "kind": "effect",
+          "emitted-at": "2026-07-26T09:15:01.300Z",
+          "stream": "gw:ivan-mbp:0001",
+          "seq": 3,
+          "prev-hash": "d859d1a485c32b7f8493420a0c9a9a0005885509bd551774ed693a27ff8955f1",
+          "identity": {
+            "subject": "agent:claude-code/ivan-mbp",
+            "key": "ed25519:4a0beffbc56f699c7fc1eb522d5298e2e4210d054a0a33dbeea70751f61e2bfc",
+            "component": "gateway"
+          },
+          "mandate-ref": "1111111111111111111111111111111111111111111111111111111111111111",
+          "policy-version": "2026.07.1",
+          "classification": "consequential",
+          "execution": {
+            "action": "github.create_issue",
+            "target": "repo:acme/backend",
+            "args-hash": "fe4edc2cdfcaee172af990012c944c32c884657dfb56dfce12e197597cb651f8",
+            "outcome": "applied",
+            "started-at": "2026-07-26T09:15:00.000Z",
+            "finished-at": "2026-07-26T09:15:01.250Z"
+          },
+          "evidence": {
+            "schema": "github.create_issue.v1",
+            "media-type": "application/json",
+            "payload-hash": "8ce5dc39ae3c21a22d1009d3ee3ec7e5c662d3d7e9c749f60f9264dcceb6d2d7",
+            "retain-until": "2027-07-26T00:00:00.000Z"
+          },
+          "authorization": {
+            "request": {
+              "v": "stozher/0.1",
+              "kind": "action-request",
+              "requested-at": "2026-07-26T09:14:40.000Z",
+              "subject": "agent:claude-code/ivan-mbp",
+              "key": "ed25519:4a0beffbc56f699c7fc1eb522d5298e2e4210d054a0a33dbeea70751f61e2bfc",
+              "component": "gateway",
+              "mandate-ref": "1111111111111111111111111111111111111111111111111111111111111111",
+              "policy-version": "2026.07.1",
+              "classification": "consequential",
+              "action": "github.create_issue",
+              "target": "repo:acme/backend",
+              "args-hash": "fe4edc2cdfcaee172af990012c944c32c884657dfb56dfce12e197597cb651f8",
+              "nonce": "7c1d4f9a2b8e0c3d5a6f1e2b4c8d9e0f",
+              "not-after": "2026-07-26T10:14:40.000Z"
+            },
+            "decision": {
+              "v": "stozher/0.1",
+              "kind": "gate-decision",
+              "request-hash": "227b3fca002190d67a196f05f95e27acc20c6c4de17df7616d06529137e10b5c",
+              "decision": "approve",
+              "decided-at": "2026-07-26T09:14:58.000Z",
+              "not-after": "2026-07-26T09:29:58.000Z",
+              "single-use": true,
+              "reason": null,
+              "sig": {
+                "alg": "ed25519",
+                "key": "ed25519:09b3c43478cc065aeeeba98ee919e6b007ff3ff122f86e0a4a3fbc5898092d3a",
+                "value": "b0d908cb4bf3ac285f89ce4049c7f0fa45c242697ac79fef1f534feab6a2eda9e5311c6156787291228c594a3bfe985a805cd05190ff1f06b76fae40864c9502"
+              }
+            }
+          },
+          "correlation-ref": "claude-code:session/8f31",
+          "sig": {
+            "alg": "ed25519",
+            "key": "ed25519:4a0beffbc56f699c7fc1eb522d5298e2e4210d054a0a33dbeea70751f61e2bfc",
+            "value": "91b0c161702a644025d272f30352dd6c5d3463902a7091611ee4a36360868e405b22fcf4ee0de77889bbf0f7628dc388e3b856fbc4f05ed560e1f78bb0690d05"
+          }
+        }
+      ],
+      "expected": {
+        "valid": false,
+        "error": "chain-seq-gap",
+        "failed-at-seq": 3
+      }
+    },
+    {
+      "name": "seq-duplicate",
+      "description": "the same seq appears twice",
+      "stream": "gw:ivan-mbp:0001",
+      "envelopes": [
+        {
+          "v": "stozher/0.1",
+          "kind": "effect",
+          "emitted-at": "2026-07-26T09:15:01.300Z",
+          "stream": "gw:ivan-mbp:0001",
+          "seq": 0,
+          "prev-hash": null,
+          "identity": {
+            "subject": "agent:claude-code/ivan-mbp",
+            "key": "ed25519:4a0beffbc56f699c7fc1eb522d5298e2e4210d054a0a33dbeea70751f61e2bfc",
+            "component": "gateway"
+          },
+          "mandate-ref": "1111111111111111111111111111111111111111111111111111111111111111",
+          "policy-version": "2026.07.1",
+          "classification": "consequential",
+          "execution": {
+            "action": "github.create_issue",
+            "target": "repo:acme/backend",
+            "args-hash": "fe4edc2cdfcaee172af990012c944c32c884657dfb56dfce12e197597cb651f8",
+            "outcome": "applied",
+            "started-at": "2026-07-26T09:15:00.000Z",
+            "finished-at": "2026-07-26T09:15:01.250Z"
+          },
+          "evidence": {
+            "schema": "github.create_issue.v1",
+            "media-type": "application/json",
+            "payload-hash": "8ce5dc39ae3c21a22d1009d3ee3ec7e5c662d3d7e9c749f60f9264dcceb6d2d7",
+            "retain-until": "2027-07-26T00:00:00.000Z"
+          },
+          "sig": {
+            "alg": "ed25519",
+            "key": "ed25519:4a0beffbc56f699c7fc1eb522d5298e2e4210d054a0a33dbeea70751f61e2bfc",
+            "value": "4b9288efbae719f57e5e6bef5aebf3e26c066126e06882898c829792b9f00dcf02e9d1c6189e837f5bf91a78fdc6d812726aaf4291f5b305d12b64c07de33b0e"
+          }
+        },
+        {
+          "v": "stozher/0.1",
+          "kind": "cognition",
+          "emitted-at": "2026-07-26T09:16:00.000Z",
+          "stream": "gw:ivan-mbp:0001",
+          "seq": 1,
+          "prev-hash": "94158a992320d09ca77ee0ee5252f2d2518825f11840290bd4638f2db3223571",
+          "identity": {
+            "subject": "agent:claude-code/ivan-mbp",
+            "key": "ed25519:4a0beffbc56f699c7fc1eb522d5298e2e4210d054a0a33dbeea70751f61e2bfc",
+            "component": "gateway"
+          },
+          "mandate-ref": "1111111111111111111111111111111111111111111111111111111111111111",
+          "resource": {
+            "kind": "model",
+            "name": "claude-opus-5"
+          },
+          "cost": {
+            "tokens-in": 18422,
+            "tokens-out": 1200,
+            "money-eur": "0.41",
+            "wall-clock-ms": 9310
+          },
+          "sig": {
+            "alg": "ed25519",
+            "key": "ed25519:4a0beffbc56f699c7fc1eb522d5298e2e4210d054a0a33dbeea70751f61e2bfc",
+            "value": "8a37281ad3a2a1d43384580976401d634d0512d2bec83707fcb27d6cabec95f7240be78594631dd00325c12dfb5390a1cd5fa08fea381e43631725f798b6f60d"
+          }
+        },
+        {
+          "v": "stozher/0.1",
+          "kind": "aggregate",
+          "emitted-at": "2026-07-26T09:20:00.000Z",
+          "stream": "gw:ivan-mbp:0001",
+          "seq": 1,
+          "prev-hash": "94158a992320d09ca77ee0ee5252f2d2518825f11840290bd4638f2db3223571",
+          "identity": {
+            "subject": "agent:claude-code/ivan-mbp",
+            "key": "ed25519:4a0beffbc56f699c7fc1eb522d5298e2e4210d054a0a33dbeea70751f61e2bfc",
+            "component": "gateway"
+          },
+          "mandate-ref": "1111111111111111111111111111111111111111111111111111111111111111",
+          "policy-version": "2026.07.1",
+          "classification": "read",
+          "window": {
+            "from": "2026-07-26T09:15:00.000Z",
+            "to": "2026-07-26T09:20:00.000Z"
+          },
+          "counts": {
+            "total": 412,
+            "by-action": {
+              "github.get_file": 380,
+              "github.list_issues": 32
+            }
+          },
+          "sample-hashes": [
+            "fe4edc2cdfcaee172af990012c944c32c884657dfb56dfce12e197597cb651f8",
+            "8ce5dc39ae3c21a22d1009d3ee3ec7e5c662d3d7e9c749f60f9264dcceb6d2d7"
+          ],
+          "sig": {
+            "alg": "ed25519",
+            "key": "ed25519:4a0beffbc56f699c7fc1eb522d5298e2e4210d054a0a33dbeea70751f61e2bfc",
+            "value": "e0b2d3a41e5f329de2a90c3095f90eb3ff713121f968ecacd0bb56351c922a88e8f865f6b37ee544bde4708e988ba77eb45263ec9b7268269e484130158cea08"
+          }
+        }
+      ],
+      "expected": {
+        "valid": false,
+        "error": "chain-seq-duplicate",
+        "failed-at-seq": 1
+      }
+    },
+    {
+      "name": "stream-mismatch",
+      "description": "an envelope from another stream cannot be spliced in; stream is a signed member",
+      "stream": "gw:ivan-mbp:0001",
+      "envelopes": [
+        {
+          "v": "stozher/0.1",
+          "kind": "effect",
+          "emitted-at": "2026-07-26T09:15:01.300Z",
+          "stream": "gw:ivan-mbp:0001",
+          "seq": 0,
+          "prev-hash": null,
+          "identity": {
+            "subject": "agent:claude-code/ivan-mbp",
+            "key": "ed25519:4a0beffbc56f699c7fc1eb522d5298e2e4210d054a0a33dbeea70751f61e2bfc",
+            "component": "gateway"
+          },
+          "mandate-ref": "1111111111111111111111111111111111111111111111111111111111111111",
+          "policy-version": "2026.07.1",
+          "classification": "consequential",
+          "execution": {
+            "action": "github.create_issue",
+            "target": "repo:acme/backend",
+            "args-hash": "fe4edc2cdfcaee172af990012c944c32c884657dfb56dfce12e197597cb651f8",
+            "outcome": "applied",
+            "started-at": "2026-07-26T09:15:00.000Z",
+            "finished-at": "2026-07-26T09:15:01.250Z"
+          },
+          "evidence": {
+            "schema": "github.create_issue.v1",
+            "media-type": "application/json",
+            "payload-hash": "8ce5dc39ae3c21a22d1009d3ee3ec7e5c662d3d7e9c749f60f9264dcceb6d2d7",
+            "retain-until": "2027-07-26T00:00:00.000Z"
+          },
+          "sig": {
+            "alg": "ed25519",
+            "key": "ed25519:4a0beffbc56f699c7fc1eb522d5298e2e4210d054a0a33dbeea70751f61e2bfc",
+            "value": "4b9288efbae719f57e5e6bef5aebf3e26c066126e06882898c829792b9f00dcf02e9d1c6189e837f5bf91a78fdc6d812726aaf4291f5b305d12b64c07de33b0e"
+          }
+        },
+        {
+          "v": "stozher/0.1",
+          "kind": "cognition",
+          "emitted-at": "2026-07-26T09:16:00.000Z",
+          "stream": "gw:ivan-mbp:0001",
+          "seq": 1,
+          "prev-hash": "94158a992320d09ca77ee0ee5252f2d2518825f11840290bd4638f2db3223571",
+          "identity": {
+            "subject": "agent:claude-code/ivan-mbp",
+            "key": "ed25519:4a0beffbc56f699c7fc1eb522d5298e2e4210d054a0a33dbeea70751f61e2bfc",
+            "component": "gateway"
+          },
+          "mandate-ref": "1111111111111111111111111111111111111111111111111111111111111111",
+          "resource": {
+            "kind": "model",
+            "name": "claude-opus-5"
+          },
+          "cost": {
+            "tokens-in": 18422,
+            "tokens-out": 1200,
+            "money-eur": "0.41",
+            "wall-clock-ms": 9310
+          },
+          "sig": {
+            "alg": "ed25519",
+            "key": "ed25519:4a0beffbc56f699c7fc1eb522d5298e2e4210d054a0a33dbeea70751f61e2bfc",
+            "value": "8a37281ad3a2a1d43384580976401d634d0512d2bec83707fcb27d6cabec95f7240be78594631dd00325c12dfb5390a1cd5fa08fea381e43631725f798b6f60d"
+          }
+        },
+        {
+          "v": "stozher/0.1",
+          "kind": "aggregate",
+          "emitted-at": "2026-07-26T09:20:00.000Z",
+          "stream": "gw:ivan-mbp:0002",
+          "seq": 2,
+          "prev-hash": "d859d1a485c32b7f8493420a0c9a9a0005885509bd551774ed693a27ff8955f1",
+          "identity": {
+            "subject": "agent:claude-code/ivan-mbp",
+            "key": "ed25519:4a0beffbc56f699c7fc1eb522d5298e2e4210d054a0a33dbeea70751f61e2bfc",
+            "component": "gateway"
+          },
+          "mandate-ref": "1111111111111111111111111111111111111111111111111111111111111111",
+          "policy-version": "2026.07.1",
+          "classification": "read",
+          "window": {
+            "from": "2026-07-26T09:15:00.000Z",
+            "to": "2026-07-26T09:20:00.000Z"
+          },
+          "counts": {
+            "total": 412,
+            "by-action": {
+              "github.get_file": 380,
+              "github.list_issues": 32
+            }
+          },
+          "sample-hashes": [
+            "fe4edc2cdfcaee172af990012c944c32c884657dfb56dfce12e197597cb651f8",
+            "8ce5dc39ae3c21a22d1009d3ee3ec7e5c662d3d7e9c749f60f9264dcceb6d2d7"
+          ],
+          "sig": {
+            "alg": "ed25519",
+            "key": "ed25519:4a0beffbc56f699c7fc1eb522d5298e2e4210d054a0a33dbeea70751f61e2bfc",
+            "value": "6f05b788032246f2ca92d7b7720c4b2e4a52bbd8eb98b984e242f80797c1f9341cf5494052905947f97130946474f1ea42528d6f36f5bc3e18adfc6710e6b206"
+          }
+        },
+        {
+          "v": "stozher/0.1",
+          "kind": "effect",
+          "emitted-at": "2026-07-26T09:15:01.300Z",
+          "stream": "gw:ivan-mbp:0001",
+          "seq": 3,
+          "prev-hash": "b3d818cb2f70f89cf3ac4fab24a42092b64308e590e46e076475c6966ba6bd28",
+          "identity": {
+            "subject": "agent:claude-code/ivan-mbp",
+            "key": "ed25519:4a0beffbc56f699c7fc1eb522d5298e2e4210d054a0a33dbeea70751f61e2bfc",
+            "component": "gateway"
+          },
+          "mandate-ref": "1111111111111111111111111111111111111111111111111111111111111111",
+          "policy-version": "2026.07.1",
+          "classification": "consequential",
+          "execution": {
+            "action": "github.create_issue",
+            "target": "repo:acme/backend",
+            "args-hash": "fe4edc2cdfcaee172af990012c944c32c884657dfb56dfce12e197597cb651f8",
+            "outcome": "applied",
+            "started-at": "2026-07-26T09:15:00.000Z",
+            "finished-at": "2026-07-26T09:15:01.250Z"
+          },
+          "evidence": {
+            "schema": "github.create_issue.v1",
+            "media-type": "application/json",
+            "payload-hash": "8ce5dc39ae3c21a22d1009d3ee3ec7e5c662d3d7e9c749f60f9264dcceb6d2d7",
+            "retain-until": "2027-07-26T00:00:00.000Z"
+          },
+          "authorization": {
+            "request": {
+              "v": "stozher/0.1",
+              "kind": "action-request",
+              "requested-at": "2026-07-26T09:14:40.000Z",
+              "subject": "agent:claude-code/ivan-mbp",
+              "key": "ed25519:4a0beffbc56f699c7fc1eb522d5298e2e4210d054a0a33dbeea70751f61e2bfc",
+              "component": "gateway",
+              "mandate-ref": "1111111111111111111111111111111111111111111111111111111111111111",
+              "policy-version": "2026.07.1",
+              "classification": "consequential",
+              "action": "github.create_issue",
+              "target": "repo:acme/backend",
+              "args-hash": "fe4edc2cdfcaee172af990012c944c32c884657dfb56dfce12e197597cb651f8",
+              "nonce": "7c1d4f9a2b8e0c3d5a6f1e2b4c8d9e0f",
+              "not-after": "2026-07-26T10:14:40.000Z"
+            },
+            "decision": {
+              "v": "stozher/0.1",
+              "kind": "gate-decision",
+              "request-hash": "227b3fca002190d67a196f05f95e27acc20c6c4de17df7616d06529137e10b5c",
+              "decision": "approve",
+              "decided-at": "2026-07-26T09:14:58.000Z",
+              "not-after": "2026-07-26T09:29:58.000Z",
+              "single-use": true,
+              "reason": null,
+              "sig": {
+                "alg": "ed25519",
+                "key": "ed25519:09b3c43478cc065aeeeba98ee919e6b007ff3ff122f86e0a4a3fbc5898092d3a",
+                "value": "b0d908cb4bf3ac285f89ce4049c7f0fa45c242697ac79fef1f534feab6a2eda9e5311c6156787291228c594a3bfe985a805cd05190ff1f06b76fae40864c9502"
+              }
+            }
+          },
+          "correlation-ref": "claude-code:session/8f31",
+          "sig": {
+            "alg": "ed25519",
+            "key": "ed25519:4a0beffbc56f699c7fc1eb522d5298e2e4210d054a0a33dbeea70751f61e2bfc",
+            "value": "c141e195cc0d84f391f43acfc638870a2bee92f0587646488d211f821c00a96f39e53173e27044ca95abc39054b9261643f4af34e202fa75a780bd99cd94d308"
+          }
+        }
+      ],
+      "expected": {
+        "valid": false,
+        "error": "chain-stream-mismatch",
+        "failed-at-seq": 2
+      }
+    },
+    {
+      "name": "tampered-body-not-resigned",
+      "description": "editing a stored envelope without re-signing fails at the signature, before the chain rule",
+      "stream": "gw:ivan-mbp:0001",
+      "envelopes": [
+        {
+          "v": "stozher/0.1",
+          "kind": "effect",
+          "emitted-at": "2026-07-26T09:15:01.300Z",
+          "stream": "gw:ivan-mbp:0001",
+          "seq": 0,
+          "prev-hash": null,
+          "identity": {
+            "subject": "agent:claude-code/ivan-mbp",
+            "key": "ed25519:4a0beffbc56f699c7fc1eb522d5298e2e4210d054a0a33dbeea70751f61e2bfc",
+            "component": "gateway"
+          },
+          "mandate-ref": "1111111111111111111111111111111111111111111111111111111111111111",
+          "policy-version": "2026.07.1",
+          "classification": "consequential",
+          "execution": {
+            "action": "github.create_issue",
+            "target": "repo:acme/backend",
+            "args-hash": "fe4edc2cdfcaee172af990012c944c32c884657dfb56dfce12e197597cb651f8",
+            "outcome": "applied",
+            "started-at": "2026-07-26T09:15:00.000Z",
+            "finished-at": "2026-07-26T09:15:01.250Z"
+          },
+          "evidence": {
+            "schema": "github.create_issue.v1",
+            "media-type": "application/json",
+            "payload-hash": "8ce5dc39ae3c21a22d1009d3ee3ec7e5c662d3d7e9c749f60f9264dcceb6d2d7",
+            "retain-until": "2027-07-26T00:00:00.000Z"
+          },
+          "sig": {
+            "alg": "ed25519",
+            "key": "ed25519:4a0beffbc56f699c7fc1eb522d5298e2e4210d054a0a33dbeea70751f61e2bfc",
+            "value": "4b9288efbae719f57e5e6bef5aebf3e26c066126e06882898c829792b9f00dcf02e9d1c6189e837f5bf91a78fdc6d812726aaf4291f5b305d12b64c07de33b0e"
+          }
+        },
+        {
+          "v": "stozher/0.1",
+          "kind": "cognition",
+          "emitted-at": "2026-07-26T09:16:00.000Z",
+          "stream": "gw:ivan-mbp:0001",
+          "seq": 1,
+          "prev-hash": "94158a992320d09ca77ee0ee5252f2d2518825f11840290bd4638f2db3223571",
+          "identity": {
+            "subject": "agent:claude-code/ivan-mbp",
+            "key": "ed25519:4a0beffbc56f699c7fc1eb522d5298e2e4210d054a0a33dbeea70751f61e2bfc",
+            "component": "gateway"
+          },
+          "mandate-ref": "1111111111111111111111111111111111111111111111111111111111111111",
+          "resource": {
+            "kind": "model",
+            "name": "claude-opus-5"
+          },
+          "cost": {
+            "tokens-in": 18422,
+            "tokens-out": 1200,
+            "money-eur": "0.01",
+            "wall-clock-ms": 9310
+          },
+          "sig": {
+            "alg": "ed25519",
+            "key": "ed25519:4a0beffbc56f699c7fc1eb522d5298e2e4210d054a0a33dbeea70751f61e2bfc",
+            "value": "8a37281ad3a2a1d43384580976401d634d0512d2bec83707fcb27d6cabec95f7240be78594631dd00325c12dfb5390a1cd5fa08fea381e43631725f798b6f60d"
+          }
+        },
+        {
+          "v": "stozher/0.1",
+          "kind": "aggregate",
+          "emitted-at": "2026-07-26T09:20:00.000Z",
+          "stream": "gw:ivan-mbp:0001",
+          "seq": 2,
+          "prev-hash": "d859d1a485c32b7f8493420a0c9a9a0005885509bd551774ed693a27ff8955f1",
+          "identity": {
+            "subject": "agent:claude-code/ivan-mbp",
+            "key": "ed25519:4a0beffbc56f699c7fc1eb522d5298e2e4210d054a0a33dbeea70751f61e2bfc",
+            "component": "gateway"
+          },
+          "mandate-ref": "1111111111111111111111111111111111111111111111111111111111111111",
+          "policy-version": "2026.07.1",
+          "classification": "read",
+          "window": {
+            "from": "2026-07-26T09:15:00.000Z",
+            "to": "2026-07-26T09:20:00.000Z"
+          },
+          "counts": {
+            "total": 412,
+            "by-action": {
+              "github.get_file": 380,
+              "github.list_issues": 32
+            }
+          },
+          "sample-hashes": [
+            "fe4edc2cdfcaee172af990012c944c32c884657dfb56dfce12e197597cb651f8",
+            "8ce5dc39ae3c21a22d1009d3ee3ec7e5c662d3d7e9c749f60f9264dcceb6d2d7"
+          ],
+          "sig": {
+            "alg": "ed25519",
+            "key": "ed25519:4a0beffbc56f699c7fc1eb522d5298e2e4210d054a0a33dbeea70751f61e2bfc",
+            "value": "09b2256698441b6ca7f1db4db148cb7a6481f2fcd9f8ccfb19652a3ad0059c008e4fb8625079a3fb8473e5662630e176cbe0845bca42f17fe02112ef62e01704"
+          }
+        },
+        {
+          "v": "stozher/0.1",
+          "kind": "effect",
+          "emitted-at": "2026-07-26T09:15:01.300Z",
+          "stream": "gw:ivan-mbp:0001",
+          "seq": 3,
+          "prev-hash": "b3d818cb2f70f89cf3ac4fab24a42092b64308e590e46e076475c6966ba6bd28",
+          "identity": {
+            "subject": "agent:claude-code/ivan-mbp",
+            "key": "ed25519:4a0beffbc56f699c7fc1eb522d5298e2e4210d054a0a33dbeea70751f61e2bfc",
+            "component": "gateway"
+          },
+          "mandate-ref": "1111111111111111111111111111111111111111111111111111111111111111",
+          "policy-version": "2026.07.1",
+          "classification": "consequential",
+          "execution": {
+            "action": "github.create_issue",
+            "target": "repo:acme/backend",
+            "args-hash": "fe4edc2cdfcaee172af990012c944c32c884657dfb56dfce12e197597cb651f8",
+            "outcome": "applied",
+            "started-at": "2026-07-26T09:15:00.000Z",
+            "finished-at": "2026-07-26T09:15:01.250Z"
+          },
+          "evidence": {
+            "schema": "github.create_issue.v1",
+            "media-type": "application/json",
+            "payload-hash": "8ce5dc39ae3c21a22d1009d3ee3ec7e5c662d3d7e9c749f60f9264dcceb6d2d7",
+            "retain-until": "2027-07-26T00:00:00.000Z"
+          },
+          "authorization": {
+            "request": {
+              "v": "stozher/0.1",
+              "kind": "action-request",
+              "requested-at": "2026-07-26T09:14:40.000Z",
+              "subject": "agent:claude-code/ivan-mbp",
+              "key": "ed25519:4a0beffbc56f699c7fc1eb522d5298e2e4210d054a0a33dbeea70751f61e2bfc",
+              "component": "gateway",
+              "mandate-ref": "1111111111111111111111111111111111111111111111111111111111111111",
+              "policy-version": "2026.07.1",
+              "classification": "consequential",
+              "action": "github.create_issue",
+              "target": "repo:acme/backend",
+              "args-hash": "fe4edc2cdfcaee172af990012c944c32c884657dfb56dfce12e197597cb651f8",
+              "nonce": "7c1d4f9a2b8e0c3d5a6f1e2b4c8d9e0f",
+              "not-after": "2026-07-26T10:14:40.000Z"
+            },
+            "decision": {
+              "v": "stozher/0.1",
+              "kind": "gate-decision",
+              "request-hash": "227b3fca002190d67a196f05f95e27acc20c6c4de17df7616d06529137e10b5c",
+              "decision": "approve",
+              "decided-at": "2026-07-26T09:14:58.000Z",
+              "not-after": "2026-07-26T09:29:58.000Z",
+              "single-use": true,
+              "reason": null,
+              "sig": {
+                "alg": "ed25519",
+                "key": "ed25519:09b3c43478cc065aeeeba98ee919e6b007ff3ff122f86e0a4a3fbc5898092d3a",
+                "value": "b0d908cb4bf3ac285f89ce4049c7f0fa45c242697ac79fef1f534feab6a2eda9e5311c6156787291228c594a3bfe985a805cd05190ff1f06b76fae40864c9502"
+              }
+            }
+          },
+          "correlation-ref": "claude-code:session/8f31",
+          "sig": {
+            "alg": "ed25519",
+            "key": "ed25519:4a0beffbc56f699c7fc1eb522d5298e2e4210d054a0a33dbeea70751f61e2bfc",
+            "value": "c141e195cc0d84f391f43acfc638870a2bee92f0587646488d211f821c00a96f39e53173e27044ca95abc39054b9261643f4af34e202fa75a780bd99cd94d308"
+          }
+        }
+      ],
+      "expected": {
+        "valid": false,
+        "error": "sig-invalid",
+        "failed-at-seq": 1
+      }
+    },
+    {
+      "name": "genesis-with-prev-hash",
+      "description": "a chain whose first envelope claims a predecessor",
+      "stream": "gw:ivan-mbp:0001",
+      "envelopes": [
+        {
+          "v": "stozher/0.1",
+          "kind": "effect",
+          "emitted-at": "2026-07-26T09:15:01.300Z",
+          "stream": "gw:ivan-mbp:0001",
+          "seq": 0,
+          "prev-hash": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+          "identity": {
+            "subject": "agent:claude-code/ivan-mbp",
+            "key": "ed25519:4a0beffbc56f699c7fc1eb522d5298e2e4210d054a0a33dbeea70751f61e2bfc",
+            "component": "gateway"
+          },
+          "mandate-ref": "1111111111111111111111111111111111111111111111111111111111111111",
+          "policy-version": "2026.07.1",
+          "classification": "consequential",
+          "execution": {
+            "action": "github.create_issue",
+            "target": "repo:acme/backend",
+            "args-hash": "fe4edc2cdfcaee172af990012c944c32c884657dfb56dfce12e197597cb651f8",
+            "outcome": "applied",
+            "started-at": "2026-07-26T09:15:00.000Z",
+            "finished-at": "2026-07-26T09:15:01.250Z"
+          },
+          "evidence": {
+            "schema": "github.create_issue.v1",
+            "media-type": "application/json",
+            "payload-hash": "8ce5dc39ae3c21a22d1009d3ee3ec7e5c662d3d7e9c749f60f9264dcceb6d2d7",
+            "retain-until": "2027-07-26T00:00:00.000Z"
+          },
+          "sig": {
+            "alg": "ed25519",
+            "key": "ed25519:4a0beffbc56f699c7fc1eb522d5298e2e4210d054a0a33dbeea70751f61e2bfc",
+            "value": "3f72fdf3da4caa6b3176a88129d4944865c0e6d840d9adde42cf7167699ec3c6d8b652fe50a4d39a24656f77029246372771621c36e7e69a0e21c5655610a008"
+          }
+        }
+      ],
+      "expected": {
+        "valid": false,
+        "error": "chain-genesis-prev-not-null",
+        "failed-at-seq": 0
+      }
+    }
+  ]
+}

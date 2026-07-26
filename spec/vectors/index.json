@@ -1,0 +1,90 @@
+{
+  "v": "stozher/0.1",
+  "description": "Language-neutral test vectors for the Stozher stozher/0.1 specification. Every vector carries its expected output; consuming test suites MUST read expected values from here and MUST NOT hardcode them.",
+  "spec": "../00-overview.md",
+  "encoding": {
+    "binary": "lowercase-hex",
+    "base64": "never used",
+    "digest": "sha256, 64 lowercase hex characters",
+    "signature": "ed25519, 128 lowercase hex characters",
+    "public-key": "ed25519, 64 lowercase hex characters",
+    "secret-key": "ed25519 seed, 64 lowercase hex characters (RFC 8032 private key)",
+    "timestamp": "RFC 3339 UTC, exactly three fractional digits, Z suffix",
+    "money": "decimal string, never a JSON number"
+  },
+  "dispatch": "Harnesses MUST dispatch on the `kind` member of each file (also mirrored per file in `files[].kind`) and MUST fail on an unrecognised kind rather than skipping it.",
+  "files": [
+    {
+      "path": "jcs-canonicalization.json",
+      "kind": "jcs",
+      "count": 22,
+      "description": "RFC 8785 canonicalization. Parse `input-json` (raw JSON text, so that member order, escapes and numeric literals are preserved exactly), canonicalize, and compare bytes against `canonical` and its SHA-256 against `canonical-sha256`."
+    },
+    {
+      "path": "jcs-invalid.json",
+      "kind": "jcs-invalid",
+      "count": 13,
+      "description": "Inputs a conformant canonicalizer MUST reject, with the normative error code (spec 01 section 3.1). Parsing `input-json` MUST fail with `error`."
+    },
+    {
+      "path": "sha256.json",
+      "kind": "sha256",
+      "count": 8,
+      "description": "SHA-256 known-answer tests. Hash the octets of `input-hex`; result MUST equal `sha256`."
+    },
+    {
+      "path": "ed25519.json",
+      "kind": "ed25519",
+      "count": 8,
+      "description": "Ed25519 sign/verify. When `secret-key` is present, signing the octets of `message-hex` MUST produce `signature` (Ed25519 is deterministic). In every vector, strict verification of `signature` over `message-hex` under `public-key` MUST return `verifies`."
+    },
+    {
+      "path": "slip10-ed25519.json",
+      "kind": "slip10-ed25519",
+      "count": 11,
+      "description": "SLIP-0010 hardened ed25519 derivation (spec 01 section 6). Derive `path` from `seed`; the results MUST equal `chain-code`, `private-key` and `public-key`. `slip10-public-key` is the same key with SLIP-0010's leading 0x00 byte, for cross-checking against published vectors; Stozher key identifiers use the 32-byte form."
+    },
+    {
+      "path": "object-hash.json",
+      "kind": "object-hash",
+      "count": 3,
+      "description": "The signed-object pattern of spec 01 section 5. `expected-jcs` is JCS(object); `expected-object-hash` is its SHA-256 (the object's id, sig included); `expected-signing-input` is JCS(object minus sig)."
+    },
+    {
+      "path": "envelope.json",
+      "kind": "envelope",
+      "count": 6,
+      "description": "Envelope hashing and signature verification (spec 02). `envelope-hash` is object-hash over the complete signed envelope and is the value referenced by prev-hash."
+    },
+    {
+      "path": "envelope-shape.json",
+      "kind": "envelope-shape",
+      "count": 32,
+      "description": "Structural validation of envelopes (spec 02 section 9). Validate `envelope`; the result MUST match `expected.valid`, and on failure the reported code MUST equal `expected.error`. Signature verification is NOT part of this check except where the vector's error code says so."
+    },
+    {
+      "path": "chain.json",
+      "kind": "chain",
+      "count": 8,
+      "description": "Hash chain construction and verification (spec 04 section 2). Verify the envelopes in order: signature, seq continuity, prev-hash linkage, stream identity. On success return the head hash. Verification MUST NOT consult evidence payloads -- none are supplied here, and the expected head hash is the same one the payload-binding vectors produce with payloads present."
+    },
+    {
+      "path": "mandate-chain.json",
+      "kind": "mandate-chain",
+      "count": 24,
+      "description": "Mandate chain verification (spec 03 section 5). Resolve `leaf-ref` in `mandates`, then walk to a human root using `roots`, `revocations`, `request`, `at`, `subject-key` and `max-delegation-depth`. On success `expected.human-root` and `expected.depth` MUST match; on failure `expected.error` MUST match."
+    },
+    {
+      "path": "authorization.json",
+      "kind": "authorization",
+      "count": 19,
+      "description": "Gate authorization verification (spec 06 section 2). Verify `envelope.authorization` given `requires-gate`, `approvers` and the set of already-seen request hashes. This is the file that makes 'approved is not a boolean' testable."
+    },
+    {
+      "path": "payload-binding.json",
+      "kind": "payload-binding",
+      "count": 7,
+      "description": "Evidence payload binding and decay (spec 04 section 5). Validate the ingest record: every submitted payload MUST hash to the value the envelope committed to, and MUST be referenced by it. An empty `payloads` array is always valid. Where a vector carries `chain`, verifying that chain with no payloads MUST produce `expected.chain-head-hash`."
+    }
+  ]
+}

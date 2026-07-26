@@ -1,0 +1,190 @@
+# 05 — Policy distribution
+
+Normative. The kernel is the source of truth for policy; components enforce it locally from a cached
+copy (enforcement-topology design doc). Policy is versioned, signed, pulled, and stamped into every
+envelope so the audit shows *which* policy governed each effect.
+
+## 1. Policy document
+
+A policy document is a signed object (§01 §5), signed by the organization's policy key (role `4'`,
+§01 §6).
+
+```json
+{
+  "v": "stozher/0.1",
+  "kind": "policy",
+  "policy-version": "2026.07.1",
+  "issued-at": "2026-07-26T08:00:00.000Z",
+  "profile": "baseline-conservative",
+  "revoke-cached": false,
+  "max-staleness-seconds": 300,
+  "checkpoint-interval": "PT1H",
+  "aggregate-max-window": "PT5M",
+  "classification": {
+    "default-unknown": "consequential",
+    "by-action": {
+      "github.get_file":       "read",
+      "github.create_issue":   "consequential",
+      "github.delete_repo":    "prohibited",
+      "slack.post_message":    "consequential",
+      "fs.read_file":          "read"
+    },
+    "reclassify": [
+      { "subject": "agent:reporting", "action": "github.export_all", "class": "consequential",
+        "reason": "bulk export is exfiltration-shaped regardless of verb" }
+    ]
+  },
+  "gate-rules": [
+    { "classes": ["consequential"], "decision": "gate", "approvers": ["human:ivan"] },
+    { "classes": ["prohibited"],    "decision": "deny" },
+    { "classes": ["read", "benign"], "decision": "allow" }
+  ],
+  "evidence-ttl": { "read": "P0D", "benign": "P30D", "consequential": "P365D", "prohibited": "P3650D" },
+  "budgets": { "defaults": { "requests": 10000, "money-eur": "50.00" } },
+  "delegation": { "max-depth": 3, "max-standing-lifetime": "P90D" },
+  "offline": { "consequential": "block", "benign": "allow", "read": "allow" },
+  "sig": { "alg": "ed25519", "key": "ed25519:<policy key>", "value": "…" }
+}
+```
+
+- `policy-version` (MUST): an opaque, **monotonic** version string. Implementations MUST NOT parse
+  it for meaning; ordering is established by the publication chain (§5), not by string comparison.
+  It MUST be unique forever within an organization (`policy-version-reused`).
+- `profile` (MUST): the shipped baseline this document derives from (Tier 1, policy-model doc).
+- All duration members follow §01 §2.4; all monetary values are decimal strings.
+- Unknown members MUST be rejected (`schema-unknown-member`). A policy document an implementation
+  does not fully understand is a policy document it MUST NOT enforce; failing closed here means
+  failing to start, not failing open.
+
+## 2. Distribution — versioned pull
+
+1. Components **pull**; the kernel does not push. Rationale: a push channel is a second control path
+   that must be authenticated, ordered, and available; a pull loop degrades to "keep using the cached
+   copy", which is exactly the offline behaviour maxim 5 requires.
+2. Endpoints (binding for S1):
+   - `GET /v1/policy/current` → the signed policy document, with `ETag: "<policy-version>"`.
+   - `GET /v1/policy/{policy-version}` → that exact document, forever (the kernel MUST retain every
+     version it has ever published, so an envelope's `policy-version` always resolves).
+   - Both MUST require caller authentication (§10 §1) and MUST be readable by any authenticated
+     component.
+3. A component MUST verify the policy document's signature against the enrolled policy key before
+   applying it (`policy-sig-invalid`), and MUST refuse to run with an unverifiable policy rather
+   than falling back to permissive defaults.
+4. Pull interval SHOULD be ≤ 60 s, MUST be ≤ `max-staleness-seconds`.
+5. A component MUST stamp the `policy-version` it actually applied into every envelope it emits. It
+   MUST NOT stamp a version it has not itself verified.
+
+## 3. Evaluation order
+
+For a request tuple (§03 §4.2), the effective decision is computed in this order, and only this
+order:
+
+1. **Classification.** `classification.reclassify` entries matching (subject, action, resource) win,
+   most specific first; then `classification.by-action`; then the component manifest's declared class
+   (§08); then `classification.default-unknown`. A component's manifest MAY be overridden by org
+   policy in either direction; a component MUST NOT silently override org policy
+   (`policy-component-override-attempt`).
+2. **Prohibition.** If the resulting class is `prohibited`, the action is hard-blocked. No mandate,
+   no approval, and no gate decision can permit it. The attempt MUST be emitted with
+   `outcome: "attempted"` and full evidence.
+3. **Mandate.** Verify the chain (§03 §5). Failure blocks (`outcome: "blocked"`).
+4. **Gate rule.** The first matching `gate-rules` entry decides `allow` | `gate` | `deny`. `gate`
+   requires an approval signature per §06 before the effect may be applied.
+5. **Budget.** Exhausted budget blocks (§03 §4.3).
+
+`prohibited` before mandate is deliberate: an organization must be able to state "nobody, under any
+authority, does this", and that statement must not be defeatable by issuing a broader mandate.
+
+## 4. Retention and TTL
+
+`evidence-ttl` maps each class to the **maximum** payload lifetime. An emitter computes
+`evidence.retain-until = min(its own preference, emitted-at + evidence-ttl[class])`. The kernel
+re-derives the ceiling and rejects excess (`evidence-retention-too-long`). `P0D` means no payload is
+stored at all; the kernel MUST discard any payload submitted for such an envelope and MUST NOT treat
+its submission as an error (the emitter may be running older policy).
+
+## 5. Changing policy is itself a gated envelope
+
+There is no privileged path by which policy changes. Publishing a policy version is an effect:
+
+```json
+{
+  "v": "stozher/0.1", "kind": "policy-change",
+  "stream": "kernel:core", "seq": 88, "prev-hash": "…",
+  "identity": { "subject": "human:ivan", "key": "ed25519:<root>", "component": "kernel" },
+  "mandate-ref": "<64 hex>",
+  "policy-version": "2026.07.0",
+  "classification": "consequential",
+  "execution": {
+    "action": "kernel.publish_policy", "target": "policy:2026.07.1",
+    "args-hash": "<object-hash of the new policy document>",
+    "outcome": "applied", "started-at": "…", "finished-at": "…"
+  },
+  "evidence": { "schema": "kernel.publish_policy.v1", "media-type": "application/json",
+                "payload-hash": "<object-hash of the new policy document>",
+                "retain-until": "2036-07-26T00:00:00.000Z" },
+  "authorization": { "request": { … }, "decision": { … } },
+  "sig": { … }
+}
+```
+
+Normative:
+
+1. `policy-version` on a `policy-change` envelope is the version **in force while the change was
+   made** (the outgoing one). The new version is identified by `execution.target` and committed to by
+   `execution.args-hash`.
+2. `classification` MUST be `consequential` and `authorization` MUST be present and valid (§06),
+   signed by an enrolled human root. A policy change without an approval signature is rejected
+   `gate-authorization-missing` like any other gated effect. Policy is audited by the mechanism it
+   enforces — there is no bootstrap exception except the ceremony's first policy, which MUST be
+   `seq` 1 of `kernel:core`, signed by the first root, and MUST be recorded as such.
+3. `execution.args-hash` MUST equal `object-hash` of the new policy document, so the approval
+   signature binds the exact bytes of the policy that took effect. Approving "a policy change" in the
+   abstract is not representable.
+4. A policy version becomes effective only once its `policy-change` envelope is appended. A document
+   served by `/v1/policy/current` MUST have a corresponding appended envelope
+   (`policy-not-published`).
+5. Org overrides live in git and are reviewable (policy-model Tier 2); the git commit is *not* the
+   authority — the envelope is. Reviewability and enforceability are separate properties and this
+   spec provides the second one.
+
+## 6. Cache, staleness, and `revoke-cached`
+
+- A component MUST cache the last verified policy document persistently and MUST enforce it while
+  offline (maxim 5).
+- `max-staleness-seconds` is the age after which the cached policy is *stale*. While stale, the
+  component MUST apply `offline` behaviour (§7) for each class rather than continuing as if fresh.
+- **`revoke-cached: true`** on a newly published policy means: every component MUST re-pull before
+  performing its next `consequential` action, regardless of pull interval and regardless of
+  staleness. A component that cannot re-pull MUST treat `consequential` as offline-blocked. It is set
+  when policy **tightens** (a class raised, a gate added, a mandate scope narrowed, a root retired).
+- The flag lives in the *new* document, so a component learns of it only by pulling; therefore
+  tightening is not instantaneous, and the residual window is real. It is bounded by
+  `max-staleness-seconds` and is visible in the audit because every envelope carries the version it
+  applied. Named honestly in §09 §2 rather than described as solved.
+- Loosening policy MUST NOT set `revoke-cached`: an old, stricter cached copy is always a safe state
+  to be in.
+
+## 7. Offline behaviour
+
+`offline` maps each class to `allow` | `block` | `degrade`.
+
+- `allow`: proceed under cached policy, queue envelopes locally (§04 §3).
+- `block`: refuse the action, emit an envelope with `outcome: "blocked"` into the local chain.
+- `degrade`: perform a policy-declared reduced form of the action (declared per action type in the
+  manifest, §08) and record the reduced form as the effect.
+- The default profile MUST set `consequential: "block"` and MUST NOT allow `consequential` while a
+  gate rule applies to it: an action requiring a human signature cannot acquire one offline.
+- **Silently proceeding is never permitted** for any class. Every path terminates in either an
+  applied effect with an envelope, or a refusal with an envelope (§06 §6).
+
+## 8. Tier 3 — drift learning (deferred, constrained here)
+
+Deferred until ~1000 approval events (build plan). The constraint is normative now so the deferral
+cannot become a loophole later:
+
+- The kernel MAY analyse gate history and **propose** policy changes.
+- A proposal MUST be represented as a policy-change envelope in `proposed` state that has no
+  `authorization` and therefore has no effect. It MUST pass the same gate as any policy change.
+- No learned rule may take effect without a human signature over its exact document hash
+  (`policy-learned-rule-unsigned`). Learning proposes; humans dispose.

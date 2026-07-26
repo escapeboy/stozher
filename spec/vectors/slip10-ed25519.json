@@ -1,0 +1,129 @@
+{
+  "v": "stozher/0.1",
+  "kind": "slip10-ed25519",
+  "description": "SLIP-0010 hardened ed25519 derivation (spec 01 section 6). Derive `path` from `seed`; the results MUST equal `chain-code`, `private-key` and `public-key`. `slip10-public-key` is the same key with SLIP-0010's leading 0x00 byte, for cross-checking against published vectors; Stozher key identifiers use the 32-byte form.",
+  "note": "Paths under m/1054' follow the Stozher role convention: 0'=human root, 1'=agent subject, 2'=device/session, 3'=kernel checkpoint, 4'=org policy.",
+  "vectors": [
+    {
+      "name": "seed1-m",
+      "description": "SLIP-0010 ed25519 derivation of m",
+      "seed": "000102030405060708090a0b0c0d0e0f",
+      "path": "m",
+      "chain-code": "90046a93de5380a72b5e45010748567d5ea02bbf6522f979e05c0d8d8ca9fffb",
+      "private-key": "2b4be7f19ee27bbf30c667b642d5f4aa69fd169872f8fc3059c08ebae2eb19e7",
+      "public-key": "a4b2856bfec510abab89753fac1ac0e1112364e7d250545963f135f2a33188ed",
+      "slip10-public-key": "00a4b2856bfec510abab89753fac1ac0e1112364e7d250545963f135f2a33188ed",
+      "key-id": "ed25519:a4b2856bfec510abab89753fac1ac0e1112364e7d250545963f135f2a33188ed"
+    },
+    {
+      "name": "seed1-m_0h",
+      "description": "SLIP-0010 ed25519 derivation of m/0'",
+      "seed": "000102030405060708090a0b0c0d0e0f",
+      "path": "m/0'",
+      "chain-code": "8b59aa11380b624e81507a27fedda59fea6d0b779a778918a2fd3590e16e9c69",
+      "private-key": "68e0fe46dfb67e368c75379acec591dad19df3cde26e63b93a8e704f1dade7a3",
+      "public-key": "8c8a13df77a28f3445213a0f432fde644acaa215fc72dcdf300d5efaa85d350c",
+      "slip10-public-key": "008c8a13df77a28f3445213a0f432fde644acaa215fc72dcdf300d5efaa85d350c",
+      "key-id": "ed25519:8c8a13df77a28f3445213a0f432fde644acaa215fc72dcdf300d5efaa85d350c"
+    },
+    {
+      "name": "seed1-m_0h_1h",
+      "description": "SLIP-0010 ed25519 derivation of m/0'/1'",
+      "seed": "000102030405060708090a0b0c0d0e0f",
+      "path": "m/0'/1'",
+      "chain-code": "a320425f77d1b5c2505a6b1b27382b37368ee640e3557c315416801243552f14",
+      "private-key": "b1d0bad404bf35da785a64ca1ac54b2617211d2777696fbffaf208f746ae84f2",
+      "public-key": "1932a5270f335bed617d5b935c80aedb1a35bd9fc1e31acafd5372c30f5c1187",
+      "slip10-public-key": "001932a5270f335bed617d5b935c80aedb1a35bd9fc1e31acafd5372c30f5c1187",
+      "key-id": "ed25519:1932a5270f335bed617d5b935c80aedb1a35bd9fc1e31acafd5372c30f5c1187"
+    },
+    {
+      "name": "seed1-m_0h_1h_2h",
+      "description": "SLIP-0010 ed25519 derivation of m/0'/1'/2'",
+      "seed": "000102030405060708090a0b0c0d0e0f",
+      "path": "m/0'/1'/2'",
+      "chain-code": "2e69929e00b5ab250f49c3fb1c12f252de4fed2c1db88387094a0f8c4c9ccd6c",
+      "private-key": "92a5b23c0b8a99e37d07df3fb9966917f5d06e02ddbd909c7e184371463e9fc9",
+      "public-key": "ae98736566d30ed0e9d2f4486a64bc95740d89c7db33f52121f8ea8f76ff0fc1",
+      "slip10-public-key": "00ae98736566d30ed0e9d2f4486a64bc95740d89c7db33f52121f8ea8f76ff0fc1",
+      "key-id": "ed25519:ae98736566d30ed0e9d2f4486a64bc95740d89c7db33f52121f8ea8f76ff0fc1"
+    },
+    {
+      "name": "seed1-m_0h_1h_2h_2h",
+      "description": "SLIP-0010 ed25519 derivation of m/0'/1'/2'/2'",
+      "seed": "000102030405060708090a0b0c0d0e0f",
+      "path": "m/0'/1'/2'/2'",
+      "chain-code": "8f6d87f93d750e0efccda017d662a1b31a266e4a6f5993b15f5c1f07f74dd5cc",
+      "private-key": "30d1dc7e5fc04c31219ab25a27ae00b50f6fd66622f6e9c913253d6511d1e662",
+      "public-key": "8abae2d66361c879b900d204ad2cc4984fa2aa344dd7ddc46007329ac76c429c",
+      "slip10-public-key": "008abae2d66361c879b900d204ad2cc4984fa2aa344dd7ddc46007329ac76c429c",
+      "key-id": "ed25519:8abae2d66361c879b900d204ad2cc4984fa2aa344dd7ddc46007329ac76c429c"
+    },
+    {
+      "name": "seed1-m_0h_1h_2h_2h_1000000000h",
+      "description": "SLIP-0010 ed25519 derivation of m/0'/1'/2'/2'/1000000000'",
+      "seed": "000102030405060708090a0b0c0d0e0f",
+      "path": "m/0'/1'/2'/2'/1000000000'",
+      "chain-code": "68789923a0cac2cd5a29172a475fe9e0fb14cd6adb5ad98a3fa70333e7afa230",
+      "private-key": "8f94d394a8e8fd6b1bc2f3f49f5c47e385281d5c17e65324b0f62483e37e8793",
+      "public-key": "3c24da049451555d51a7014a37337aa4e12d41e485abccfa46b47dfb2af54b7a",
+      "slip10-public-key": "003c24da049451555d51a7014a37337aa4e12d41e485abccfa46b47dfb2af54b7a",
+      "key-id": "ed25519:3c24da049451555d51a7014a37337aa4e12d41e485abccfa46b47dfb2af54b7a"
+    },
+    {
+      "name": "seed2-m",
+      "description": "SLIP-0010 ed25519 derivation of m",
+      "seed": "fffcf9f6f3f0edeae7e4e1dedbd8d5d2cfccc9c6c3c0bdbab7b4b1aeaba8a5a29f9c999693908d8a8784817e7b7875726f6c696663605d5a5754514e4b484542",
+      "path": "m",
+      "chain-code": "ef70a74db9c3a5af931b5fe73ed8e1a53464133654fd55e7a66f8570b8e33c3b",
+      "private-key": "171cb88b1b3c1db25add599712e36245d75bc65a1a5c9e18d76f9f2b1eab4012",
+      "public-key": "8fe9693f8fa62a4305a140b9764c5ee01e455963744fe18204b4fb948249308a",
+      "slip10-public-key": "008fe9693f8fa62a4305a140b9764c5ee01e455963744fe18204b4fb948249308a",
+      "key-id": "ed25519:8fe9693f8fa62a4305a140b9764c5ee01e455963744fe18204b4fb948249308a"
+    },
+    {
+      "name": "seed2-m_0h",
+      "description": "SLIP-0010 ed25519 derivation of m/0'",
+      "seed": "fffcf9f6f3f0edeae7e4e1dedbd8d5d2cfccc9c6c3c0bdbab7b4b1aeaba8a5a29f9c999693908d8a8784817e7b7875726f6c696663605d5a5754514e4b484542",
+      "path": "m/0'",
+      "chain-code": "0b78a3226f915c082bf118f83618a618ab6dec793752624cbeb622acb562862d",
+      "private-key": "1559eb2bbec5790b0c65d8693e4d0875b1747f4970ae8b650486ed7470845635",
+      "public-key": "86fab68dcb57aa196c77c5f264f215a112c22a912c10d123b0d03c3c28ef1037",
+      "slip10-public-key": "0086fab68dcb57aa196c77c5f264f215a112c22a912c10d123b0d03c3c28ef1037",
+      "key-id": "ed25519:86fab68dcb57aa196c77c5f264f215a112c22a912c10d123b0d03c3c28ef1037"
+    },
+    {
+      "name": "seed1-m_1054h_0h_0h",
+      "description": "SLIP-0010 ed25519 derivation of m/1054'/0'/0'",
+      "seed": "000102030405060708090a0b0c0d0e0f",
+      "path": "m/1054'/0'/0'",
+      "chain-code": "e253af9c6507c8f19bcf58c2de0659fb3c5910d8eb584b6a1fde1f54707b200d",
+      "private-key": "4a30ec96855089c37434970c40688abf8829ef3bf7c558a30974f7ad9b6ac1ec",
+      "public-key": "159c8c506ae96bb9f04774281a9ddb4aae0f04e972307ab07debbfe861a9a128",
+      "slip10-public-key": "00159c8c506ae96bb9f04774281a9ddb4aae0f04e972307ab07debbfe861a9a128",
+      "key-id": "ed25519:159c8c506ae96bb9f04774281a9ddb4aae0f04e972307ab07debbfe861a9a128"
+    },
+    {
+      "name": "seed1-m_1054h_1h_0h",
+      "description": "SLIP-0010 ed25519 derivation of m/1054'/1'/0'",
+      "seed": "000102030405060708090a0b0c0d0e0f",
+      "path": "m/1054'/1'/0'",
+      "chain-code": "3e695567d0db059fbb7aefde15f935c1a0568c6345f20c2613370913667c079b",
+      "private-key": "cd8a42da2576c9044c7bd6a0a7c3d55851914b64cd51cf725e06a14a1b6d63ca",
+      "public-key": "cc232e52b59b177c7892c8b2c66014b7ac4901b5788fe3ced27a0b718930274d",
+      "slip10-public-key": "00cc232e52b59b177c7892c8b2c66014b7ac4901b5788fe3ced27a0b718930274d",
+      "key-id": "ed25519:cc232e52b59b177c7892c8b2c66014b7ac4901b5788fe3ced27a0b718930274d"
+    },
+    {
+      "name": "seed1-m_1054h_2h_7h",
+      "description": "SLIP-0010 ed25519 derivation of m/1054'/2'/7'",
+      "seed": "000102030405060708090a0b0c0d0e0f",
+      "path": "m/1054'/2'/7'",
+      "chain-code": "3c44d148a210668acfd3e81e51cc07f9afdcfb7d5b0054d61971f8d45fd159a7",
+      "private-key": "c17f7cea135269e5605a1408a6103e260ec33f9b275df72c95e82236fee489f4",
+      "public-key": "1ad0099b4d530ae28b63496a52a7af848405af7f013a8c7c54b2671b94d63a36",
+      "slip10-public-key": "001ad0099b4d530ae28b63496a52a7af848405af7f013a8c7c54b2671b94d63a36",
+      "key-id": "ed25519:1ad0099b4d530ae28b63496a52a7af848405af7f013a8c7c54b2671b94d63a36"
+    }
+  ]
+}
