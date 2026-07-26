@@ -1,0 +1,5 @@
+# The console's templates live in `console/` at the repository root, not inside this crate:
+# ADR-0003 gives the console its own directory and the kernel binary serves it. askama resolves
+# `dirs` relative to the crate root, so this is the one line that joins the two.
+[general]
+dirs = ["../../console/templates"]

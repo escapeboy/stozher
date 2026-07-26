@@ -78,6 +78,7 @@ class Enforcer:
         emitter: Emitter,
         policy_of: Callable[[], tuple[Policy, bool]],
         clock: clock_module.Clock | None = None,
+        revocations_of: Callable[[Policy], tuple[list[dict[str, Any]], bool]] | None = None,
     ) -> None:
         self._config = config
         self._store = store
@@ -86,6 +87,16 @@ class Enforcer:
         #: Returns the policy in force and whether it is fresh. Raising means no verified policy
         #: exists, which is a refusal to act rather than a permissive default (§05 §2.3).
         self._policy_of = policy_of
+        #: Returns the revocations to evaluate and whether the feed is current (ADR-0007 §1).
+        self._revocations_of = revocations_of
+        if revocations_of is None:
+            # Without a feed, revocation reverts to what ADR-0007 §1 called a real security gap:
+            # detected by the kernel at ingest, after the effect reached the world. An enforcer
+            # built this way still refuses correctly on every *other* ground, so this is a warning
+            # rather than a refusal to construct — but it must never be silent.
+            logger.warning(
+                "no revocation feed is wired: mandate revocation will be detective, not preventive"
+            )
         self._clock = clock or clock_module.Clock()
         self._component = config.gateway.component
 
@@ -97,6 +108,12 @@ class Enforcer:
         classification = self._classify(session, call, policy)
         target = self._target(call)
         args_hash = object_hash(call.arguments)
+        # The revocation set is resolved *here*, before the mandate walk and therefore before
+        # anything is forwarded. A feed that could not be re-pulled when `revoke-cached` demanded
+        # it makes the gateway not-fresh, which is what turns a stale revocation set into an
+        # offline-block for `consequential` rather than a silent proceed (§05 §6, §7).
+        revocations, feed_current = self._revocations(policy)
+        fresh = fresh and feed_current
 
         if classification.classification == "prohibited":
             # §05 §3 step 2: nothing permits a prohibited action — not a mandate, not an approval.
@@ -115,7 +132,9 @@ class Enforcer:
                 envelope_id=envelope_id,
             )
 
-        self._require_mandate(session, call, classification, target, args_hash, policy)
+        self._require_mandate(
+            session, call, classification, target, args_hash, policy, revocations
+        )
         self._require_online_enough(session, call, classification, target, args_hash, policy, fresh)
 
         decision = policy.decision_for(classification.classification)
@@ -210,6 +229,17 @@ class Enforcer:
                 action=f"{call.server}.{call.tool}",
             ) from e
 
+    def _revocations(self, policy: Policy) -> tuple[list[dict[str, Any]], bool]:
+        if self._revocations_of is None:
+            return [], True
+        try:
+            return self._revocations_of(policy)
+        except Exception:  # noqa: BLE001 - a feed failure must not become an unchecked mandate
+            # Not fresh, and no revocations: the caller then treats `consequential` as
+            # offline-blocked, so failing to read the feed cannot become permission to act.
+            logger.exception("the revocation feed could not be resolved")
+            return [], False
+
     def _classify(self, session: Session, call: Call, policy: Policy) -> Classification:
         proposed = self._classifier.classify(call.server, call.tool, call.schema)
         effective = policy.classify(
@@ -235,6 +265,7 @@ class Enforcer:
         target: str,
         args_hash: str,
         policy: Policy,
+        revocations: list[dict[str, Any]],
     ) -> None:
         request = MandateRequest(
             self._component, classification.action, classification.classification, target
@@ -247,7 +278,7 @@ class Enforcer:
                 at=self._clock.now(),
                 subject_key=session.key.id,
                 roots=[root.key for root in self._config.org.roots],
-                revocations=[],
+                revocations=revocations,
                 max_depth=policy.max_delegation_depth(),
             )
         except MandateRefusedError as e:

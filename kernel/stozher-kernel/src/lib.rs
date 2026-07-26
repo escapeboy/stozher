@@ -15,7 +15,8 @@
 //! | [`policy`] | 05 — policy document, evaluation order, retention ceiling |
 //! | [`manifest`] | 08 — extension manifest and durable-object transitions |
 //! | [`checkpoint`] | 04 §4–§5 — checkpoint emission, payload decay |
-//! | [`http`] | 05 §2.2, 04 §6 — ingest, policy pull, audit query |
+//! | [`http`] | 05 §2.2, 04 §6 — ingest, policy pull, audit query, the revocation feed |
+//! | [`console`] | `docs/design/console.md` — the read-only console, `get` routes only |
 //! | [`keys`] | 01 §6, 09 §8 — SLIP-0010 derivation, owner-only key files |
 //! | [`clock`] | 01 §2.3–§2.4 — the one timestamp form, duration arithmetic, injectable clock |
 //! | [`codes`] | the small set of refusals the specification requires but does not name |
@@ -44,6 +45,7 @@ pub mod checkpoint;
 pub mod clock;
 pub mod codes;
 pub mod config;
+pub mod console;
 pub mod http;
 pub mod ingest;
 pub mod keys;

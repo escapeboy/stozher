@@ -1,0 +1,28 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>Chain verification — {{ stream }}</h1>
+<p class="lede">"Prove nothing was tampered with in this range." Every envelope in the stream is
+re-parsed from the stored canonical bytes, every signature is re-checked, and every
+<code>prev-hash</code> is required to equal the previous envelope's <code>id()</code>. The verdict
+below is computed now, by the same function <code>GET /v1/streams/{stream}/verify</code> serves —
+this page shows no cached answer. No payload is read, so evidence that has decayed cannot make a
+chain fail.</p>
+
+{% if valid %}
+<p><b class="ok">VALID</b> — {{ count }} envelope(s), head <span class="hash">{{ head_hash }}</span>.</p>
+{% if anchored %}
+<p>Anchored to a signed checkpoint: <b class="ok">yes</b> — {{ checkpoint }}. A rebuilt store would
+contradict a published head, which is what makes the anchor worth having.</p>
+{% else %}
+<p>Anchored to a signed checkpoint: <b class="quiet">no</b> — the range verifies against itself, but
+no checkpoint yet attests its head.</p>
+{% endif %}
+{% else %}
+<p><b class="prohibited">INVALID</b> — {{ reason_code }}: {{ reason }}{% if failed_at_seq != "" %} (at seq {{ failed_at_seq }}){% endif %}.</p>
+<p>An invalid chain is a finding to investigate, not an error to retry. The failing position is
+named so the range either side of it can be examined:
+<a href="/console/audit?stream={{ stream }}">browse this stream</a>.</p>
+{% endif %}
+
+<p><a href="/console/streams">back to streams</a></p>
+{% endblock %}

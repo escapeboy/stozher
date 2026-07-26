@@ -1,0 +1,57 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>Mandate registry</h1>
+<p class="lede">Who delegated what to whom. Expiry is mandatory on every mandate of every kind
+(<code>spec/03 §3</code>) — there is no representation of one that never expires — so this list
+sorted by expiry is the heartbeat of org autonomy. A revoked mandate stays on the record: the audit
+shows what was permitted at the time, and rewriting history is not a feature.</p>
+
+<table class="counts"><tr>
+<td><b>{{ total }}</b>mandates</td>
+<td><b class="{% if expiring_count != "0" %}quiet{% endif %}">{{ expiring_count }}</b>expiring within 7 days</td>
+<td><b class="{% if revoked_count != "0" %}prohibited{% endif %}">{{ revoked_count }}</b>revoked</td>
+</tr></table>
+
+{% if rows.is_empty() %}
+<p class="empty">No mandate has been granted. Nothing in this organization can act.</p>
+{% else %}
+<table>
+<tr><th>expires</th><th>state</th><th>kind</th><th>grantor</th><th>grantee</th><th>components</th><th>actions</th><th>classes</th><th>resources</th><th>parent</th><th>mandate</th></tr>
+{% for m in rows %}
+<tr id="{{ m.id }}">
+<td class="num">{{ m.not_after }}</td>
+<td class="{{ m.state_class }}">{{ m.state }}</td>
+<td>{{ m.kind }}</td>
+<td>{{ m.grantor_subject }}</td>
+<td>{{ m.grantee_subject }}</td>
+<td>{{ m.components }}</td>
+<td>{{ m.actions }}</td>
+<td>{{ m.classes }}</td>
+<td>{{ m.resources }}</td>
+<td class="hash">{% if m.parent != "" %}<a href="#{{ m.parent }}">{{ m.parent_short }}</a>{% else %}<span class="empty">root</span>{% endif %}</td>
+<td class="hash"><a href="/console/audit?mandate-subtree-of={{ m.id }}" title="every effect under this mandate and everything delegated beneath it">{{ m.short }}</a></td>
+</tr>
+{% endfor %}
+</table>
+{% endif %}
+
+<h2>Revocations in force</h2>
+<p class="lede">The feed components poll (<code>GET /v1/revocations</code>), epoch
+<span class="tag">{{ epoch }}</span>. A mandate revoked at <code>T</code> is invalid for every
+effect emitted at or after <code>T</code>, and so is everything delegated beneath it.</p>
+{% if revocations.is_empty() %}
+<p class="empty">No mandate has been revoked.</p>
+{% else %}
+<table>
+<tr><th>revoked at</th><th>revokes</th><th>reason</th><th>signed by</th></tr>
+{% for r in revocations %}
+<tr>
+<td class="num">{{ r.revoked_at }}</td>
+<td class="hash"><a href="#{{ r.revokes }}">{{ r.revokes_short }}</a></td>
+<td>{{ r.reason }}</td>
+<td class="hash">{{ r.signer }}</td>
+</tr>
+{% endfor %}
+</table>
+{% endif %}
+{% endblock %}

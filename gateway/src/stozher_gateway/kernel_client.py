@@ -27,10 +27,11 @@ class KernelUnreachableError(RuntimeError):
 
 
 class KernelResponse(NamedTuple):
-    """One kernel answer: HTTP status plus the decoded body."""
+    """One kernel answer: HTTP status, the decoded body, and the `ETag` when one was sent."""
 
     status: int
     body: dict[str, Any]
+    etag: str | None = None
 
     @property
     def accepted(self) -> bool:
@@ -50,22 +51,29 @@ class KernelClient:
         self._token = token
         self._timeout = timeout
 
-    def _request(self, method: str, path: str, body: Any = None) -> KernelResponse:
+    def _request(
+        self, method: str, path: str, body: Any = None, if_none_match: str | None = None
+    ) -> KernelResponse:
         data = canonicalize_bytes(body) if body is not None else None
         request = urllib.request.Request(f"{self.url}{path}", data=data, method=method)
         request.add_header("Accept", "application/json")
         if data is not None:
             request.add_header("Content-Type", "application/json")
+        if if_none_match is not None:
+            request.add_header("If-None-Match", if_none_match)
         if self._token:
             request.add_header("Authorization", f"Bearer {self._token}")
         try:
             with urllib.request.urlopen(request, timeout=self._timeout) as response:
                 payload = response.read()
-                return KernelResponse(response.status, _decode(payload))
+                return KernelResponse(
+                    response.status, _decode(payload), response.headers.get("ETag")
+                )
         except urllib.error.HTTPError as e:
             # A refusal is an answer, not a transport failure: the kernel's reason code is the most
             # useful thing the gateway can log or surface, so it is never flattened into "error".
-            return KernelResponse(e.code, _decode(e.read()))
+            # 304 arrives here too, and it is the *cheap* answer, not a problem.
+            return KernelResponse(e.code, _decode(e.read()), e.headers.get("ETag"))
         except (urllib.error.URLError, TimeoutError, OSError) as e:
             raise KernelUnreachableError(f"{method} {path}: {e}") from e
 
@@ -77,6 +85,10 @@ class KernelClient:
 
     def policy_version(self, version: str) -> KernelResponse:
         return self._request("GET", f"/v1/policy/{version}")
+
+    def revocations(self, if_none_match: str | None = None) -> KernelResponse:
+        """The revocation feed (§03 §7). `304` means the epoch has not moved and nothing was read."""
+        return self._request("GET", "/v1/revocations", if_none_match=if_none_match)
 
     def ingest(self, envelope: dict[str, Any], payloads: list[dict[str, Any]]) -> KernelResponse:
         return self._request("POST", "/v1/ingest", {"envelope": envelope, "payloads": payloads})

@@ -29,6 +29,7 @@ from .kernel_client import KernelClient, KernelUnreachableError
 from .policy import Policy, PolicyError
 from .proxy import Downstream
 from .refusal import refusal
+from .revocation import RevocationFeed
 from .signing import SigningKey
 from .store import GatewayStore
 from .tools import proxy_tool
@@ -62,6 +63,8 @@ class PolicyProvider:
         self._policy: Policy | None = None
         self._verified_at: str | None = None
         self._checked_at: str | None = None
+        #: The policy version whose `revoke-cached` obligation has already been discharged (§05 §6).
+        self._repulled_for: str | None = None
 
     def current(self) -> tuple[Policy, bool]:
         """The policy in force, and whether it is fresh enough to act on as if online."""
@@ -71,14 +74,28 @@ class PolicyProvider:
                 self._load_cache()
             if self._policy is None:
                 raise PolicyError("policy-not-published", "no verified policy is available")
+            # §05 §6: `revoke-cached` means re-pull before the next consequential action,
+            # regardless of interval and regardless of staleness — and a component that cannot
+            # re-pull MUST treat `consequential` as offline-blocked, which is what reporting the
+            # policy as not fresh does through `offline` (§05 §7).
+            if self._policy.revoke_cached() and self._repulled_for != self._policy.version:
+                if self._force_refresh():
+                    self._repulled_for = self._policy.version
+                else:
+                    return self._policy, False
             return self._policy, self._is_fresh()
 
-    def _refresh_if_due(self) -> None:
+    def _force_refresh(self) -> bool:
+        self._checked_at = None
+        return self._refresh_if_due()
+
+    def _refresh_if_due(self) -> bool:
+        """Pull when due. Returns whether the kernel answered on this call."""
         now = self._clock.now()
         if self._checked_at is not None:
             due = clock_module.shift(self._checked_at, self._refresh_seconds)
             if now < due:
-                return
+                return True
         try:
             response = self._kernel.current_policy()
         except KernelUnreachableError as e:
@@ -86,21 +103,22 @@ class PolicyProvider:
             # not a fallback to permissive defaults: the cached document is enforced as written.
             logger.warning("policy pull failed, enforcing the cached copy: %s", e)
             self._checked_at = now
-            return
+            return False
         self._checked_at = now
         if not response.accepted and response.status != 200:
             logger.warning("the kernel did not serve a policy: %s", response.reason_code)
-            return
+            return False
         try:
             policy = Policy.verified(response.body, self._policy_key)
         except PolicyError as e:
             # A document the gateway cannot verify is a document it must not enforce, and refusing
             # to enforce it means keeping the previous one, never relaxing.
             logger.error("refusing an unverifiable policy document: %s", e.code)
-            return
+            return False
         self._policy = policy
         self._verified_at = now
         self._store.cache_policy(policy.version, policy.document, now)
+        return True
 
     def _load_cache(self) -> None:
         cached = self._store.cached_policy()
@@ -150,8 +168,19 @@ class Gateway:
             scopes={server.name: server.scope for server in config.servers},
             org_seeded=self.store.catalog_entry,
         )
+        # The feed shares the policy pull interval: both are versioned pulls of the same kind, and
+        # a second knob would be a second thing an operator can set wrong (§05 §2.4 bounds it).
+        self.revocations = RevocationFeed(
+            self.kernel, self.store, config.kernel.policy_refresh_seconds, self._clock
+        )
         self.enforcer = Enforcer(
-            config, self.store, self.classifier, self.emitter, self.policy_provider.current, self._clock
+            config,
+            self.store,
+            self.classifier,
+            self.emitter,
+            self.policy_provider.current,
+            self._clock,
+            self.revocations.current,
         )
         self.session: Session | None = None
         self._downstream: dict[str, Downstream] = {}

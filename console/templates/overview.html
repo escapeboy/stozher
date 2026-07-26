@@ -1,0 +1,81 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>Overview</h1>
+<p class="lede">Policy in force: <span class="tag">{{ policy_version }}</span>. Everything on this
+console is read-only: there is no route here that can append an envelope, publish a policy or
+approve anything — <code>Ingest::submit</code> is the only write path in the kernel
+(<code>spec/06 §2</code>).</p>
+
+<table class="counts"><tr>
+<td><b>{{ envelopes }}</b>envelopes</td>
+<td><b class="{% if attempts != "0" %}prohibited{% endif %}">{{ attempts }}</b>prohibited attempts</td>
+<td><b class="{% if violations != "0" %}violation{% endif %}">{{ violations }}</b>policy violations</td>
+<td><b>{{ pending }}</b>awaiting a human</td>
+<td><b>{{ rejections }}</b>refused submissions</td>
+<td><b class="{% if quiet_count != "0" %}quiet{% endif %}">{{ quiet_count }}</b>quiet streams</td>
+</tr></table>
+
+<h2>Attempted <span class="prohibited">prohibited</span> actions</h2>
+<p class="lede">The most audit-valuable records in the system: an action nothing could have
+authorized, recorded with full evidence because it was tried.</p>
+{% if rows.is_empty() %}
+<p class="empty">No prohibited action has been attempted.</p>
+{% else %}
+<table>
+<tr><th>emitted</th><th>subject</th><th>action</th><th>target</th><th>class</th><th>outcome</th><th>envelope</th></tr>
+{% for r in rows %}
+<tr>
+<td class="num">{{ r.emitted_at }}</td>
+<td>{{ r.subject }}</td>
+<td>{{ r.action }}</td>
+<td>{{ r.target }}</td>
+<td class="{{ r.class }}">{{ r.class }}</td>
+<td>{{ r.outcome }}</td>
+<td class="hash"><a href="/console/envelopes/{{ r.id }}">{{ r.short }}</a></td>
+</tr>
+{% endfor %}
+</table>
+{% endif %}
+
+<h2>Standing rules expiring soonest</h2>
+<p class="lede">Expiry is mandatory on every mandate (<code>spec/03 §3</code>), so this list is the
+heartbeat of org autonomy: when it empties, the fleet stops acting.</p>
+{% if expiring.is_empty() %}
+<p class="empty">No mandate is on record.</p>
+{% else %}
+<table>
+<tr><th>expires</th><th>kind</th><th>grantor</th><th>grantee</th><th>state</th><th>mandate</th></tr>
+{% for m in expiring %}
+<tr>
+<td class="num">{{ m.not_after }}</td>
+<td>{{ m.kind }}</td>
+<td>{{ m.grantor_subject }}</td>
+<td>{{ m.grantee_subject }}</td>
+<td class="{{ m.state_class }}">{{ m.state }}</td>
+<td class="hash"><a href="/console/mandates#{{ m.id }}">{{ m.short }}</a></td>
+</tr>
+{% endfor %}
+</table>
+{% endif %}
+
+<h2>Quiet streams</h2>
+<p class="lede">A stream that has gone silent is a finding, not a null result
+(<code>spec/09 §4.2</code>). Quiet means nothing appended for longer than the policy's checkpoint
+interval ({{ quiet_after }}).</p>
+{% if quiet.is_empty() %}
+<p class="empty">Every stream has appended within the interval.</p>
+{% else %}
+<table>
+<tr><th>stream</th><th>kind</th><th>head seq</th><th>last appended</th><th>silent for</th></tr>
+{% for s in quiet %}
+<tr>
+<td><a href="/console/audit?stream={{ s.stream }}">{{ s.stream }}</a></td>
+<td>{{ s.stream_kind }}</td>
+<td class="num">{{ s.head_seq }}</td>
+<td class="num">{{ s.last_appended_at }}</td>
+<td class="quiet">{{ s.silent_for }}</td>
+</tr>
+{% endfor %}
+</table>
+{% endif %}
+{% endblock %}

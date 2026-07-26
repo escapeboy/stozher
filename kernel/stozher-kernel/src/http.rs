@@ -13,6 +13,9 @@
 //! administrative. The first submits a checkpoint envelope through `POST /v1/ingest`'s own pipeline,
 //! where it is refused unless it is signed by the kernel's checkpoint key and reproduces the stream's
 //! real head. The second deletes payload rows and nothing else. Neither can append an effect.
+//!
+//! The console ([`crate::console`]) is merged into this table and registers `get` routes only, so
+//! serving a UI from the same binary adds no write path.
 
 use std::sync::Arc;
 
@@ -34,6 +37,7 @@ pub fn router(kernel: Arc<Kernel>) -> Router {
         .route("/v1/ingest", post(post_ingest))
         .route("/v1/policy/current", get(get_policy_current))
         .route("/v1/policy/{policy_version}", get(get_policy_version))
+        .route("/v1/revocations", get(get_revocations))
         .route("/v1/envelopes", get(get_envelopes))
         .route("/v1/envelopes/{id}", get(get_envelope))
         .route("/v1/envelopes/{id}/mandate", get(get_envelope_mandate))
@@ -44,7 +48,10 @@ pub fn router(kernel: Arc<Kernel>) -> Router {
         .route("/v1/payloads/{payload_hash}", get(get_payload))
         .route("/v1/checkpoints", post(post_checkpoints))
         .route("/v1/maintenance/decay", post(post_decay))
-        .with_state(kernel)
+        .with_state(Arc::clone(&kernel))
+        // The console is `get`-only by construction (see [`crate::console`]), so merging it cannot
+        // add a write path to this table.
+        .merge(crate::console::router(kernel))
 }
 
 /// Liveness only. Deliberately unauthenticated and deliberately says nothing about the store.
@@ -56,7 +63,7 @@ async fn health() -> Response {
 }
 
 /// The outcome of authenticating a request.
-enum Caller {
+pub(crate) enum Caller {
     /// The credential resolved to this subject.
     Subject(String),
     /// It did not, and this is the response to send.
@@ -66,8 +73,10 @@ enum Caller {
 /// Authenticate a request.
 ///
 /// §05 §2.2: both policy endpoints "MUST require caller authentication". So does everything else
-/// here: an audit trail readable by anyone who can reach the port is a different product.
-fn caller(kernel: &Kernel, headers: &HeaderMap) -> Caller {
+/// here — including every console page ([`crate::console`]): an audit trail readable by anyone who
+/// can reach the port is a different product, and a console-only login would be a second credential
+/// path to keep correct.
+pub(crate) fn caller(kernel: &Kernel, headers: &HeaderMap) -> Caller {
     let token = headers
         .get(axum::http::header::AUTHORIZATION)
         .and_then(|value| value.to_str().ok())
@@ -199,6 +208,53 @@ async fn get_policy_version(
     }
 }
 
+/// The revocation feed (§03 §7) — the preventive half of revocation.
+///
+/// Until this endpoint existed a component could only learn that a mandate had been revoked by
+/// having an envelope refused at ingest, which is *after* the effect reached the world (ADR-0007
+/// §1). It is deliberately shaped like policy pull (§05 §2.2): a component polls it, caches it, and
+/// evaluates the cached set locally on its hot path.
+///
+/// The epoch is the ETag, so a poll that changes nothing costs a conditional request and no rows.
+async fn get_revocations(State(kernel): State<Arc<Kernel>>, headers: HeaderMap) -> Response {
+    if let Caller::Refused(response) = caller(&kernel, &headers) {
+        return response;
+    }
+    let (epoch, revocations) = match kernel.ingest.store().revocation_feed().await {
+        Ok(feed) => feed,
+        Err(e) => return unavailable(&e),
+    };
+    let etag = format!("\"{epoch}\"");
+    if headers
+        .get(axum::http::header::IF_NONE_MATCH)
+        .and_then(|value| value.to_str().ok())
+        .is_some_and(|value| value.split(',').any(|candidate| candidate.trim() == etag))
+    {
+        let mut response = StatusCode::NOT_MODIFIED.into_response();
+        if let Ok(value) = axum::http::HeaderValue::from_str(&etag) {
+            response
+                .headers_mut()
+                .insert(axum::http::header::ETAG, value);
+        }
+        return response;
+    }
+    let mut response = json(
+        StatusCode::OK,
+        &serde_json::json!({
+            "stozher": stozher_core::VERSION,
+            "revocation-epoch": epoch,
+            "count": revocations.len(),
+            "revocations": revocations
+        }),
+    );
+    if let Ok(value) = axum::http::HeaderValue::from_str(&etag) {
+        response
+            .headers_mut()
+            .insert(axum::http::header::ETAG, value);
+    }
+    response
+}
+
 async fn get_envelopes(
     State(kernel): State<Arc<Kernel>>,
     headers: HeaderMap,
@@ -213,6 +269,8 @@ async fn get_envelopes(
         mandate_ref: get("mandate-ref"),
         mandate_subtree_of: get("mandate-subtree-of"),
         classification: get("classification"),
+        kind: get("kind"),
+        action: get("action"),
         component: get("component"),
         stream: get("stream"),
         emitted_from: get("emitted-from"),

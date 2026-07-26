@@ -1,0 +1,50 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>Attempts and violations</h1>
+<p class="lede">Two record types nothing else in the log competes with. An <b>attempted</b>
+<span class="prohibited">prohibited</span> action is one that no mandate and no approval could have
+permitted (<code>spec/05 §3</code> step 2) — the emitter refused it and recorded the attempt with
+full evidence. A <b>policy violation</b> is worse: an effect reported as <em>applied</em> that
+policy did not permit. It is a confession, and it is the highest-signal record the system can
+hold.</p>
+
+<h2><span class="violation">Policy violations</span> — applied without permission</h2>
+{% if violations.is_empty() %}
+<p class="empty">No envelope confesses an effect policy did not permit.</p>
+{% else %}
+<table>
+<tr><th>emitted</th><th>subject</th><th>component</th><th>action</th><th>class</th><th>violation</th><th>envelope</th></tr>
+{% for r in violations %}
+<tr>
+<td class="num">{{ r.emitted_at }}</td>
+<td>{{ r.subject }}</td>
+<td>{{ r.component }}</td>
+<td>{{ r.action }}</td>
+<td class="{{ r.class }}">{{ r.class }}</td>
+<td class="violation">{{ r.violation }}</td>
+<td class="hash"><a href="/console/envelopes/{{ r.id }}">{{ r.short }}</a></td>
+</tr>
+{% endfor %}
+</table>
+{% endif %}
+
+<h2><span class="prohibited">Prohibited</span> actions attempted</h2>
+{% if rows.is_empty() %}
+<p class="empty">No prohibited action has been attempted.</p>
+{% else %}
+<table>
+<tr><th>emitted</th><th>subject</th><th>component</th><th>action</th><th>target</th><th>human root</th><th>envelope</th></tr>
+{% for r in rows %}
+<tr>
+<td class="num">{{ r.emitted_at }}</td>
+<td>{{ r.subject }}</td>
+<td>{{ r.component }}</td>
+<td class="prohibited">{{ r.action }}</td>
+<td>{{ r.target }}</td>
+<td>{{ r.human_root }}</td>
+<td class="hash"><a href="/console/envelopes/{{ r.id }}">{{ r.short }}</a></td>
+</tr>
+{% endfor %}
+</table>
+{% endif %}
+{% endblock %}

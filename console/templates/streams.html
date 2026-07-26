@@ -1,0 +1,26 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>Streams</h1>
+<p class="lede">Effect streams and signal streams never mix (<code>spec/07 §2.5</code>). A stream
+that has gone quiet is a finding, not a null result (<code>spec/09 §4.2</code>): quiet here means
+nothing appended for longer than the policy's checkpoint interval ({{ quiet_after }}).</p>
+{% if rows.is_empty() %}
+<p class="empty">No stream has been written to.</p>
+{% else %}
+<table>
+<tr><th>stream</th><th>kind</th><th>head seq</th><th>head hash</th><th>first seen</th><th>last appended</th><th>silent for</th><th></th></tr>
+{% for s in rows %}
+<tr>
+<td><a href="/console/audit?stream={{ s.stream }}">{{ s.stream }}</a></td>
+<td>{{ s.stream_kind }}</td>
+<td class="num">{{ s.head_seq }}</td>
+<td class="hash">{{ s.head_short }}</td>
+<td class="num">{{ s.first_seen_at }}</td>
+<td class="num">{{ s.last_appended_at }}</td>
+<td class="{% if s.quiet %}quiet{% endif %}">{{ s.silent_for }}</td>
+<td><a href="/console/streams/{{ s.stream }}/verify">verify chain</a></td>
+</tr>
+{% endfor %}
+</table>
+{% endif %}
+{% endblock %}

@@ -1,0 +1,67 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>Envelope {{ r.short }}</h1>
+<p class="lede">Stream <a href="/console/audit?stream={{ r.stream }}">{{ r.stream }}</a> seq
+{{ r.seq }} · kind {{ r.kind }} · received {{ received_at }}
+{% if r.violation != "" %}· <span class="violation">policy violation: {{ r.violation }}</span>{% endif %}
+</p>
+
+<table>
+<tr><th>id</th><td class="hash">{{ r.id }}</td></tr>
+<tr><th>prev-hash</th><td class="hash">{{ prev_hash }}</td></tr>
+<tr><th>emitted-at</th><td>{{ r.emitted_at }}</td></tr>
+<tr><th>subject</th><td>{{ r.subject }} <span class="tag">{{ subject_key }}</span></td></tr>
+<tr><th>component</th><td>{{ r.component }}</td></tr>
+<tr><th>action</th><td>{{ r.action }}</td></tr>
+<tr><th>target</th><td>{{ r.target }}</td></tr>
+<tr><th>outcome</th><td>{{ r.outcome }}</td></tr>
+<tr><th>class (effective)</th><td class="{{ r.class }}">{{ r.class }}</td></tr>
+<tr><th>class (proposed)</th><td>{{ proposed_class }}</td></tr>
+<tr><th>policy-version</th><td>{{ r.policy_version }}</td></tr>
+<tr><th>authorization</th><td>{{ authorization }}</td></tr>
+</table>
+
+<h2 id="mandate">On whose authority</h2>
+<p class="lede">The walk of <code>spec/03 §5</code>. It can only terminate at an enrolled human root
+— that is structural, not conventional: the loop returns ACCEPT from no other branch.</p>
+{% if chain.is_empty() %}
+<p class="empty">This envelope cites no mandate. Its kind does not carry one.</p>
+{% else %}
+<table>
+<tr><th>#</th><th>kind</th><th>grantor</th><th>grantee</th><th>not-before</th><th>not-after</th><th>mandate</th></tr>
+{% for link in chain %}
+<tr>
+<td class="num">{{ link.depth }}</td>
+<td>{{ link.kind }}</td>
+<td>{{ link.grantor }}</td>
+<td>{{ link.grantee }}</td>
+<td class="num">{{ link.not_before }}</td>
+<td class="num">{{ link.not_after }}</td>
+<td class="hash"><a href="/console/mandates#{{ link.id }}">{{ link.short }}</a></td>
+</tr>
+{% endfor %}
+</table>
+<p>Human root: <b class="ok">{{ r.human_root }}</b></p>
+{% endif %}
+
+<h2>Evidence</h2>
+{% if evidence_schema == "" %}
+<p class="empty">This envelope carries no evidence commitment.</p>
+{% else %}
+<table>
+<tr><th>schema</th><td>{{ evidence_schema }}</td></tr>
+<tr><th>media-type</th><td>{{ evidence_media_type }}</td></tr>
+<tr><th>payload-hash</th><td class="hash">{{ evidence_hash }}</td></tr>
+<tr><th>retain-until</th><td>{{ evidence_retain_until }}</td></tr>
+<tr><th>payload</th><td>{{ payload_state }}</td></tr>
+</table>
+{% if payload_preview != "" %}
+<pre>{{ payload_preview }}</pre>
+{% endif %}
+{% endif %}
+
+<h2>The signed bytes</h2>
+<p class="lede">Canonical JSON (RFC 8785) exactly as stored, so the signature and
+<code>id()</code> are reproducible from this page.</p>
+<pre>{{ canonical_json }}</pre>
+{% endblock %}

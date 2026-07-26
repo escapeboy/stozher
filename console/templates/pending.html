@@ -1,0 +1,56 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>Pending approvals</h1>
+<p class="lede">Display only at S3. Approve and deny are signatures, not buttons — the signing path
+is S4, and until it exists this page deliberately offers no control that could be mistaken for
+one.</p>
+
+<div class="note">
+<b>What this page can and cannot see.</b> A gate-parked request is held by the component that
+parked it until the kernel-native pending queue exists (<code>spec/06 §4.3</code>, ADR-0007 §1,
+scheduled S4). The kernel therefore does not yet hold the park itself. What it does hold — and what
+is listed below — is every action that <em>did not reach the world</em> and is waiting on a human:
+outcome <code>blocked</code>. A <code>denied</code> record is a human's answer already given and is
+shown separately for context.
+</div>
+
+<h2>Waiting on a human — <code>blocked</code></h2>
+{% if rows.is_empty() %}
+<p class="empty">Nothing is blocked.</p>
+{% else %}
+<table>
+<tr><th>emitted</th><th>subject</th><th>class</th><th>action</th><th>target</th><th>evidence</th><th>mandate chain</th><th>envelope</th></tr>
+{% for r in rows %}
+<tr>
+<td class="num">{{ r.emitted_at }}</td>
+<td>{{ r.subject }}</td>
+<td class="{{ r.class }}">{{ r.class }}</td>
+<td>{{ r.action }}</td>
+<td>{{ r.target }}</td>
+<td>{{ r.evidence }}</td>
+<td>{% if r.mandate_ref != "" %}<a href="/console/envelopes/{{ r.id }}#mandate">{{ r.human_root }}</a>{% else %}<span class="empty">none cited</span>{% endif %}</td>
+<td class="hash"><a href="/console/envelopes/{{ r.id }}">{{ r.short }}</a></td>
+</tr>
+{% endfor %}
+</table>
+{% endif %}
+
+<h2>Already decided — <code>denied</code> by a named human</h2>
+{% if denied.is_empty() %}
+<p class="empty">No signed denial is on record.</p>
+{% else %}
+<table>
+<tr><th>emitted</th><th>subject</th><th>class</th><th>action</th><th>decided by</th><th>envelope</th></tr>
+{% for r in denied %}
+<tr>
+<td class="num">{{ r.emitted_at }}</td>
+<td>{{ r.subject }}</td>
+<td class="{{ r.class }}">{{ r.class }}</td>
+<td>{{ r.action }}</td>
+<td>{{ r.decided_by }}</td>
+<td class="hash"><a href="/console/envelopes/{{ r.id }}">{{ r.short }}</a></td>
+</tr>
+{% endfor %}
+</table>
+{% endif %}
+{% endblock %}
