@@ -43,11 +43,11 @@ Members not listed above MUST be rejected at ingest with `schema-unknown-member`
 |---|---|---|---|---|
 | `effect` | an effect was applied to the world | MUST | MUST | — |
 | `cognition` | resource was consumed with no external effect | MUST NOT | MUST NOT | `resource`, `cost` |
-| `aggregate` | folded record for mass `read` (§7) | MUST be `read` | MUST NOT | `window`, `counts` |
+| `aggregate` | folded record for mass `read` (§7) | MUST be `read` | MUST NOT | `window`, `counts`, `sample-hashes` |
 | `mandate` | a mandate was granted (§03) | MUST NOT | MUST NOT | `mandate` |
-| `revocation` | a mandate was revoked (§03 §7) | MUST NOT | MUST NOT | `revokes` |
+| `revocation` | a mandate was revoked (§03 §7) | MUST NOT | MUST NOT | `revokes`, `revoked-at` (`reason` OPTIONAL) |
 | `policy-change` | a policy version was published (§05 §5) | MUST be `consequential` | MUST | `authorization` |
-| `gate-decision` | an approval or denial was recorded (§06 §5) | MUST NOT | MUST NOT | `decision-of` |
+| `gate-decision` | an approval or denial was recorded (§06 §5) | MUST NOT | MUST NOT | `decision-of` (`decision` OPTIONAL) |
 | `signal` | an inbound signal was received (§07) | MUST NOT | MUST NOT | `signal` |
 | `checkpoint` | signed chain checkpoint (§04 §4) | MUST NOT | MUST NOT | `checkpoint` |
 

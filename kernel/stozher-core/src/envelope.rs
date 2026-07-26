@@ -116,14 +116,14 @@ fn kind_spec(kind: &str) -> Option<KindSpec> {
             forbidden_code: "",
         },
         "revocation" => KindSpec {
-            required: &["revocation"],
-            optional: &[],
+            required: &["revokes", "revoked-at"],
+            optional: &["reason"],
             forbidden: &[],
             forbidden_code: "",
         },
         "gate-decision" => KindSpec {
-            required: &["decision-of", "decision"],
-            optional: &[],
+            required: &["decision-of"],
+            optional: &["decision"],
             forbidden: &[],
             forbidden_code: "",
         },
