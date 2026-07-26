@@ -1,0 +1,59 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "stozher-gateway"
+version = "0.1.0"
+description = "Stozher enforcement mode for Harbormaster — an MCP gateway that classifies, mandates, gates and records every proxied tool call."
+readme = "README.md"
+requires-python = ">=3.11"
+authors = [{ name = "PRICEX" }]
+
+# Base dependencies stay as thin as Harbormaster's own two (pyproject.toml:51-54). The kernel is
+# reached with urllib.request, following the in-tree precedent (dispatcher_cli.py:154-167), so the
+# gateway adds no HTTP client. Ed25519 is optional on purpose: an unconditional crypto import would
+# break "a Harbormaster without a kernel loses nothing" for bare installs (ADR-0005).
+dependencies = [
+    "mcp>=1.2.0",
+    "pydantic>=2.5",
+]
+
+[project.optional-dependencies]
+# The signing path. Without it the gateway starts, reports the missing extra, and refuses every
+# call — it never proceeds unsigned.
+crypto = ["cryptography>=42.0"]
+dev = [
+    "cryptography>=42.0",
+    "harbormaster-mcp",
+    "mypy>=1.11",
+    "pytest>=8.0",
+    "pytest-asyncio>=0.23",
+    "ruff>=0.6",
+]
+
+[project.entry-points."harbormaster.tools"]
+stozher-gateway = "stozher_gateway.plugin:register"
+
+[project.scripts]
+stozher-gateway = "stozher_gateway.__main__:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/stozher_gateway"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "N", "UP", "B", "C4", "SIM"]
+ignore = ["E501"]
+
+[tool.mypy]
+python_version = "3.11"
+strict = true
+warn_unused_ignores = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"

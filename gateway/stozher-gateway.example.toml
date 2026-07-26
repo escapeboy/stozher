@@ -1,0 +1,70 @@
+# stozher-gateway.toml — the gateway's own configuration (ADR-0005).
+#
+# The gateway never reads harbormaster.toml, and nothing here is a Harbormaster key. Secrets are
+# referenced by the *name* of the environment variable that holds them, never inlined.
+
+[gateway]
+enabled = true
+# Names this machine. It appears in the subject identifier and in the stream name, so one
+# (caller, device) pair owns exactly one append-only stream (spec 04 section 1).
+device = "ivan-mbp"
+# stdio spawns one process per client connection, so long-lived downstream sessions would
+# duplicate per session and leak threads. Opt in only if you know your transport.
+persist_downstream_in_stdio = false
+# Harbormaster's own tools are actions too when enforcement is on (spec 10 section 8).
+govern_native_tools = true
+# Aggregation bounds. The elapsed bound comes from policy (aggregate-max-window, default PT5M).
+aggregate_max_events = 500
+aggregate_max_samples = 8
+
+[kernel]
+url = "http://127.0.0.1:8787"
+token_env = "STOZHER_KERNEL_TOKEN"
+# The hot path must be O(ms) and must not block on the kernel. Keep this short.
+timeout_seconds = 2.0
+policy_refresh_seconds = 30
+
+[identity]
+# 32 bytes of hex, mode 0600. `stozher-gateway keygen --out keys/gateway.seed` writes one.
+# Every subject key is derived from it at m/1054'/2'/<index>'.
+seed_file = "keys/gateway.seed"
+
+[org]
+# The organization's policy key at role 4'. A policy document signed by anything else is refused.
+policy_key = "ed25519:0000000000000000000000000000000000000000000000000000000000000000"
+
+# Enrolled human roots. A gate decision signed by a key that is not here permits nothing, and
+# `dev.allow_unauthenticated` cannot be set while any root is enrolled.
+[[org.roots]]
+subject = "human:ivan"
+key = "ed25519:0000000000000000000000000000000000000000000000000000000000000000"
+
+[dev]
+# Local development only, off by default, impossible in a deployment with enrolled roots.
+allow_unauthenticated = false
+
+# One entry per credential the gateway will serve. `key_index` selects the device key; the calling
+# agent never sees it and needs no changes.
+[[callers]]
+name = "claude-code"
+subject = "agent:claude-code/ivan-mbp"
+key_index = 0
+token_sha256 = "0000000000000000000000000000000000000000000000000000000000000000"
+# The signed mandate object this caller acts under. A session without a resolvable, unexpired
+# mandate is refused at connect time — a read performed without authority is still an effect.
+mandate_file = "mandates/claude-code.json"
+mandate_kind = "standing"
+
+# The downstream MCP servers this gateway fronts. Declared explicitly rather than inferred: an
+# audit boundary should be stated, not guessed.
+[[servers]]
+name = "github"
+transport = "stdio"
+command = "npx"
+args = ["-y", "@modelcontextprotocol/server-github"]
+
+[[servers]]
+name = "slack"
+transport = "streamable-http"
+url = "https://slack-mcp.internal/mcp"
+token_env = "SLACK_MCP_TOKEN"
