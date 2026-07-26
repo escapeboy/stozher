@@ -71,6 +71,13 @@ CREATE TABLE IF NOT EXISTS policy_cache (
     is_current   INTEGER NOT NULL DEFAULT 0
 );
 
+CREATE TABLE IF NOT EXISTS revocation_cache (
+    epoch          TEXT PRIMARY KEY,
+    documents_json TEXT NOT NULL,
+    verified_at    TEXT NOT NULL,
+    is_current     INTEGER NOT NULL DEFAULT 0
+);
+
 CREATE TABLE IF NOT EXISTS gate_seen (
     request_hash TEXT PRIMARY KEY,
     used_at      TEXT NOT NULL
@@ -358,6 +365,29 @@ class GatewayStore:
         if row is None:
             return None
         return json.loads(row["document_json"]), row["verified_at"]
+
+    # -- revocation cache -------------------------------------------------------------------
+
+    def cache_revocations(
+        self, epoch: str, documents: list[dict[str, Any]], verified_at: str
+    ) -> None:
+        """Persist a **verified** revocation set. It must be enforced while offline (maxim 5)."""
+        with self._connect() as connection:
+            connection.execute("UPDATE revocation_cache SET is_current = 0")
+            connection.execute(
+                "INSERT OR REPLACE INTO revocation_cache (epoch, documents_json, verified_at, "
+                "is_current) VALUES (?, ?, ?, 1)",
+                (epoch, json.dumps(documents), verified_at),
+            )
+
+    def cached_revocations(self) -> tuple[str, list[dict[str, Any]], str] | None:
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT epoch, documents_json, verified_at FROM revocation_cache WHERE is_current = 1"
+            ).fetchone()
+        if row is None:
+            return None
+        return row["epoch"], json.loads(row["documents_json"]), row["verified_at"]
 
     # -- gate replay ----------------------------------------------------------------------
 
