@@ -1,0 +1,19 @@
+[package]
+name = "stozher-testkit"
+description = "Test harness for the Stozher kernel: a real kernel bootstrapped through the real genesis path"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[dependencies]
+stozher-core = { path = "../stozher-core" }
+stozher-kernel = { path = "../stozher-kernel" }
+serde_json = { workspace = true }
+hex = { workspace = true }
+tokio = { workspace = true }
+
+[lints]
+workspace = true

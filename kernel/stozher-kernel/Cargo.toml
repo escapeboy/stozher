@@ -1,6 +1,6 @@
 [package]
 name = "stozher-kernel"
-description = "Stozher kernel binary: event store, ingest, policy distribution, gates (built in S1)"
+description = "Stozher kernel: append-only hash-chained event store, validating ingest, versioned policy distribution"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -9,6 +9,21 @@ repository.workspace = true
 
 [dependencies]
 stozher-core = { path = "../stozher-core" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+hex = { workspace = true }
+axum = { workspace = true }
+tokio = { workspace = true }
+sqlx = { workspace = true }
+getrandom = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+
+[dev-dependencies]
+stozher-testkit = { path = "../stozher-testkit" }
+tower = { version = "0.5", features = ["util"] }
+getrandom = { workspace = true }
+http-body-util = "0.1"
 
 [lints]
 workspace = true
