@@ -13,14 +13,20 @@ root-key*
 operator-key*
 
 # --- stores: event store / db artifacts ---
+# Runtime data directories are ANCHORED to the repo root with a leading slash.
+# An unanchored `store/` matches a directory of that name at ANY depth, which
+# silently excluded kernel/stozher-kernel/src/store/ during S1 — source that
+# built locally but was missing from a clean clone. Keep these anchored.
 *.db
 *.db-wal
 *.db-shm
 *.sqlite
 *.sqlite3
-store/
-data/
-var/
+/store/
+/data/
+/var/
+/deploy/store/
+/deploy/data/
 
 # --- env / config with secrets ---
 .env
