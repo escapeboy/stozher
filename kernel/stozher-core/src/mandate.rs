@@ -86,6 +86,37 @@ pub fn verify_mandate_chain(
     request: &MandateRequest,
     params: &VerifyParams<'_>,
 ) -> Result<MandateChainOk> {
+    walk(mandates, leaf_ref, Some(request), params)
+}
+
+/// Walk a mandate chain without matching a request against its scope.
+///
+/// For records that have no action, no weight class and no resource there is no request tuple to
+/// match: §03 §4.2 defines one over exactly those three members, and a `cognition` envelope carries
+/// none of them (§02 §6) while still being REQUIRED to cite a mandate so that spend is attributable.
+/// Every other check of §03 §5 — grantee key, signature, grantor, expiry, revocation, delegation
+/// bounds, termination at an enrolled human root — is performed identically.
+///
+/// This is deliberately a separate entry point rather than an option on [`VerifyParams`]: skipping
+/// the scope check is a narrow, named exception, and a caller has to ask for it by name.
+///
+/// # Errors
+///
+/// As [`verify_mandate_chain`], minus `mandate-scope-not-permitted`.
+pub fn verify_mandate_chain_unscoped(
+    mandates: &Map<String, Value>,
+    leaf_ref: &str,
+    params: &VerifyParams<'_>,
+) -> Result<MandateChainOk> {
+    walk(mandates, leaf_ref, None, params)
+}
+
+fn walk(
+    mandates: &Map<String, Value>,
+    leaf_ref: &str,
+    request: Option<&MandateRequest>,
+    params: &VerifyParams<'_>,
+) -> Result<MandateChainOk> {
     let revoked = revocation_index(mandates, params);
 
     let mut current = resolve(mandates, leaf_ref)?;
@@ -157,14 +188,16 @@ pub fn verify_mandate_chain(
         let scope = current
             .get("scope")
             .ok_or_else(|| err!("schema-missing-member", "scope"))?;
-        if !scope_permits(scope, request)? {
-            return Err(err!(
-                "mandate-scope-not-permitted",
-                "scope does not cover {}/{} on {}",
-                request.component,
-                request.action,
-                request.resource
-            ));
+        if let Some(request) = request {
+            if !scope_permits(scope, request)? {
+                return Err(err!(
+                    "mandate-scope-not-permitted",
+                    "scope does not cover {}/{} on {}",
+                    request.component,
+                    request.action,
+                    request.resource
+                ));
+            }
         }
 
         let kind = current
@@ -279,10 +312,285 @@ pub fn verify_mandate_chain(
     }
 }
 
+/// Parameters of a grant-time mandate check.
+#[derive(Debug, Clone)]
+pub struct GrantParams<'a> {
+    /// Enrolled human root keys (§03 §6).
+    pub roots: &'a [KeyId],
+    /// For a `standing` mandate, the latest `not-after` policy permits, precomputed by the caller
+    /// as `issued-at + delegation.max-standing-lifetime` (§03 §3).
+    ///
+    /// Timestamps are a single fixed format compared as strings (§01 §2.3), so this crate needs no
+    /// date arithmetic and no calendar dependency.
+    pub max_standing_not_after: Option<&'a str>,
+}
+
+/// Validate a mandate at **grant** time — when the `kind: "mandate"` envelope carrying it is
+/// ingested, before any effect cites it (§03 §1–§4).
+///
+/// This is the complement of [`verify_mandate_chain`], which validates at *use* time against a
+/// request tuple. The checks that are local to one grant are made here so that a malformed or
+/// over-broad grant is refused when it is issued rather than when it is first exercised: the
+/// delegation bound is "locally checkable at grant time, before any effect exists" (§03 §5).
+///
+/// `parent` is the resolved parent mandate, REQUIRED for `mandate-kind: "delegated"`.
+///
+/// # Errors
+///
+/// The `mandate-*` codes of §03, `scope-bad-pattern`, `sig-invalid`, or `schema-missing-member`.
+pub fn verify_grant(mandate: &Value, parent: Option<&Value>, params: &GrantParams<'_>) -> Result<()> {
+    let signer = verify_signed_object(mandate)?;
+    let grantor_key = key_at(mandate, "grantor")?;
+    if signer != grantor_key {
+        return Err(err!(
+            "mandate-signer-not-grantor",
+            "signed by {signer}, grantor is {grantor_key}"
+        ));
+    }
+    let grantee_key = key_at(mandate, "grantee")?;
+    if grantor_key == grantee_key {
+        return Err(err!(
+            "mandate-self-grant",
+            "grantor and grantee are the same key"
+        ));
+    }
+
+    let str_member = |name: &'static str| -> Result<&str> {
+        mandate
+            .get(name)
+            .and_then(Value::as_str)
+            .ok_or_else(|| err!("schema-missing-member", "{name}"))
+    };
+    let issued_at = str_member("issued-at")?;
+    let not_before = str_member("not-before")?;
+    let not_after = mandate
+        .get("not-after")
+        .and_then(Value::as_str)
+        .ok_or_else(|| err!("mandate-missing-expiry", "not-after"))?;
+    if not_after <= not_before {
+        return Err(err!(
+            "mandate-window-inverted",
+            "not-after {not_after} does not follow not-before {not_before}"
+        ));
+    }
+    if not_before < issued_at {
+        return Err(err!(
+            "mandate-window-inverted",
+            "not-before {not_before} precedes issued-at {issued_at}"
+        ));
+    }
+    let nonce = str_member("nonce")?;
+    if nonce.len() != 32 || !nonce.bytes().all(|b| b.is_ascii_hexdigit()) {
+        return Err(err!(
+            "encoding-not-lowercase-hex",
+            "nonce must be 32 hex digits"
+        ));
+    }
+    if nonce.bytes().any(|b| b.is_ascii_uppercase()) {
+        return Err(err!("encoding-not-lowercase-hex", "nonce is not lowercase"));
+    }
+
+    let scope = mandate
+        .get("scope")
+        .ok_or_else(|| err!("schema-missing-member", "scope"))?;
+    validate_scope(scope)?;
+    // Reading it here rejects a non-integer or absent hop budget before the branch that uses it.
+    let own_max_depth = max_depth_of(mandate)?;
+
+    let kind = str_member("mandate-kind")?;
+    let grantor_role = mandate
+        .get("grantor")
+        .and_then(|g| g.get("role"))
+        .and_then(Value::as_str)
+        .ok_or_else(|| err!("schema-missing-member", "grantor.role"))?;
+
+    match kind {
+        "interactive" | "standing" => {
+            if !mandate.get("parent").is_none_or(Value::is_null) {
+                return Err(err!(
+                    "mandate-root-has-parent",
+                    "a root mandate must have parent null"
+                ));
+            }
+            if grantor_role != "human" {
+                return Err(err!(
+                    "mandate-root-grantor-not-human",
+                    "root mandate granted by role {grantor_role:?}"
+                ));
+            }
+            if !params.roots.contains(&grantor_key) {
+                return Err(err!(
+                    "mandate-root-not-enrolled",
+                    "{grantor_key} is not an enrolled human root"
+                ));
+            }
+            // §03 §6: a key MUST NOT be both a human root and an **agent** grantee. A human root
+            // holding a mandate as a human is a different thing and is how a person acts under
+            // authority someone else granted them — §05 §5's own worked example has a `human:`
+            // subject citing a `mandate-ref`.
+            let grantee_subject = current_grantee_subject(mandate)?;
+            if params.roots.contains(&grantee_key) && grantee_subject.starts_with("agent:") {
+                return Err(err!(
+                    "root-key-used-as-agent",
+                    "{grantee_key} is an enrolled human root and cannot be an agent grantee"
+                ));
+            }
+            if kind == "standing" {
+                if let Some(ceiling) = params.max_standing_not_after {
+                    if not_after > ceiling {
+                        return Err(err!(
+                            "mandate-standing-lifetime-exceeded",
+                            "not-after {not_after} exceeds the policy ceiling {ceiling}"
+                        ));
+                    }
+                }
+            }
+            Ok(())
+        }
+        "delegated" => {
+            if mandate
+                .get("parent")
+                .and_then(Value::as_str)
+                .is_none_or(str::is_empty)
+            {
+                return Err(err!("mandate-delegated-without-parent", "parent is null"));
+            }
+            if grantor_role != "agent" {
+                return Err(err!(
+                    "mandate-delegated-grantor-not-agent",
+                    "delegated mandate granted by role {grantor_role:?}"
+                ));
+            }
+            let parent = parent.ok_or_else(|| {
+                err!(
+                    "mandate-unresolved",
+                    "the parent of a delegated grant must be resolvable"
+                )
+            })?;
+            if grantor_key != key_at(parent, "grantee")? {
+                return Err(err!(
+                    "mandate-delegation-not-held",
+                    "{grantor_key} is not the parent's grantee"
+                ));
+            }
+            let parent_max = max_depth_of(parent)?;
+            if parent_max < 1 {
+                return Err(err!(
+                    "mandate-delegation-depth-exceeded",
+                    "the parent permits no further delegation"
+                ));
+            }
+            if own_max_depth > parent_max - 1 {
+                return Err(err!(
+                    "mandate-delegation-depth-exceeded",
+                    "max-depth {own_max_depth} exceeds the parent's budget"
+                ));
+            }
+            let parent_scope = parent
+                .get("scope")
+                .ok_or_else(|| err!("schema-missing-member", "parent.scope"))?;
+            if !scope_subset(scope, parent_scope)? {
+                return Err(err!(
+                    "mandate-scope-widened",
+                    "delegated scope is not a subset of the parent's"
+                ));
+            }
+            let (parent_from, parent_to) = window_of(parent)?;
+            if not_before < parent_from || not_after > parent_to {
+                return Err(err!(
+                    "mandate-window-outside-parent",
+                    "[{not_before}, {not_after}] is not inside [{parent_from}, {parent_to}]"
+                ));
+            }
+            if !budget_within(mandate.get("budget"), parent.get("budget"))? {
+                return Err(err!(
+                    "mandate-budget-exceeds-parent",
+                    "a delegated budget may only narrow"
+                ));
+            }
+            Ok(())
+        }
+        other => Err(err!("mandate-kind-unknown", "mandate-kind {other:?}")),
+    }
+}
+
+/// A scope pattern is exact equality, `"*"`, or a trailing `".*"` segment prefix — nothing else
+/// (§03 §4.1). No regular expressions: a scope a human cannot read is a scope nobody reviewed.
+fn validate_scope(scope: &Value) -> Result<()> {
+    for dimension in DIMENSIONS {
+        for pattern in patterns(scope, dimension)? {
+            let bare = pattern.strip_suffix(".*").unwrap_or(pattern);
+            if pattern != "*" && bare.contains('*') {
+                return Err(err!(
+                    "scope-bad-pattern",
+                    "scope.{dimension} pattern {pattern:?} uses an unsupported wildcard"
+                ));
+            }
+            if dimension == "classes"
+                && pattern != "*"
+                && !crate::envelope::CLASSES.contains(&pattern)
+            {
+                return Err(err!(
+                    "scope-bad-pattern",
+                    "scope.classes holds {pattern:?}, which is not a weight class"
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Validate a revocation object (§03 §7).
+///
+/// # Errors
+///
+/// `revocation-not-authorized`, `revocation-before-issue`, `sig-invalid`, or
+/// `schema-missing-member`.
+pub fn verify_revocation(
+    mandates: &Map<String, Value>,
+    revocation: &Value,
+    roots: &[KeyId],
+) -> Result<()> {
+    let signer = verify_signed_object(revocation)?;
+    let target = revocation
+        .get("revokes")
+        .and_then(Value::as_str)
+        .ok_or_else(|| err!("schema-missing-member", "revokes"))?;
+    let revoked_at = revocation
+        .get("revoked-at")
+        .and_then(Value::as_str)
+        .ok_or_else(|| err!("schema-missing-member", "revoked-at"))?;
+    if !revoker_is_authorized(mandates, target, &signer, roots) {
+        return Err(err!(
+            "revocation-not-authorized",
+            "{signer} may not revoke {target}"
+        ));
+    }
+    if let Some(mandate) = mandates.get(target) {
+        if let Some(issued_at) = mandate.get("issued-at").and_then(Value::as_str) {
+            if revoked_at < issued_at {
+                return Err(err!(
+                    "revocation-before-issue",
+                    "revoked-at {revoked_at} precedes issued-at {issued_at}"
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
 fn resolve<'a>(mandates: &'a Map<String, Value>, id: &str) -> Result<&'a Value> {
     mandates
         .get(id)
         .ok_or_else(|| err!("mandate-unresolved", "no mandate with id {id}"))
+}
+
+fn current_grantee_subject(mandate: &Value) -> Result<&str> {
+    mandate
+        .get("grantee")
+        .and_then(|g| g.get("subject"))
+        .and_then(Value::as_str)
+        .ok_or_else(|| err!("schema-missing-member", "grantee.subject"))
 }
 
 fn key_at(mandate: &Value, party: &str) -> Result<KeyId> {

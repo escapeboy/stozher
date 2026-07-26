@@ -1,0 +1,1470 @@
+//! Ingest — the one way anything enters the store.
+//!
+//! # Order of operations
+//!
+//! §02 §9.2 fixes it, and the order is the security property:
+//!
+//! ```text
+//! parse strictly → verify signature over the received bytes → validate schema
+//!                → validate mandate → validate authorization → append
+//! ```
+//!
+//! "A schema check that runs before signature verification lets an attacker probe schemas with
+//! unsigned objects; a schema check that runs after append lets junk into the chain."
+//!
+//! Policy evaluation is then §05 §3's order and only that order: classification → prohibition →
+//! mandate → gate rule → budget.
+//!
+//! # There is no second way in
+//!
+//! [`Ingest::submit`] is the only public function in this crate that can cause an envelope to be
+//! appended. [`crate::store::Store::append`] is crate-private, so no HTTP handler, no maintenance
+//! task and no test outside this crate can reach it. There is no parameter, header, environment
+//! variable, trusted-component list or state binding anywhere in this module that turns a required
+//! approval into an optional one: `requires_gate` is computed from the policy document and the
+//! envelope's own reported outcome, and the only value that satisfies it is a verified signature
+//! (§06 §2). The negative case is tested by attempting it — see `tests/no_ambient_approval.rs`.
+
+use std::collections::HashSet;
+use std::sync::Arc;
+
+use serde_json::{Map, Value};
+use stozher_core::error::{Error, Result};
+use stozher_core::mandate::{
+    GrantParams, MandateRequest, VerifyParams, verify_grant, verify_mandate_chain,
+    verify_mandate_chain_unscoped, verify_revocation,
+};
+use stozher_core::signed::{KeyId, verify_signed_object};
+use stozher_core::{chain, crypto, envelope, gate, jcs, payload, signed};
+
+use crate::clock::{self, SharedClock};
+use crate::codes;
+use crate::keys::SigningKey;
+use crate::manifest::Manifest;
+use crate::policy::{ClassifyInput, Decision, Policy, class_weight};
+use crate::store::{
+    Appended, AppendPlan, CheckpointRow, GateUse, PayloadRow, Projections, RejectionInput,
+    RejectionRecord, STREAM_KIND_EFFECT, STREAM_KIND_SIGNAL, Store,
+};
+
+/// Envelope kinds that carry authority and therefore a mandate (§02 §2).
+const EFFECT_KINDS: [&str; 3] = ["effect", "policy-change", "aggregate"];
+
+/// The kernel actions whose authorization MUST be signed by an enrolled human root, whatever the
+/// org's `gate-rules` say: policy publication (§05 §5.2), component registration (§08 §3.1) and
+/// changes to the root set itself (§03 §6). Policy cannot lower the bar on the mechanism that
+/// enforces policy.
+const ROOT_APPROVED_ACTIONS: [&str; 4] = [
+    "kernel.publish_policy",
+    "kernel.register_component",
+    "kernel.enroll_root",
+    "kernel.retire_root",
+];
+
+/// The result of a submission.
+#[derive(Debug)]
+pub enum Outcome {
+    /// The envelope is in the chain, or was already.
+    Accepted(Appended),
+    /// The envelope was refused, and the refusal is itself a record.
+    Rejected {
+        /// The normative reason code.
+        reason: String,
+        /// Human-readable detail. Not contractual.
+        detail: String,
+        /// The chained rejection record, absent only if recording it also failed.
+        record: Option<RejectionRecord>,
+    },
+    /// The kernel could not answer. Not a rejection, and deliberately not recorded as one.
+    Unavailable(String),
+}
+
+/// Deployment facts ingest needs that are not in the policy document.
+#[derive(Debug, Clone)]
+pub struct IngestConfig {
+    /// The organization's policy key at SLIP-0010 role `4'` (§01 §6).
+    pub policy_key: KeyId,
+    /// How far into the future an `emitted-at` may be before it is refused (§09 §5: `PT5M`).
+    pub max_future_skew_seconds: i64,
+    /// The kernel's own stream, which carries root enrollment, policy publication and gate
+    /// decisions (§04 §1). The two genesis envelopes must land here, at `seq` 0 and 1.
+    pub kernel_core_stream: String,
+}
+
+impl Default for IngestConfig {
+    fn default() -> Self {
+        Self {
+            // A deployment must configure this; the placeholder is a key that cannot verify
+            // anything, so an unconfigured kernel refuses every policy rather than accepting any.
+            policy_key: KeyId::parse(&format!("ed25519:{}", "0".repeat(64)))
+                .expect("the all-zero key identifier is well formed"),
+            max_future_skew_seconds: 300,
+            kernel_core_stream: "kernel:core".to_owned(),
+        }
+    }
+}
+
+/// The ingest pipeline.
+#[derive(Debug, Clone)]
+pub struct Ingest {
+    store: Store,
+    clock: SharedClock,
+    kernel_key: Arc<SigningKey>,
+    config: IngestConfig,
+}
+
+/// Everything derived while validating, before anything is written.
+struct Validated {
+    plan: AppendPlan,
+    claims: Claims,
+}
+
+/// What a submitted object said about itself. Best effort by definition — if it is being rejected,
+/// nothing in it is trusted; these are investigation aids on a rejection record, not facts.
+#[derive(Debug, Clone, Default)]
+struct Claims {
+    stream: Option<String>,
+    seq: Option<u64>,
+    kind: Option<String>,
+}
+
+impl Ingest {
+    /// Build the pipeline.
+    #[must_use]
+    pub fn new(
+        store: Store,
+        clock: SharedClock,
+        kernel_key: Arc<SigningKey>,
+        config: IngestConfig,
+    ) -> Self {
+        Self {
+            store,
+            clock,
+            kernel_key,
+            config,
+        }
+    }
+
+    /// The store, for read-only query handlers.
+    #[must_use]
+    pub fn store(&self) -> &Store {
+        &self.store
+    }
+
+    /// The clock.
+    #[must_use]
+    pub fn clock(&self) -> &SharedClock {
+        &self.clock
+    }
+
+    /// The kernel's signing key — used for rejection records and checkpoints.
+    #[must_use]
+    pub fn kernel_key(&self) -> &SigningKey {
+        &self.kernel_key
+    }
+
+    /// Submit an ingest request: `{ "envelope": …, "payloads": [ … ] }`.
+    ///
+    /// A refusal is recorded in the kernel's rejection stream before this returns, with the reason
+    /// code, the hash of the rejected bytes, the submitting subject and the timestamp (§04 §7).
+    /// Infrastructure failures are not recorded: a rejection means the object was invalid, and the
+    /// kernel's own outages are not emitter misbehaviour.
+    pub async fn submit(&self, raw: &[u8], submitted_by: Option<&str>) -> Outcome {
+        let received_at = self.clock.now();
+        match self.validate(raw, &received_at).await {
+            Ok(Either::Idempotent(appended)) => Outcome::Accepted(appended),
+            Ok(Either::Fresh(validated)) => match self.store.append(&validated.plan).await {
+                Ok(appended) => Outcome::Accepted(appended),
+                Err(e) if e.code() == codes::STORE_UNAVAILABLE => {
+                    Outcome::Unavailable(e.detail().to_owned())
+                }
+                Err(e) => {
+                    self.reject(raw, &e, submitted_by, &received_at, &validated.claims)
+                        .await
+                }
+            },
+            Err(e) if e.code() == codes::STORE_UNAVAILABLE => {
+                Outcome::Unavailable(e.detail().to_owned())
+            }
+            Err(e) => {
+                self.reject(raw, &e, submitted_by, &received_at, &claims(raw))
+                    .await
+            }
+        }
+    }
+
+    async fn reject(
+        &self,
+        raw: &[u8],
+        error: &Error,
+        submitted_by: Option<&str>,
+        received_at: &str,
+        claims: &Claims,
+    ) -> Outcome {
+        let input = RejectionInput {
+            reason: error.code().to_owned(),
+            detail: truncate(error.detail(), 1024),
+            object_hash: rejected_bytes_hash(raw),
+            submitted_by: submitted_by.map(str::to_owned),
+            received_at: received_at.to_owned(),
+            claimed_stream: claims.stream.clone(),
+            claimed_seq: claims.seq,
+            claimed_kind: claims.kind.clone(),
+        };
+        let record = self
+            .store
+            .record_rejection(&self.kernel_key, &input)
+            .await
+            .inspect_err(|e| {
+                // If the rejection cannot be recorded the refusal still stands — the envelope is
+                // not in the chain — but the audit has lost a record, which is worth saying loudly.
+                tracing::error!(
+                    reason = %input.reason,
+                    error = %e,
+                    "a rejection could not be recorded"
+                );
+            })
+            .ok();
+        Outcome::Rejected {
+            reason: error.code().to_owned(),
+            detail: error.detail().to_owned(),
+            record,
+        }
+    }
+
+    async fn validate(&self, raw: &[u8], received_at: &str) -> Result<Either> {
+        // (1) Parse strictly. `jcs::parse` refuses duplicate member names, lone surrogates and
+        // numeric literals with no canonical form, so a malformed object never reaches a signature
+        // check that might otherwise be fed ambiguous bytes.
+        let text = std::str::from_utf8(raw)
+            .map_err(|e| Error::new("jcs-malformed-json", format!("body is not UTF-8: {e}")))?;
+        let request = jcs::parse(text)?;
+        let request_map = request
+            .as_object()
+            .ok_or_else(|| Error::new("schema-type-mismatch", "an ingest request must be an object"))?;
+        for key in request_map.keys() {
+            if !["envelope", "payloads"].contains(&key.as_str()) {
+                return Err(Error::new("schema-unknown-member", key.clone()));
+            }
+        }
+        let env = request_map
+            .get("envelope")
+            .ok_or_else(|| Error::new("schema-missing-member", "envelope"))?;
+        let payloads: Vec<Value> = match request_map.get("payloads") {
+            None => Vec::new(),
+            Some(Value::Array(list)) => list.clone(),
+            Some(_) => {
+                return Err(Error::new(
+                    "schema-type-mismatch",
+                    "payloads must be an array",
+                ));
+            }
+        };
+
+        let id = signed::object_id(env)?;
+        let canonical_json = jcs::canonicalize(env)?;
+
+        // Idempotency by `id()` comes before the replay check so that re-submitting a byte-identical
+        // envelope — a retry after a lost response — succeeds instead of being read as an approval
+        // being used twice (§04 §3, §06 §3).
+        if let Some(existing) = self.store.envelope_by_id(&id).await? {
+            return Ok(Either::Idempotent(Appended {
+                id,
+                stream: existing.stream,
+                seq: existing.seq,
+                idempotent: true,
+            }));
+        }
+
+        // (2) Signature over the bytes as received, before any schema opinion is formed.
+        let subject_key = verify_signed_object(env)?;
+
+        // (3) Schema.
+        envelope::validate(env)?;
+
+        let kind = env["kind"].as_str().unwrap_or_default().to_owned();
+        let stream = env["stream"].as_str().unwrap_or_default().to_owned();
+        let seq = env["seq"].as_u64().unwrap_or_default();
+        let emitted_at = env["emitted-at"].as_str().unwrap_or_default().to_owned();
+        let component = env["identity"]["component"]
+            .as_str()
+            .unwrap_or_default()
+            .to_owned();
+        let subject = env["identity"]["subject"]
+            .as_str()
+            .unwrap_or_default()
+            .to_owned();
+
+        // (4) Freshness. An emitter controls its own `emitted-at` and mandate validity is evaluated
+        // at that instant, so a compromised emitter could otherwise backdate an effect into a window
+        // when a mandate was valid. The bound makes the drift visible rather than unbounded (§09 §5).
+        let horizon = clock::shift(received_at, self.config.max_future_skew_seconds)?;
+        if emitted_at > horizon {
+            return Err(Error::new(
+                "envelope-emitted-in-future",
+                format!("emitted-at {emitted_at} is beyond the accepted horizon {horizon}"),
+            ));
+        }
+
+        // (5) Payload binding. Verified before storage so the payload store is reachable only
+        // through an envelope that commits to what it holds (§04 §5.2).
+        let ingest_ok = payload::verify_ingest(env, &payloads)?;
+
+        // (6) Policy. A kernel with no published policy enforces nothing and therefore accepts
+        // nothing: failing closed here means refusing, not guessing (§05 §1). The sole exception is
+        // the ceremony's own two envelopes — see `validate_genesis`.
+        let policy = match self.store.current_policy().await? {
+            Some(document) => Some(Policy::parse(&document, &self.config.policy_key)?),
+            None => None,
+        };
+
+        let roots: Vec<KeyId> = self
+            .store
+            .roots_at(&emitted_at)
+            .await?
+            .into_iter()
+            .map(|(key, _)| key)
+            .collect();
+
+        let mut plan = AppendPlan {
+            envelope: env.clone(),
+            id: id.clone(),
+            canonical_json,
+            stream_kind: if kind == "signal" {
+                STREAM_KIND_SIGNAL
+            } else {
+                STREAM_KIND_EFFECT
+            },
+            received_at: received_at.to_owned(),
+            human_root: None,
+            effective_class: None,
+            policy_violation: None,
+            payloads: Vec::new(),
+            gate_use: None,
+            projections: Projections::default(),
+        };
+
+        // (7)-(11) Kind-specific validation, in §05 §3's order for the kinds that carry authority.
+        let Some(policy) = policy else {
+            self.validate_genesis(env, &roots, &subject_key, &mut plan, &payloads)
+                .await?;
+            return Ok(Either::Fresh(Box::new(Validated {
+                claims: Claims {
+                    stream: Some(stream),
+                    seq: Some(seq),
+                    kind: Some(kind),
+                },
+                plan,
+            })));
+        };
+        if EFFECT_KINDS.contains(&kind.as_str()) {
+            self.validate_effect_kind(env, &policy, &roots, &subject_key, &mut plan, &payloads)
+                .await?;
+        } else {
+            match kind.as_str() {
+                "cognition" => {
+                    // A cognition envelope has no action, class or resource, so there is no request
+                    // tuple to match a scope against (§03 §4.2) — but it MUST still cite a mandate,
+                    // because spend is an organizational resource that has to be attributable.
+                    let chain_ok = self
+                        .walk_mandate(env, &roots, &subject_key, &emitted_at, &policy, None)
+                        .await?;
+                    plan.human_root = Some(chain_ok);
+                }
+                "signal" => {
+                    // Signal streams are separate from effect streams so a flood of inbound traffic
+                    // cannot advance an effect stream's `seq` (§07 §2.5). The signature attests
+                    // receipt by this component and nothing about the content's truth (§07 §2.2).
+                    self.collect_payloads(env, &payloads, &policy, None, &mut plan)?;
+                }
+                "mandate" => self.validate_mandate_grant(env, &policy, &roots, &mut plan).await?,
+                "revocation" => self.validate_revocation(env, &roots, &mut plan).await?,
+                "gate-decision" => self.validate_gate_decision(env, &roots, &policy, &emitted_at).await?,
+                "checkpoint" => self.validate_checkpoint(env, &mut plan).await?,
+                other => {
+                    return Err(Error::new(
+                        "envelope-unknown-kind",
+                        format!("kind {other:?} has no ingest rule"),
+                    ));
+                }
+            }
+        }
+
+        // An `authorization` that is *present* is always fully verified, even when policy did not
+        // demand one: an envelope must not be able to carry an unverified authorization-shaped
+        // object that a later reader might trust (§06 §2, closing note).
+        if plan.gate_use.is_none() && env.get("authorization").is_some() && !EFFECT_KINDS.contains(&kind.as_str()) {
+            return Err(Error::new(
+                "schema-unknown-member",
+                format!("a {kind} envelope must not carry authorization"),
+            ));
+        }
+
+        let _ = (ingest_ok, component, subject);
+        Ok(Either::Fresh(Box::new(Validated {
+            claims: Claims {
+                stream: Some(stream),
+                seq: Some(seq),
+                kind: Some(kind),
+            },
+            plan,
+        })))
+    }
+
+    /// The ceremony, and nothing else, before a policy exists.
+    ///
+    /// §05 §5.2 states the carve-out and its bounds: "there is no bootstrap exception except the
+    /// ceremony's first policy, which MUST be `seq` 1 of `kernel:core`, signed by the first root, and
+    /// MUST be recorded as such." Taken literally that is circular — the first `policy-change` is a
+    /// gated effect, a gated effect needs a mandate, and both need a policy in force to be evaluated
+    /// against. This resolves the circle with **exactly two** envelopes, both fully validated:
+    ///
+    /// | `seq` | kind | what it is |
+    /// |---|---|---|
+    /// | 0 | `mandate` | an enrolled root grants an *interactive* mandate to the bootstrap subject |
+    /// | 1 | `policy-change` | that subject publishes the first policy, approved by the root |
+    ///
+    /// Why this is not a bypass:
+    ///
+    /// * it accepts two `kind` values and refuses every other envelope with `policy-not-published`,
+    ///   so no effect can be applied before a policy governs it;
+    /// * both positions are pinned, so it can fire at most twice per deployment, ever, and never
+    ///   again once `seq` 1 of the core stream is occupied;
+    /// * the mandate must be `interactive` — the kind that "dies with the session" — so the ceremony
+    ///   cannot mint standing autonomy that outlives it, and the standing-lifetime ceiling it could
+    ///   not yet be checked against never applies;
+    /// * the policy change is verified through the *same* §06 §2 algorithm as every other gated
+    ///   effect, with `requires_gate` forced true and the approver set forced to the enrolled roots.
+    ///   The first policy is approved by a named human's signature over its exact document hash, or
+    ///   it does not exist.
+    async fn validate_genesis(
+        &self,
+        env: &Value,
+        roots: &[KeyId],
+        subject_key: &KeyId,
+        plan: &mut AppendPlan,
+        payloads: &[Value],
+    ) -> Result<()> {
+        let kind = env["kind"].as_str().unwrap_or_default();
+        let on_core = env["stream"].as_str() == Some(self.config.kernel_core_stream.as_str());
+        let seq = env["seq"].as_u64().unwrap_or(u64::MAX);
+        let refuse = || {
+            Error::new(
+                "policy-not-published",
+                format!(
+                    "no policy version is in force; before one exists this kernel accepts only \
+                     an interactive root mandate at ({}, 0) and the first policy change at ({}, 1)",
+                    self.config.kernel_core_stream, self.config.kernel_core_stream
+                ),
+            )
+        };
+        if !on_core {
+            return Err(refuse());
+        }
+        match (kind, seq) {
+            ("mandate", 0) => {
+                let mandate = env
+                    .get("mandate")
+                    .ok_or_else(|| Error::new("schema-missing-member", "mandate"))?;
+                if mandate["mandate-kind"].as_str() != Some("interactive") {
+                    return Err(refuse());
+                }
+                verify_grant(
+                    mandate,
+                    None,
+                    &GrantParams {
+                        roots,
+                        // Only `standing` has a lifetime ceiling, and this branch permits only
+                        // `interactive`; there is nothing to compare against and nothing skipped.
+                        max_standing_not_after: None,
+                    },
+                )?;
+                plan.projections.mandate = Some((signed::object_id(mandate)?, mandate.clone()));
+                Ok(())
+            }
+            ("policy-change", 1) => {
+                let emitted_at = env["emitted-at"].as_str().unwrap_or_default();
+                let declared_class = env["classification"].as_str().unwrap_or_default();
+                if declared_class != "consequential" {
+                    // §02 §2 and §05 §5.2: a policy change is `consequential`, always.
+                    return Err(Error::new(
+                        "policy-component-override-attempt",
+                        format!("a policy change is consequential, not {declared_class}"),
+                    ));
+                }
+                self.validate_policy_change(env, payloads, plan).await?;
+                let request = MandateRequest {
+                    component: env["identity"]["component"]
+                        .as_str()
+                        .unwrap_or_default()
+                        .to_owned(),
+                    action: env["execution"]["action"]
+                        .as_str()
+                        .unwrap_or_default()
+                        .to_owned(),
+                    classification: declared_class.to_owned(),
+                    resource: env["execution"]["target"]
+                        .as_str()
+                        .unwrap_or_default()
+                        .to_owned(),
+                };
+                plan.human_root = Some(
+                    self.walk_mandate_with_depth(env, roots, subject_key, emitted_at, 3, Some(&request))
+                        .await?,
+                );
+                plan.effective_class = Some(declared_class.to_owned());
+                let ok = gate::verify_authorization(env, true, roots, &HashSet::new())?
+                    .ok_or_else(|| {
+                        Error::new(
+                            "gate-authorization-missing",
+                            "the first policy must carry a root's approval signature",
+                        )
+                    })?;
+                plan.gate_use = Some(GateUse {
+                    request_hash: ok.request_hash,
+                    decided_by: ok.decided_by.as_str().to_owned(),
+                    single_use: ok.single_use,
+                    not_after: env["authorization"]["decision"]["not-after"]
+                        .as_str()
+                        .unwrap_or(emitted_at)
+                        .to_owned(),
+                });
+                Ok(())
+            }
+            _ => Err(refuse()),
+        }
+    }
+
+    async fn validate_effect_kind(
+        &self,
+        env: &Value,
+        policy: &Policy,
+        roots: &[KeyId],
+        subject_key: &KeyId,
+        plan: &mut AppendPlan,
+        payloads: &[Value],
+    ) -> Result<()> {
+        let kind = env["kind"].as_str().unwrap_or_default();
+        let emitted_at = env["emitted-at"].as_str().unwrap_or_default();
+        let component = env["identity"]["component"].as_str().unwrap_or_default();
+        let subject = env["identity"]["subject"].as_str().unwrap_or_default();
+        let declared_class = env["classification"].as_str().unwrap_or_default();
+
+        // The requests this envelope must be authorized for. An `aggregate` folds many calls, so
+        // every action in the window is checked, each at class `read`.
+        let requests = self.effect_requests(env)?;
+        let manifest = self.store.latest_manifest(component).await?;
+        let manifest = manifest.as_ref().map(Manifest::parse).transpose()?;
+
+        // §05 §3 step 1 — classification. The strongest class over the folded window wins, so an
+        // aggregate cannot dilute a reclassified action by burying it among ordinary reads.
+        let mut effective = String::new();
+        for (action, resource) in &requests {
+            let class = policy.classify(&ClassifyInput {
+                subject,
+                action,
+                resource,
+                manifest_class: manifest.as_ref().and_then(|m| m.proposed_class(action)),
+            });
+            if effective.is_empty() || class_weight(&class) > class_weight(&effective) {
+                effective = class;
+            }
+        }
+        // A component MUST NOT apply a class weaker than the effective policy's (§08 §1.2). The
+        // manifest is a proposal; the classification is the organization's.
+        if class_weight(declared_class) < class_weight(&effective) {
+            return Err(Error::new(
+                "policy-component-override-attempt",
+                format!(
+                    "envelope claims {declared_class}, policy computes {effective} for {}",
+                    requests
+                        .iter()
+                        .map(|(a, _)| a.as_str())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ),
+            ));
+        }
+        plan.effective_class = Some(effective.clone());
+
+        let outcome = env["execution"]["outcome"].as_str().unwrap_or("applied");
+        // `aggregate` carries no `execution`; a folded window of reads is by definition applied.
+        let applied = matches!(outcome, "applied" | "failed") || kind == "aggregate";
+
+        // §05 §3 step 2 — prohibition. Nothing permits a `prohibited` action: not a mandate, not an
+        // approval, not a gate decision. An envelope reporting one as *applied* is a component
+        // confessing a violation. It is appended and flagged rather than refused: refusing would
+        // delete the only record that the violation happened, which is the opposite of an audit.
+        if effective == "prohibited" && applied {
+            plan.policy_violation = Some("prohibited-applied".to_owned());
+        }
+
+        // §05 §3 step 3 — mandate. Every request in the window walks to the same human root.
+        let mut human_root = None;
+        for (action, resource) in &requests {
+            let request = MandateRequest {
+                component: component.to_owned(),
+                action: action.clone(),
+                classification: if kind == "aggregate" {
+                    "read".to_owned()
+                } else {
+                    declared_class.to_owned()
+                },
+                resource: resource.clone(),
+            };
+            human_root = Some(
+                self.walk_mandate(env, roots, subject_key, emitted_at, policy, Some(&request))
+                    .await?,
+            );
+        }
+        plan.human_root = human_root;
+
+        // A triggered effect cites the standing rule that authorized it (§07 §4).
+        self.validate_trigger(env).await?;
+
+        if kind == "aggregate" {
+            validate_aggregate_window(env, policy)?;
+        }
+        if kind == "policy-change" {
+            self.validate_policy_change(env, payloads, plan).await?;
+        }
+        match env["execution"]["action"].as_str() {
+            Some("kernel.register_component") => {
+                self.validate_registration(env, payloads, plan).await?;
+            }
+            Some("kernel.enroll_root" | "kernel.retire_root") => {
+                self.validate_root_change(env, roots, subject_key, plan)?;
+            }
+            _ => {}
+        }
+        self.validate_commitment(env, manifest.as_ref(), subject).await?;
+
+        // §05 §3 step 4 — the gate rule.
+        let decision = policy.decision_for(&effective);
+        let action = env["execution"]["action"].as_str().unwrap_or_default();
+        let root_approved = ROOT_APPROVED_ACTIONS.contains(&action) || kind == "policy-change";
+        let requires_gate = match &decision {
+            // A gated action that was never applied — parked, denied, timed out — legitimately has
+            // no approval to carry (§06 §6). Requiring one would make it impossible to record that
+            // a human said no.
+            Decision::Gate { .. } => applied,
+            Decision::Allow => root_approved && applied,
+            Decision::Deny => {
+                if applied {
+                    plan.policy_violation
+                        .get_or_insert_with(|| "policy-denied-applied".to_owned());
+                }
+                root_approved && applied
+            }
+        };
+
+        let approvers = if root_approved {
+            // Policy cannot lower the bar on the mechanism that enforces policy: publishing a
+            // policy version, registering a component and changing the root set are approved by an
+            // enrolled human root, whatever `gate-rules` says (§05 §5.2, §08 §3.1, §03 §6).
+            roots.to_vec()
+        } else {
+            match &decision {
+                Decision::Gate { approvers } => {
+                    self.approver_keys(approvers, emitted_at, action).await?
+                }
+                Decision::Allow | Decision::Deny => Vec::new(),
+            }
+        };
+
+        let seen = match env["authorization"]["decision"]["request-hash"].as_str() {
+            Some(hash) if self.store.gate_request_seen(hash).await? => {
+                HashSet::from([hash.to_owned()])
+            }
+            _ => HashSet::new(),
+        };
+
+        // §06 §2 — all eleven steps, in the normative order, from the reference implementation.
+        match gate::verify_authorization(env, requires_gate, &approvers, &seen) {
+            Ok(Some(ok)) => {
+                if !applied {
+                    // An approval carried by an envelope that reports no effect is not consumed;
+                    // marking it used would burn a signature the operator still needs.
+                    plan.gate_use = None;
+                } else {
+                    plan.gate_use = Some(GateUse {
+                        request_hash: ok.request_hash,
+                        decided_by: ok.decided_by.as_str().to_owned(),
+                        single_use: ok.single_use,
+                        not_after: env["authorization"]["decision"]["not-after"]
+                            .as_str()
+                            .unwrap_or(emitted_at)
+                            .to_owned(),
+                    });
+                }
+            }
+            Ok(None) => {}
+            // A signed denial carried by an envelope that applied nothing is a record, not an
+            // authorization: §06 §4.5 REQUIRES that envelope to exist, so ingest must accept it.
+            // The pairing is what makes this safe — a denial can never accompany an applied effect,
+            // because `applied` is exactly the condition under which this arm does not fire.
+            Err(e) if e.code() == "gate-denied" && !applied => {}
+            Err(e) => return Err(e),
+        }
+
+        self.collect_payloads(env, payloads, policy, Some(&effective), plan)?;
+        Ok(())
+    }
+
+    /// The `(action, resource)` pairs an effect-kind envelope must be authorized for.
+    fn effect_requests(&self, env: &Value) -> Result<Vec<(String, String)>> {
+        if env["kind"].as_str() == Some("aggregate") {
+            let by_action = env["counts"]["by-action"]
+                .as_object()
+                .ok_or_else(|| Error::new("schema-missing-member", "counts.by-action"))?;
+            if by_action.is_empty() {
+                return Err(Error::new(
+                    "aggregate-count-mismatch",
+                    "an aggregation record folds no actions",
+                ));
+            }
+            // An aggregation record carries no resource (§02 §7), so the mandate is checked against
+            // the "no target" sentinel of §02 §4. A mandate whose `resources` scope is narrower than
+            // `["-"]` or `["*"]` therefore cannot cover aggregated reads — which is the conservative
+            // reading, and is recorded as a specification gap rather than papered over.
+            return Ok(by_action
+                .keys()
+                .map(|action| (action.clone(), "-".to_owned()))
+                .collect());
+        }
+        let action = env["execution"]["action"]
+            .as_str()
+            .ok_or_else(|| Error::new("schema-missing-member", "execution.action"))?;
+        let target = env["execution"]["target"]
+            .as_str()
+            .ok_or_else(|| Error::new("schema-missing-member", "execution.target"))?;
+        Ok(vec![(action.to_owned(), target.to_owned())])
+    }
+
+    async fn walk_mandate(
+        &self,
+        env: &Value,
+        roots: &[KeyId],
+        subject_key: &KeyId,
+        at: &str,
+        policy: &Policy,
+        request: Option<&MandateRequest>,
+    ) -> Result<String> {
+        self.walk_mandate_with_depth(
+            env,
+            roots,
+            subject_key,
+            at,
+            policy.max_delegation_depth(),
+            request,
+        )
+        .await
+    }
+
+    async fn walk_mandate_with_depth(
+        &self,
+        env: &Value,
+        roots: &[KeyId],
+        subject_key: &KeyId,
+        at: &str,
+        max_depth: u32,
+        request: Option<&MandateRequest>,
+    ) -> Result<String> {
+        let mandate_ref = env["mandate-ref"]
+            .as_str()
+            .ok_or_else(|| Error::new("schema-missing-member", "mandate-ref"))?;
+        let mandates = self.store.mandate_ancestry(mandate_ref, max_depth).await?;
+        let ids: Vec<String> = mandates.keys().cloned().collect();
+        let revocations = self.store.revocations_targeting(&ids).await?;
+        let params = VerifyParams {
+            roots,
+            revocations: &revocations,
+            at,
+            subject_key,
+            max_delegation_depth: max_depth,
+        };
+        let ok = match request {
+            Some(request) => verify_mandate_chain(&mandates, mandate_ref, request, &params)?,
+            None => verify_mandate_chain_unscoped(&mandates, mandate_ref, &params)?,
+        };
+        Ok(ok.human_root)
+    }
+
+    async fn validate_trigger(&self, env: &Value) -> Result<()> {
+        let Some(trigger) = env.get("trigger") else {
+            return Ok(());
+        };
+        let standing_ref = trigger["standing-mandate-ref"]
+            .as_str()
+            .ok_or_else(|| Error::new("schema-missing-member", "trigger.standing-mandate-ref"))?;
+        if env["mandate-ref"].as_str() != Some(standing_ref) {
+            return Err(Error::new(
+                "trigger-mandate-mismatch",
+                "the authority for a triggered action is the mandate the effect is judged against",
+            ));
+        }
+        let signal_ref = trigger["signal-ref"]
+            .as_str()
+            .ok_or_else(|| Error::new("schema-missing-member", "trigger.signal-ref"))?;
+        let signal = self
+            .store
+            .envelope_by_id(signal_ref)
+            .await?
+            .ok_or_else(|| {
+                Error::new(
+                    "trigger-signal-unresolved",
+                    format!("no appended signal envelope with id {signal_ref}"),
+                )
+            })?;
+        if signal.envelope()?["kind"].as_str() != Some("signal") {
+            return Err(Error::new(
+                "trigger-signal-unresolved",
+                format!("{signal_ref} is not a signal envelope"),
+            ));
+        }
+        let mandate = self.store.mandate(standing_ref).await?.ok_or_else(|| {
+            Error::new("mandate-unresolved", format!("no mandate {standing_ref}"))
+        })?;
+        if mandate["mandate-kind"].as_str() != Some("standing") {
+            // An interactive mandate cannot authorize a triggered action — by definition nobody was
+            // watching (§07 §4.3).
+            return Err(Error::new(
+                "trigger-mandate-not-standing",
+                "a triggered effect must cite a standing mandate",
+            ));
+        }
+        Ok(())
+    }
+
+    async fn validate_policy_change(
+        &self,
+        env: &Value,
+        payloads: &[Value],
+        plan: &mut AppendPlan,
+    ) -> Result<()> {
+        // §05 §5.3: the approval signature binds the exact bytes of the policy that took effect, so
+        // the document has to be here and `args-hash` has to be its hash. Approving "a policy
+        // change" in the abstract is not representable.
+        let args_hash = env["execution"]["args-hash"]
+            .as_str()
+            .ok_or_else(|| Error::new("schema-missing-member", "execution.args-hash"))?;
+        let document = payloads
+            .iter()
+            .find(|p| p["payload-hash"].as_str() == Some(args_hash))
+            .map(|p| p["payload"].clone())
+            .ok_or_else(|| {
+                Error::new(
+                    codes::POLICY_CHANGE_DOCUMENT_UNBOUND,
+                    "the new policy document must be submitted alongside the change, \
+                     and args-hash must be its object-hash",
+                )
+            })?;
+        let computed = jcs::object_hash(&document)?;
+        if computed != args_hash {
+            return Err(Error::new(
+                codes::POLICY_CHANGE_DOCUMENT_UNBOUND,
+                format!("the submitted policy hashes to {computed}, args-hash is {args_hash}"),
+            ));
+        }
+        let incoming = Policy::parse(&document, &self.config.policy_key)?;
+        let expected_target = format!("policy:{}", incoming.version());
+        if env["execution"]["target"].as_str() != Some(expected_target.as_str()) {
+            return Err(Error::new(
+                codes::POLICY_CHANGE_TARGET_MISMATCH,
+                format!(
+                    "execution.target is {:?}, expected {expected_target:?}",
+                    env["execution"]["target"]
+                ),
+            ));
+        }
+        if self.store.policy_version_exists(incoming.version()).await? {
+            return Err(Error::new(
+                "policy-version-reused",
+                format!(
+                    "policy version {} has already been published",
+                    incoming.version()
+                ),
+            ));
+        }
+        plan.projections.policy = Some((
+            incoming.version().to_owned(),
+            document,
+            incoming.document_hash().to_owned(),
+        ));
+        Ok(())
+    }
+
+    async fn validate_registration(
+        &self,
+        env: &Value,
+        payloads: &[Value],
+        plan: &mut AppendPlan,
+    ) -> Result<()> {
+        let args_hash = env["execution"]["args-hash"]
+            .as_str()
+            .ok_or_else(|| Error::new("schema-missing-member", "execution.args-hash"))?;
+        let document = payloads
+            .iter()
+            .find(|p| p["payload-hash"].as_str() == Some(args_hash))
+            .map(|p| p["payload"].clone())
+            .ok_or_else(|| {
+                Error::new(
+                    codes::MANIFEST_MALFORMED,
+                    "the manifest must be submitted alongside its registration, \
+                     and args-hash must be its object-hash",
+                )
+            })?;
+        let manifest = Manifest::parse(&document)?;
+        if manifest.hash() != args_hash {
+            return Err(Error::new(
+                codes::MANIFEST_MALFORMED,
+                "args-hash does not commit to the submitted manifest",
+            ));
+        }
+        // §08 §3.2: a `name` bound to a different key is a different component wearing this one's
+        // identity.
+        if let Some(bound) = self.store.manifest_component_key(manifest.name()).await? {
+            if bound != manifest.component_key().as_str() {
+                return Err(Error::new(
+                    "manifest-name-key-conflict",
+                    format!("{} is already bound to {bound}", manifest.name()),
+                ));
+            }
+        }
+        if self
+            .store
+            .manifest_version_exists(manifest.name(), manifest.version())
+            .await?
+        {
+            return Err(Error::new(
+                "manifest-version-retained",
+                format!(
+                    "{} {} is already registered and versions are retained forever",
+                    manifest.name(),
+                    manifest.version()
+                ),
+            ));
+        }
+        // §08 §3.3: no green conformance run, no registration. The run is itself an audited claim —
+        // an accepted `kernel.conformance_run` envelope whose `args-hash` is this manifest's hash.
+        if !self.store.conformance_run_is_green(manifest.hash()).await? {
+            return Err(Error::new(
+                "manifest-conformance-not-green",
+                format!(
+                    "no applied kernel.conformance_run envelope commits to manifest {}",
+                    manifest.hash()
+                ),
+            ));
+        }
+        plan.projections.manifest = Some((
+            manifest.name().to_owned(),
+            manifest.version().to_owned(),
+            manifest.hash().to_owned(),
+            manifest.component_key().as_str().to_owned(),
+            document,
+        ));
+        Ok(())
+    }
+
+    fn validate_root_change(
+        &self,
+        env: &Value,
+        roots: &[KeyId],
+        subject_key: &KeyId,
+        plan: &mut AppendPlan,
+    ) -> Result<()> {
+        // §03 §6: the root set is changed only by a gated envelope signed by an existing root.
+        if !roots.contains(subject_key) {
+            return Err(Error::new(
+                "mandate-root-not-enrolled",
+                format!("{subject_key} is not an enrolled human root and may not change the root set"),
+            ));
+        }
+        let target = env["execution"]["target"].as_str().unwrap_or_default();
+        let key = target.strip_prefix("root:").ok_or_else(|| {
+            Error::new(
+                codes::ROOT_ENROLLMENT_MALFORMED,
+                format!("execution.target {target:?} must be root:ed25519:<64 hex>"),
+            )
+        })?;
+        let key = KeyId::parse(key).map_err(|e| {
+            Error::new(
+                codes::ROOT_ENROLLMENT_MALFORMED,
+                format!("execution.target does not name a key: {}", e.detail()),
+            )
+        })?;
+        if env["execution"]["action"].as_str() == Some("kernel.enroll_root") {
+            let subject = env["evidence"]["schema"]
+                .as_str()
+                .filter(|s| s.starts_with("kernel.enroll_root"))
+                .map_or_else(|| "human:unnamed".to_owned(), |_| target.to_owned());
+            plan.projections.enroll_root = Some((key.as_str().to_owned(), subject));
+        } else {
+            plan.projections.retire_root = Some(key.as_str().to_owned());
+        }
+        Ok(())
+    }
+
+    async fn validate_commitment(
+        &self,
+        env: &Value,
+        manifest: Option<&Manifest>,
+        subject: &str,
+    ) -> Result<()> {
+        let Some(commitment) = env.get("commitment-ref") else {
+            return Ok(());
+        };
+        let object_type = commitment["object-type"]
+            .as_str()
+            .ok_or_else(|| Error::new("schema-missing-member", "commitment-ref.object-type"))?;
+        let object_id = commitment["object-id"]
+            .as_str()
+            .ok_or_else(|| Error::new("schema-missing-member", "commitment-ref.object-id"))?;
+        let transition = commitment["transition"]
+            .as_str()
+            .ok_or_else(|| Error::new("schema-missing-member", "commitment-ref.transition"))?;
+        let manifest = manifest.ok_or_else(|| {
+            Error::new(
+                "durable-transition-not-permitted",
+                format!(
+                    "no registered manifest declares durable object {object_type:?}"
+                ),
+            )
+        })?;
+        // The state is the fold of the object's transition envelopes in chain order — never a
+        // "current state" row that could be written directly (§02 §8).
+        let history = self.store.durable_transitions(object_type, object_id).await?;
+        let mut folded: Option<String> = None;
+        for (past, _) in &history {
+            folded = Some(manifest.check_transition(
+                object_type,
+                past,
+                "agent",
+                folded.as_deref(),
+            )?);
+        }
+        // §08 §2: a `["human"]`-only transition is refused from an agent key regardless of the
+        // agent's mandate. The role comes from the subject class, which is the only thing about the
+        // signer the envelope states.
+        let signer_role = if subject.starts_with("human:") {
+            "human"
+        } else {
+            "agent"
+        };
+        manifest.check_transition(object_type, transition, signer_role, folded.as_deref())?;
+        Ok(())
+    }
+
+    async fn validate_mandate_grant(
+        &self,
+        env: &Value,
+        policy: &Policy,
+        roots: &[KeyId],
+        plan: &mut AppendPlan,
+    ) -> Result<()> {
+        let mandate = env
+            .get("mandate")
+            .ok_or_else(|| Error::new("schema-missing-member", "mandate"))?;
+        let issued_at = mandate["issued-at"]
+            .as_str()
+            .ok_or_else(|| Error::new("schema-missing-member", "mandate.issued-at"))?;
+        let parent = match mandate["parent"].as_str() {
+            Some(parent_ref) => Some(self.store.mandate(parent_ref).await?.ok_or_else(|| {
+                Error::new("mandate-unresolved", format!("no mandate {parent_ref}"))
+            })?),
+            None => None,
+        };
+        let ceiling = policy.standing_lifetime_ceiling(issued_at)?;
+        verify_grant(
+            mandate,
+            parent.as_ref(),
+            &GrantParams {
+                roots,
+                max_standing_not_after: Some(&ceiling),
+            },
+        )?;
+        plan.projections.mandate = Some((signed::object_id(mandate)?, mandate.clone()));
+        Ok(())
+    }
+
+    async fn validate_revocation(
+        &self,
+        env: &Value,
+        roots: &[KeyId],
+        plan: &mut AppendPlan,
+    ) -> Result<()> {
+        // For `kind: "revocation"` the envelope *is* the revocation object: §02 §2 puts `revokes`
+        // and `revoked-at` at the top level and `sig` is the revoker's signature.
+        let target = env["revokes"]
+            .as_str()
+            .ok_or_else(|| Error::new("schema-missing-member", "revokes"))?;
+        if !crypto::is_digest_hex(target) {
+            return Err(Error::new(
+                "encoding-not-lowercase-hex",
+                "revokes must be a 64-hex mandate id",
+            ));
+        }
+        clock::parse_timestamp(
+            env["revoked-at"]
+                .as_str()
+                .ok_or_else(|| Error::new("schema-missing-member", "revoked-at"))?,
+        )?;
+        let mut mandates = Map::new();
+        // Load the target and its ancestry so "signed by the grantor of any ancestor" is decidable.
+        for (id, document) in self.store.mandate_ancestry(target, 16).await? {
+            mandates.insert(id, document);
+        }
+        verify_revocation(&mandates, env, roots)?;
+        plan.projections.revocation = Some((signed::object_id(env)?, env.clone()));
+        Ok(())
+    }
+
+    async fn validate_gate_decision(
+        &self,
+        env: &Value,
+        roots: &[KeyId],
+        policy: &Policy,
+        at: &str,
+    ) -> Result<()> {
+        let decision_of = env["decision-of"]
+            .as_str()
+            .ok_or_else(|| Error::new("schema-missing-member", "decision-of"))?;
+        if !crypto::is_digest_hex(decision_of) {
+            return Err(Error::new(
+                "encoding-not-lowercase-hex",
+                "decision-of must be a 64-hex request hash",
+            ));
+        }
+        let Some(decision) = env.get("decision") else {
+            return Ok(());
+        };
+        let signer = verify_signed_object(decision)
+            .map_err(|e| Error::new("gate-decision-sig-invalid", e.detail().to_owned()))?;
+        if decision["request-hash"].as_str() != Some(decision_of) {
+            return Err(Error::new(
+                "gate-authorization-request-hash-mismatch",
+                "decision-of must equal the decision's request-hash",
+            ));
+        }
+        match decision["decision"].as_str() {
+            Some("approve") => {}
+            Some("deny") => {
+                if decision["reason"].as_str().unwrap_or_default().is_empty() {
+                    return Err(Error::new(
+                        "gate-denial-without-reason",
+                        "a denial must state why",
+                    ));
+                }
+            }
+            other => {
+                return Err(Error::new(
+                    "gate-decision-unknown",
+                    format!("decision {other:?}"),
+                ));
+            }
+        }
+        // An agent that can approve is a system with no gates (§06 §5).
+        let permitted = match policy.decision_for("consequential") {
+            Decision::Gate { approvers } => self.approver_keys(&approvers, at, "").await?,
+            Decision::Allow | Decision::Deny => roots.to_vec(),
+        };
+        if !permitted.contains(&signer) && !roots.contains(&signer) {
+            return Err(Error::new(
+                "gate-approver-not-permitted",
+                format!("{signer} is not an approver in this deployment"),
+            ));
+        }
+        Ok(())
+    }
+
+    async fn validate_checkpoint(&self, env: &Value, plan: &mut AppendPlan) -> Result<()> {
+        let body = env
+            .get("checkpoint")
+            .and_then(Value::as_object)
+            .ok_or_else(|| Error::new("schema-missing-member", "checkpoint"))?;
+        for key in body.keys() {
+            if !["stream", "from-seq", "to-seq", "head-hash", "count", "observed-at"]
+                .contains(&key.as_str())
+            {
+                return Err(Error::new(
+                    "schema-unknown-member",
+                    format!("checkpoint.{key}"),
+                ));
+            }
+        }
+        // §04 §4.1: a checkpoint signed by any other key is not a checkpoint.
+        if env["sig"]["key"].as_str() != Some(self.kernel_key.id().as_str()) {
+            return Err(Error::new(
+                "checkpoint-signer-not-kernel",
+                "a checkpoint must be signed by the kernel's enrolled checkpoint key",
+            ));
+        }
+        let target_stream = body
+            .get("stream")
+            .and_then(Value::as_str)
+            .ok_or_else(|| Error::new("schema-missing-member", "checkpoint.stream"))?;
+        let from_seq = body
+            .get("from-seq")
+            .and_then(Value::as_u64)
+            .ok_or_else(|| Error::new("schema-missing-member", "checkpoint.from-seq"))?;
+        let to_seq = body
+            .get("to-seq")
+            .and_then(Value::as_u64)
+            .ok_or_else(|| Error::new("schema-missing-member", "checkpoint.to-seq"))?;
+        let count = body
+            .get("count")
+            .and_then(Value::as_u64)
+            .ok_or_else(|| Error::new("schema-missing-member", "checkpoint.count"))?;
+        let head_hash = body
+            .get("head-hash")
+            .and_then(Value::as_str)
+            .ok_or_else(|| Error::new("schema-missing-member", "checkpoint.head-hash"))?;
+        let observed_at = body
+            .get("observed-at")
+            .and_then(Value::as_str)
+            .ok_or_else(|| Error::new("schema-missing-member", "checkpoint.observed-at"))?;
+        clock::parse_timestamp(observed_at)?;
+        if count != to_seq.saturating_sub(from_seq) + 1 {
+            return Err(Error::new(
+                "checkpoint-count-mismatch",
+                format!("count {count} does not match [{from_seq}, {to_seq}]"),
+            ));
+        }
+        if self.store.stream_kind(target_stream).await?.is_none() {
+            return Err(Error::new(
+                codes::CHECKPOINT_STREAM_UNKNOWN,
+                format!("no stream {target_stream} has been written to"),
+            ));
+        }
+        // §04 §4.3: `head-hash` MUST equal `id()` of envelope `to-seq` of the attested stream.
+        let attested = self
+            .store
+            .range(target_stream, to_seq, to_seq)
+            .await?
+            .first()
+            .map(signed::object_id)
+            .transpose()?
+            .ok_or_else(|| {
+                Error::new(
+                    "checkpoint-head-mismatch",
+                    format!("{target_stream} has no envelope at seq {to_seq}"),
+                )
+            })?;
+        if attested != head_hash {
+            return Err(Error::new(
+                "checkpoint-head-mismatch",
+                format!("head of {target_stream} at {to_seq} is {attested}, attested {head_hash}"),
+            ));
+        }
+        plan.projections.checkpoint = Some(CheckpointRow {
+            stream: target_stream.to_owned(),
+            from_seq,
+            to_seq,
+            head_hash: head_hash.to_owned(),
+            observed_at: observed_at.to_owned(),
+        });
+        Ok(())
+    }
+
+    /// Resolve approver *subjects* to the keys permitted to sign (§06 §5).
+    ///
+    /// An approver is an enrolled human root, or a human holding a mandate whose scope includes the
+    /// action being approved. Never a group, a role or a rotation — a rotation may decide whom to
+    /// notify, but the signature is always one person's.
+    async fn approver_keys(
+        &self,
+        subjects: &[String],
+        at: &str,
+        action: &str,
+    ) -> Result<Vec<KeyId>> {
+        let mut keys = Vec::new();
+        for (key, subject) in self.store.roots_at(at).await? {
+            if subjects.iter().any(|s| s == &subject) {
+                keys.push(key);
+            }
+        }
+        for subject in subjects {
+            if !subject.starts_with("human:") {
+                continue;
+            }
+            for mandate in self.store.mandates_held_by(subject, at).await? {
+                let covers_action = action.is_empty()
+                    || mandate["scope"]["actions"]
+                        .as_array()
+                        .is_some_and(|patterns| {
+                            patterns.iter().filter_map(Value::as_str).any(|pattern| {
+                                pattern == "*"
+                                    || pattern == action
+                                    || pattern.strip_suffix(".*").is_some_and(|prefix| {
+                                        action.len() > prefix.len()
+                                            && action.starts_with(prefix)
+                                            && action.as_bytes()[prefix.len()] == b'.'
+                                    })
+                            })
+                        });
+                if !covers_action {
+                    continue;
+                }
+                if let Some(key) = mandate["grantee"]["key"].as_str() {
+                    if let Ok(key) = KeyId::parse(key) {
+                        if !keys.contains(&key) {
+                            keys.push(key);
+                        }
+                    }
+                }
+            }
+        }
+        Ok(keys)
+    }
+
+    /// Clamp retention to the policy ceiling and prepare payloads for storage.
+    fn collect_payloads(
+        &self,
+        env: &Value,
+        payloads: &[Value],
+        policy: &Policy,
+        class: Option<&str>,
+        plan: &mut AppendPlan,
+    ) -> Result<()> {
+        let emitted_at = env["emitted-at"].as_str().unwrap_or_default();
+        if let (Some(class), Some(evidence)) = (class, env.get("evidence")) {
+            if policy.stores_payloads(class) {
+                let claimed = evidence["retain-until"]
+                    .as_str()
+                    .ok_or_else(|| Error::new("schema-missing-member", "evidence.retain-until"))?;
+                let ceiling = policy.retention_ceiling(class, emitted_at)?;
+                // An emitter cannot buy itself a longer retention than the org allows (§02 §5).
+                if claimed > ceiling.as_str() {
+                    return Err(Error::new(
+                        "evidence-retention-too-long",
+                        format!(
+                            "retain-until {claimed} exceeds the policy ceiling {ceiling} for {class}"
+                        ),
+                    ));
+                }
+            } else {
+                // `P0D` means no payload is stored at all. The kernel discards what was submitted
+                // and does **not** treat the submission as an error — the emitter may be running
+                // older policy (§05 §4) — so the ceiling comparison, which `P0D` would make
+                // unsatisfiable for any future `retain-until`, is not applied here either.
+                return Ok(());
+            }
+        }
+        for payload in payloads {
+            let payload_hash = payload["payload-hash"]
+                .as_str()
+                .ok_or_else(|| Error::new("schema-missing-member", "payloads[].payload-hash"))?;
+            let media_type = payload["media-type"]
+                .as_str()
+                .ok_or_else(|| Error::new("schema-missing-member", "payloads[].media-type"))?;
+            let body = &payload["payload"];
+            let bytes = if media_type == payload::JSON_MEDIA_TYPE {
+                jcs::canonicalize(body)?.into_bytes()
+            } else {
+                hex::decode(body.as_str().unwrap_or_default()).map_err(|e| {
+                    Error::new("encoding-not-lowercase-hex", format!("payloads[].payload: {e}"))
+                })?
+            };
+            let retain_until = retain_until_for(env, payload_hash)
+                .unwrap_or_else(|| emitted_at.to_owned());
+            plan.payloads.push(PayloadRow {
+                payload_hash: payload_hash.to_owned(),
+                media_type: media_type.to_owned(),
+                bytes,
+                retain_until,
+            });
+        }
+        Ok(())
+    }
+}
+
+/// Which of the two payload-bearing sections committed to this hash, and until when.
+fn retain_until_for(env: &Value, payload_hash: &str) -> Option<String> {
+    for section in ["evidence", "signal"] {
+        let section = env.get(section)?;
+        if section["payload-hash"].as_str() == Some(payload_hash) {
+            return section["retain-until"].as_str().map(str::to_owned);
+        }
+    }
+    None
+}
+
+fn validate_aggregate_window(env: &Value, policy: &Policy) -> Result<()> {
+    let from = env["window"]["from"]
+        .as_str()
+        .ok_or_else(|| Error::new("schema-missing-member", "window.from"))?;
+    let to = env["window"]["to"]
+        .as_str()
+        .ok_or_else(|| Error::new("schema-missing-member", "window.to"))?;
+    if to < from {
+        return Err(Error::new(
+            codes::AGGREGATE_WINDOW_INVERTED,
+            format!("window [{from}, {to}] is inverted"),
+        ));
+    }
+    let ceiling = clock::shift(from, policy.aggregate_max_window_seconds())?;
+    if to > ceiling.as_str() {
+        // "An aggregate that is still open is an effect that is not yet in the audit" (§02 §7.5).
+        return Err(Error::new(
+            codes::AGGREGATE_WINDOW_TOO_LONG,
+            format!("window ends at {to}, later than the policy ceiling {ceiling}"),
+        ));
+    }
+    Ok(())
+}
+
+enum Either {
+    Idempotent(Appended),
+    Fresh(Box<Validated>),
+}
+
+/// `object-hash` of the rejected bytes, or their SHA-256 when they are not a JSON value at all
+/// (§04 §7). The raw bytes are deliberately **not** retained: a rejected object may carry personal
+/// data, and hoarding it forever would contradict §04 §5.
+fn rejected_bytes_hash(raw: &[u8]) -> String {
+    std::str::from_utf8(raw)
+        .ok()
+        .and_then(|text| jcs::parse(text).ok())
+        .and_then(|value| jcs::object_hash(&value).ok())
+        .unwrap_or_else(|| crypto::sha256_hex(raw))
+}
+
+/// What the rejected object claimed about itself, for investigation. Best effort by definition: the
+/// object is invalid, so nothing in it is trusted.
+fn claims(raw: &[u8]) -> Claims {
+    let Some(value) = std::str::from_utf8(raw)
+        .ok()
+        .and_then(|text| serde_json::from_str::<Value>(text).ok())
+    else {
+        return Claims::default();
+    };
+    let env = value.get("envelope").unwrap_or(&value);
+    Claims {
+        stream: env["stream"].as_str().map(str::to_owned),
+        seq: env["seq"].as_u64(),
+        kind: env["kind"].as_str().map(str::to_owned),
+    }
+}
+
+fn truncate(text: &str, limit: usize) -> String {
+    if text.len() <= limit {
+        return text.to_owned();
+    }
+    let mut end = limit;
+    while end > 0 && !text.is_char_boundary(end) {
+        end -= 1;
+    }
+    format!("{}…", &text[..end])
+}
+
+/// Verify a stored range and return its head hash and whether it was anchored (§04 §2.1).
+///
+/// Payloads are never consulted. That is the property that makes erasure compatible with integrity,
+/// so it is worth stating where the verification is actually invoked.
+///
+/// # Errors
+///
+/// Any chain or structural code from [`chain::verify_chain`].
+pub fn verify_range(envelopes: &[Value], stream: &str, anchor: Option<&str>) -> Result<chain::ChainResult> {
+    chain::verify_chain(envelopes, stream, anchor)
+}
