@@ -18,6 +18,7 @@ sqlx = { workspace = true }
 getrandom = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
+askama = { version = "0.14.0", default-features = false, features = ["std", "derive", "config"] }
 
 [dev-dependencies]
 stozher-testkit = { path = "../stozher-testkit" }

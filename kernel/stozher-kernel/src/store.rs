@@ -509,6 +509,70 @@ impl Store {
         Ok(out)
     }
 
+    /// Every revocation in force, with the epoch that identifies the set.
+    ///
+    /// The epoch is `sha256` over the sorted revocation ids. It is not a counter: a counter would
+    /// have to be stored, and a stored counter can disagree with the rows it counts. A hash of the
+    /// set is recomputed from the set, so "the epoch changed" and "the set changed" are the same
+    /// statement. A poller that holds the epoch can be answered `304 Not Modified` without the
+    /// documents being read at all (§03 §5 keys the verification cache on exactly this value).
+    ///
+    /// # Errors
+    ///
+    /// [`codes::STORE_UNAVAILABLE`], or `jcs-malformed-json` on stored corruption.
+    pub async fn revocation_feed(&self) -> Result<(String, Vec<Value>)> {
+        let rows = sqlx::query(
+            "SELECT revocation_id, document_json FROM revocations ORDER BY revocation_id",
+        )
+        .fetch_all(&self.pool)
+        .await
+        .map_err(db)?;
+        let mut ids = String::new();
+        let mut documents = Vec::with_capacity(rows.len());
+        for row in &rows {
+            ids.push_str(&row.get::<String, _>("revocation_id"));
+            ids.push('\n');
+            documents.push(stozher_core::jcs::parse(
+                &row.get::<String, _>("document_json"),
+            )?);
+        }
+        Ok((stozher_core::crypto::sha256_hex(ids.as_bytes()), documents))
+    }
+
+    /// The mandate registry: every granted mandate, with the instant it was revoked if it was.
+    ///
+    /// # Errors
+    ///
+    /// [`codes::STORE_UNAVAILABLE`], or `jcs-malformed-json` on stored corruption.
+    pub async fn mandate_registry(&self) -> Result<Vec<Value>> {
+        let rows = sqlx::query(
+            "SELECT m.mandate_id, m.parent, m.mandate_kind, m.grantee_subject, m.not_before, \
+             m.not_after, m.document_json, m.envelope_id, \
+             (SELECT MIN(r.revoked_at) FROM revocations r WHERE r.revokes = m.mandate_id) \
+             AS revoked_at FROM mandates m ORDER BY m.not_after",
+        )
+        .fetch_all(&self.pool)
+        .await
+        .map_err(db)?;
+        rows.iter()
+            .map(|r| {
+                let document = stozher_core::jcs::parse(&r.get::<String, _>("document_json"))?;
+                Ok(serde_json::json!({
+                    "mandate-id": r.get::<String, _>("mandate_id"),
+                    "parent": r.get::<Option<String>, _>("parent"),
+                    "mandate-kind": r.get::<String, _>("mandate_kind"),
+                    "grantor": document["grantor"],
+                    "grantee-subject": r.get::<String, _>("grantee_subject"),
+                    "not-before": r.get::<String, _>("not_before"),
+                    "not-after": r.get::<String, _>("not_after"),
+                    "scope": document["scope"],
+                    "envelope-id": r.get::<String, _>("envelope_id"),
+                    "revoked-at": r.get::<Option<String>, _>("revoked_at"),
+                }))
+            })
+            .collect()
+    }
+
     /// A mandate object by id.
     ///
     /// # Errors
@@ -843,6 +907,8 @@ impl Store {
         equals("subject", filter.subject);
         equals("mandate_ref", filter.mandate_ref);
         equals("effective_class", filter.classification);
+        equals("kind", filter.kind);
+        equals("action", filter.action);
         equals("component", filter.component);
         equals("stream", filter.stream);
         equals("correlation_ref", filter.correlation_ref);
@@ -1535,6 +1601,10 @@ pub struct EnvelopeQuery<'a> {
     pub mandate_subtree_of: Option<&'a str>,
     /// Effective weight class.
     pub classification: Option<&'a str>,
+    /// Envelope kind (§02 §2). Without it, "show me every revocation" is a full scan of the log.
+    pub kind: Option<&'a str>,
+    /// The action executed.
+    pub action: Option<&'a str>,
     /// Emitting component.
     pub component: Option<&'a str>,
     /// One stream.

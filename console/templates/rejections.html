@@ -1,0 +1,32 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>Refused submissions</h1>
+<p class="lede">What the kernel would not accept. Rejections are records in their own right
+(<code>spec/04 §7</code>): chained and signed in the kernel's own stream, never in the submitter's,
+so an emitter cannot suppress the evidence that it was refused. This is where a revoked mandate
+shows up when a component emits under it anyway — the effect is refused, and the refusal is
+kept.</p>
+
+<p>Rejection chain: <b class="{% if chain_valid %}ok{% else %}prohibited{% endif %}">{% if chain_valid %}VALID{% else %}INVALID{% endif %}</b>
+· {{ count }} record(s) · head <span class="hash">{{ head_hash }}</span></p>
+
+{% if rows.is_empty() %}
+<p class="empty">Nothing has been refused.</p>
+{% else %}
+<table>
+<tr><th>seq</th><th>received</th><th>reason</th><th>detail</th><th>submitted by</th><th>claimed stream</th><th>claimed seq</th><th>claimed kind</th></tr>
+{% for r in rows %}
+<tr>
+<td class="num">{{ r.seq }}</td>
+<td class="num">{{ r.received_at }}</td>
+<td class="prohibited">{{ r.reason }}</td>
+<td>{{ r.detail }}</td>
+<td>{{ r.submitted_by }}</td>
+<td>{{ r.claimed_stream }}</td>
+<td class="num">{{ r.claimed_seq }}</td>
+<td>{{ r.claimed_kind }}</td>
+</tr>
+{% endfor %}
+</table>
+{% endif %}
+{% endblock %}

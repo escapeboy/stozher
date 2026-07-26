@@ -1,0 +1,56 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>Audit explorer</h1>
+<p class="lede">Every filter here is one of the indexed dimensions of <code>spec/04 §6</code>. The
+export is newline-delimited canonical envelopes exactly as they were signed, so a regulator can
+re-verify the signatures and the chain without trusting this page.</p>
+
+<form class="filters" method="get" action="/console/audit">
+<label>subject<br><input name="subject" value="{{ f.subject }}"></label>
+<label>mandate<br><input name="mandate-ref" value="{{ f.mandate_ref }}"></label>
+<label>mandate subtree<br><input name="mandate-subtree-of" value="{{ f.mandate_subtree_of }}"></label>
+<label>human root<br><input name="human-root" value="{{ f.human_root }}"></label>
+<br>
+<label>class<br><input name="classification" value="{{ f.classification }}"></label>
+<label>kind<br><input name="kind" value="{{ f.kind }}"></label>
+<label>action<br><input name="action" value="{{ f.action }}"></label>
+<label>component<br><input name="component" value="{{ f.component }}"></label>
+<br>
+<label>stream<br><input name="stream" value="{{ f.stream }}"></label>
+<label>outcome<br><input name="outcome" value="{{ f.outcome }}"></label>
+<label>durable object<br><input name="commitment-id" value="{{ f.commitment_id }}"></label>
+<label>correlation<br><input name="correlation-ref" value="{{ f.correlation_ref }}"></label>
+<br>
+<label>emitted from<br><input name="emitted-from" value="{{ f.emitted_from }}"></label>
+<label>emitted to<br><input name="emitted-to" value="{{ f.emitted_to }}"></label>
+<label>limit<br><input name="limit" value="{{ f.limit }}"></label>
+<label>violations only<br><input type="checkbox" name="violations-only" value="true"{% if f.violations_only %} checked{% endif %}></label>
+<br>
+<button type="submit">filter</button>
+</form>
+
+<p>{{ count }} record(s). <a href="/console/audit/export?{{ query }}">export for regulators (NDJSON)</a>
+{% if f.stream != "" %} · <a href="/console/streams/{{ f.stream }}/verify">verify this stream's chain</a>{% endif %}
+</p>
+
+{% if rows.is_empty() %}
+<p class="empty">Nothing matches. An empty result is an answer, not a failure — but check the filters.</p>
+{% else %}
+<table>
+<tr><th>emitted</th><th>kind</th><th>subject</th><th>action</th><th>target</th><th>class</th><th>outcome</th><th>human root</th><th>envelope</th></tr>
+{% for r in rows %}
+<tr>
+<td class="num">{{ r.emitted_at }}</td>
+<td>{{ r.kind }}</td>
+<td>{{ r.subject }}</td>
+<td>{{ r.action }}</td>
+<td>{{ r.target }}</td>
+<td class="{{ r.class }}">{{ r.class }}</td>
+<td>{{ r.outcome }}</td>
+<td>{{ r.human_root }}</td>
+<td class="hash"><a href="/console/envelopes/{{ r.id }}">{{ r.short }}</a>{% if r.violation != "" %} <span class="violation" title="{{ r.violation }}">violation</span>{% endif %}</td>
+</tr>
+{% endfor %}
+</table>
+{% endif %}
+{% endblock %}
