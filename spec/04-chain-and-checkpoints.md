@@ -142,6 +142,9 @@ Payloads live in a separate content-addressed store keyed by `payload-hash`:
 - For `media-type: application/json`, `payload-hash` MUST equal `object-hash(payload)`.
   For any other media type, `payload` MUST be a lowercase-hex octet string and `payload-hash` MUST
   equal hex(SHA-256(those octets)). Mismatch → `payload-hash-mismatch`.
+- A submitted payload whose `payload-hash` is not referenced by the accompanying envelope MUST be
+  rejected rather than stored (`payload-not-referenced`): the payload store is reachable only through
+  envelopes, so it cannot be used as unaudited storage.
 - Payloads are submitted **alongside** the envelope in one ingest request:
 
 ```json

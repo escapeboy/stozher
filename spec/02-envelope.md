@@ -231,6 +231,31 @@ objects are refs folded from transition envelopes.**
    (`schema-unknown-member`), an unknown member inside `identity`, `execution`, `evidence`,
    `authorization`, `sig`, `resource`, `cost`, `window` or `counts`, or a member of the wrong JSON
    type (`schema-type-mismatch`).
+
+### 9.1 Structural error codes
+
+Normative codes for structural validation, in addition to the encoding codes of §01 §2:
+
+| Code | Condition |
+|---|---|
+| `envelope-version-unsupported` | `v` is not `"stozher/0.1"` |
+| `envelope-unknown-kind` | `kind` is not one of §2 |
+| `envelope-classification-unknown` | `classification` is not one of the four classes |
+| `envelope-outcome-unknown` | `execution.outcome` is not one of the five outcomes (§4) |
+| `schema-unknown-member` | a member not defined for this `kind`, at any of the levels listed above |
+| `schema-missing-member` | a REQUIRED member is absent |
+| `schema-type-mismatch` | a member has the wrong JSON type |
+| `identity-key-sig-mismatch` | `identity.key` ≠ `sig.key` |
+| `execution-time-inverted` | `finished-at` precedes `started-at` |
+| `correlation-ref-too-long` | `correlation-ref` exceeds 512 octets |
+| `cognition-envelope-has-effect-fields` | a `cognition` envelope carries `execution`, `evidence`, `classification`, `authorization` or `commitment-ref` |
+| `signal-envelope-has-effect-fields` | a `signal` envelope carries `mandate-ref`, `classification`, `execution`, `evidence`, `authorization` or `commitment-ref` |
+| `aggregate-class-not-read` | an `aggregate` envelope whose `classification` is not `read` |
+| `aggregate-count-mismatch` | `counts.total` ≠ sum of `counts.by-action` |
+| `aggregate-sample-bounds` | `sample-hashes` is empty or holds more than 16 entries |
+| `encoding-integer-out-of-range` | an integer outside [-(2^53 - 1), 2^53 - 1] (§01 §2.5) |
+| `chain-genesis-prev-not-null` | `seq` is 0 and `prev-hash` is not `null` |
+| `chain-prev-hash-missing` | `seq` > 0 and `prev-hash` is `null` |
 2. Verification of `sig` nevertheless canonicalizes the object **as received** (§01 §5.6). Order of
    operations at ingest MUST be: parse strictly → verify signature over received bytes → validate
    schema → validate mandate → validate authorization → append. A schema check that runs before

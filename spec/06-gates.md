@@ -120,16 +120,22 @@ verify_authorization(E, requires-gate, approvers, at = E.emitted-at):
       else REJECT gate-authorization-request-hash-mismatch   ; (2)
   require verify_signed_object(A.decision)
       else REJECT gate-decision-sig-invalid                  ; (3)
+  require A.decision.sig.key != A.request.key
+      else REJECT gate-self-approval                         ; (4)
   require A.decision.sig.key in approvers
-      else REJECT gate-approver-not-permitted                ; (4)
-  require A.decision.decision == "approve"
-      else REJECT gate-denied                                ; (5)
+      else REJECT gate-approver-not-permitted                ; (5)
+  require A.decision.decision in { "approve", "deny" }
+      else REJECT gate-decision-unknown                      ; (6)
+  if A.decision.decision == "deny":
+      require A.decision.reason is a non-empty string
+          else REJECT gate-denial-without-reason             ; (7)
+      REJECT gate-denied
   require A.decision.decided-at <= A.request.not-after
-      else REJECT gate-request-expired                       ; (6)
+      else REJECT gate-request-expired                       ; (8)
   require A.decision.decided-at <= at <= A.decision.not-after
-      else REJECT gate-approval-expired                      ; (7)
+      else REJECT gate-approval-expired                      ; (9)
 
-  ; (8) the effect MUST be the approved effect, field by field
+  ; (10) the effect MUST be the approved effect, field by field
   require A.request.subject          == E.identity.subject
       and A.request.key              == E.identity.key
       and A.request.component        == E.identity.component
@@ -141,7 +147,7 @@ verify_authorization(E, requires-gate, approvers, at = E.emitted-at):
       and A.request.args-hash        == E.execution.args-hash
       else REJECT gate-authorization-action-mismatch
 
-  ; (9) replay
+  ; (11) replay
   if A.decision.single-use and seen(A.decision.request-hash):
       REJECT gate-authorization-replayed
   record_seen(A.decision.request-hash)
@@ -156,16 +162,22 @@ Every step matters, and each closes a specific bypass:
 | (1) | performing a gated action with no approval at all — the ambient-flag bypass |
 | (2) | pairing a real signature with a rewritten request body |
 | (3) | forged or corrupted approval |
-| (4) | approval by a subject not permitted to approve (including self-approval, §5) |
-| (5) | treating a *denial* as authorization because a `decision` member was present |
-| (6) | approving a request that had already expired in the queue |
-| (7) | using an approval before it was granted, or long after |
-| (8) | **carrying a valid approval for action A while executing action B** — different target, different arguments, different mandate, or a re-classified action |
-| (9) | re-executing an approved action twice off one signature |
+| (4) | a subject approving its own action (§5) |
+| (5) | approval by a subject not permitted to approve this scope |
+| (6) | a decision value outside the closed vocabulary being read as permission |
+| (7) | treating a *denial* as authorization because a `decision` member was present, and denials recorded without the reason the agent and the audit are owed |
+| (8) | approving a request that had already expired in the queue |
+| (9) | using an approval before it was granted, or long after |
+| (10) | **carrying a valid approval for action A while executing action B** — different target, different arguments, different mandate, or a re-classified action |
+| (11) | re-executing an approved action twice off one signature |
 
-An implementation MUST perform all nine checks at ingest, and a component that enforces locally MUST
-perform (2)–(8) before applying the effect. Step (9) requires kernel state and is authoritative at
+An implementation MUST perform all eleven checks at ingest, and a component that enforces locally MUST
+perform (2)–(10) before applying the effect. Step (11) requires kernel state and is authoritative at
 ingest; a component MAY additionally track it locally.
+
+Note that step (1) is the only step conditioned on `requires-gate`. An `authorization` that is
+*present* is always fully verified even when policy did not demand one: an envelope MUST NOT be able
+to carry an unverified authorization-shaped object that a later reader might trust.
 
 **There MUST NOT be any other way to satisfy `requires-gate`.** Specifically, an implementation MUST
 NOT provide: a bypass flag or environment variable, a "trusted component" list that skips gating, a

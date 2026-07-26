@@ -1,0 +1,55 @@
+{
+  "v": "stozher/0.1",
+  "kind": "sha256",
+  "description": "SHA-256 known-answer tests. Hash the octets of `input-hex`; result MUST equal `sha256`.",
+  "vectors": [
+    {
+      "name": "empty",
+      "description": "the empty octet string",
+      "input-hex": "",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "abc",
+      "description": "NIST FIPS 180-4 example",
+      "input-hex": "616263",
+      "sha256": "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+    },
+    {
+      "name": "fox",
+      "description": "classic pangram",
+      "input-hex": "54686520717569636b2062726f776e20666f78206a756d7073206f76657220746865206c617a7920646f67",
+      "sha256": "d7a8fbb307d7809469ca9abcb0082e4f8d5651e46d3cdb762d02d0bf37c9e592"
+    },
+    {
+      "name": "canonical-empty-object",
+      "description": "SHA-256 of the canonical empty object",
+      "input-hex": "7b7d",
+      "sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+    },
+    {
+      "name": "bytes-00-01-ff",
+      "description": "non-UTF-8 octets",
+      "input-hex": "0001ff",
+      "sha256": "26a66b061e8f48f39927c312f25293959729eee95978e2892d49d3512a5cc092"
+    },
+    {
+      "name": "block-boundary-64",
+      "description": "exactly one compression block",
+      "input-hex": "61616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161",
+      "sha256": "ffe054fe7ae0cb6dc65c3af9b61d5209f439851db43d0ba5997337df154668eb"
+    },
+    {
+      "name": "block-boundary-55",
+      "description": "maximum single-block message with padding",
+      "input-hex": "61616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161",
+      "sha256": "9f4390f8d30c2dd92ec9f095b65e2b9ae9b0a925a5258e241c9f1e910f734318"
+    },
+    {
+      "name": "block-boundary-56",
+      "description": "first length needing a second block",
+      "input-hex": "6161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161",
+      "sha256": "b35439a4ac6f0948b6d6f9e3c6af0f5f590ce20f1bde7090ef7970686ec6738a"
+    }
+  ]
+}

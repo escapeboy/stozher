@@ -1,0 +1,72 @@
+{
+  "v": "stozher/0.1",
+  "kind": "object-hash",
+  "description": "The signed-object pattern of spec 01 section 5. `expected-jcs` is JCS(object); `expected-object-hash` is its SHA-256 (the object's id, sig included); `expected-signing-input` is JCS(object minus sig).",
+  "keys": [
+    {
+      "label": "human:ivan",
+      "secret-key": "0a049eec7c12db0ac1cd04ef10ece009a580dfa9b439247d24a2a8ae3e824d77",
+      "public-key": "09b3c43478cc065aeeeba98ee919e6b007ff3ff122f86e0a4a3fbc5898092d3a",
+      "key-id": "ed25519:09b3c43478cc065aeeeba98ee919e6b007ff3ff122f86e0a4a3fbc5898092d3a"
+    }
+  ],
+  "vectors": [
+    {
+      "name": "unsigned-object",
+      "description": "object-hash of an object with no sig member",
+      "object": {
+        "b": 2,
+        "a": 1,
+        "nested": {
+          "z": [
+            1,
+            2
+          ],
+          "y": null
+        }
+      },
+      "expected-jcs": "{\"a\":1,\"b\":2,\"nested\":{\"y\":null,\"z\":[1,2]}}",
+      "expected-object-hash": "50cc4bf286266bc97c107088774bead78f173b561a12dca0b4b4f0ea473fe193"
+    },
+    {
+      "name": "signed-object",
+      "description": "signing-input excludes sig; object-hash (the object's id) includes it",
+      "object": {
+        "v": "stozher/0.1",
+        "kind": "gate-decision",
+        "request-hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "decision": "approve",
+        "sig": {
+          "alg": "ed25519",
+          "key": "ed25519:09b3c43478cc065aeeeba98ee919e6b007ff3ff122f86e0a4a3fbc5898092d3a",
+          "value": "4e72eb030d49e6b912b8663dd4f0b4fccc0879dbb99dddf3b1235f993490389c1e4aaa66cc00b182c77620bd177da1590afcc4f0ddf816841bd8ad4a514ba70d"
+        }
+      },
+      "expected-jcs": "{\"decision\":\"approve\",\"kind\":\"gate-decision\",\"request-hash\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"sig\":{\"alg\":\"ed25519\",\"key\":\"ed25519:09b3c43478cc065aeeeba98ee919e6b007ff3ff122f86e0a4a3fbc5898092d3a\",\"value\":\"4e72eb030d49e6b912b8663dd4f0b4fccc0879dbb99dddf3b1235f993490389c1e4aaa66cc00b182c77620bd177da1590afcc4f0ddf816841bd8ad4a514ba70d\"},\"v\":\"stozher/0.1\"}",
+      "expected-object-hash": "63881f1a894eb6030c72b155d49ea132b88cf9dd1b3d41b41a7d669ad8fabc72",
+      "expected-signing-input": "{\"decision\":\"approve\",\"kind\":\"gate-decision\",\"request-hash\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"v\":\"stozher/0.1\"}",
+      "expected-signing-input-sha256": "b790041975a8536ef6239242e8c35813c7cc9b2866cb94cb32ce3153876e924c",
+      "expected-signature-valid": true
+    },
+    {
+      "name": "signed-object-tampered-body",
+      "description": "changing a member after signing MUST invalidate the signature",
+      "object": {
+        "v": "stozher/0.1",
+        "kind": "gate-decision",
+        "request-hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "decision": "deny",
+        "sig": {
+          "alg": "ed25519",
+          "key": "ed25519:09b3c43478cc065aeeeba98ee919e6b007ff3ff122f86e0a4a3fbc5898092d3a",
+          "value": "4e72eb030d49e6b912b8663dd4f0b4fccc0879dbb99dddf3b1235f993490389c1e4aaa66cc00b182c77620bd177da1590afcc4f0ddf816841bd8ad4a514ba70d"
+        }
+      },
+      "expected-jcs": "{\"decision\":\"deny\",\"kind\":\"gate-decision\",\"request-hash\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"sig\":{\"alg\":\"ed25519\",\"key\":\"ed25519:09b3c43478cc065aeeeba98ee919e6b007ff3ff122f86e0a4a3fbc5898092d3a\",\"value\":\"4e72eb030d49e6b912b8663dd4f0b4fccc0879dbb99dddf3b1235f993490389c1e4aaa66cc00b182c77620bd177da1590afcc4f0ddf816841bd8ad4a514ba70d\"},\"v\":\"stozher/0.1\"}",
+      "expected-object-hash": "5525be9f957ad3d56e44fda362f0f704169042737900ae815be9268142df2351",
+      "expected-signing-input": "{\"decision\":\"deny\",\"kind\":\"gate-decision\",\"request-hash\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"v\":\"stozher/0.1\"}",
+      "expected-signing-input-sha256": "9896a6b10b77793fe42dc358c96473ed3dcbba8fe8fdbaf80249058f40fe96e6",
+      "expected-signature-valid": false
+    }
+  ]
+}

@@ -1,0 +1,161 @@
+{
+  "v": "stozher/0.1",
+  "kind": "jcs",
+  "description": "RFC 8785 canonicalization. Parse `input-json` (raw JSON text, so that member order, escapes and numeric literals are preserved exactly), canonicalize, and compare bytes against `canonical` and its SHA-256 against `canonical-sha256`.",
+  "vectors": [
+    {
+      "name": "empty-object",
+      "description": "the empty object",
+      "input-json": "{}",
+      "canonical": "{}",
+      "canonical-sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+    },
+    {
+      "name": "empty-array",
+      "description": "the empty array",
+      "input-json": "[]",
+      "canonical": "[]",
+      "canonical-sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+    },
+    {
+      "name": "empty-structures-nested",
+      "description": "empty containers nest and sort",
+      "input-json": "{\"b\":[],\"a\":{},\"c\":[[],{}]}",
+      "canonical": "{\"a\":{},\"b\":[],\"c\":[[],{}]}",
+      "canonical-sha256": "925c673adf18ca220ee7da7f5e344def6f8c60be721b2ef68c93a67ee7d9c883"
+    },
+    {
+      "name": "literals",
+      "description": "the three JSON literals",
+      "input-json": "{\"t\":true,\"f\":false,\"n\":null}",
+      "canonical": "{\"f\":false,\"n\":null,\"t\":true}",
+      "canonical-sha256": "22e00dc2f7b01420f940fbdbfbdf34fa0667cc6500186495023ba37722cbd05e"
+    },
+    {
+      "name": "key-order-basic",
+      "description": "ASCII names sort by code unit, uppercase first",
+      "input-json": "{\"b\":1,\"a\":2,\"C\":3,\"A\":4}",
+      "canonical": "{\"A\":4,\"C\":3,\"a\":2,\"b\":1}",
+      "canonical-sha256": "b51f0a5b4c9e78b12ad8396463512d2ee160d113b08dd595c69362417078402e"
+    },
+    {
+      "name": "key-order-prefix",
+      "description": "a shorter name that is a prefix sorts first",
+      "input-json": "{\"abc\":1,\"ab\":2,\"a\":3,\"\":4}",
+      "canonical": "{\"\":4,\"a\":3,\"ab\":2,\"abc\":1}",
+      "canonical-sha256": "f9e67996183dce8d6b2300544fd2072ea78dae8ef4cb0af3d0155321cd37921c"
+    },
+    {
+      "name": "key-order-utf16-vs-codepoint",
+      "description": "U+1F60A (UTF-16 D83D DE0A) MUST sort BEFORE U+FFE0; sorting by code point or by UTF-8 bytes puts it after, which is the classic RFC 8785 section 3.2.3 trap",
+      "input-json": "{\"\\uffe0\":1,\"\\ud83d\\ude0a\":2,\"\\u20ac\":3,\"\\u00e9\":4,\"e\\u0301\":5,\"a\":6,\"A\":7,\"\\u0001\":8,\"\":9}",
+      "canonical": "{\"\":9,\"\\u0001\":8,\"A\":7,\"a\":6,\"é\":5,\"é\":4,\"€\":3,\"😊\":2,\"￠\":1}",
+      "canonical-sha256": "8df7ce679d7a1ca8b9f927a3004f0d60b5b0771a86db71968067d2f4360cc429"
+    },
+    {
+      "name": "key-order-nested",
+      "description": "sorting applies at every level; array element order is never changed",
+      "input-json": "{\"z\":{\"b\":1,\"a\":2},\"a\":[{\"y\":1,\"x\":2},{\"n\":null}]}",
+      "canonical": "{\"a\":[{\"x\":2,\"y\":1},{\"n\":null}],\"z\":{\"a\":2,\"b\":1}}",
+      "canonical-sha256": "a4b185224148a9da776f1705d05edf25a056ed20e91d93a4f5292a7020a99af4"
+    },
+    {
+      "name": "array-order-preserved",
+      "description": "arrays keep input order, objects inside do not",
+      "input-json": "[3,1,2,\"b\",\"a\",{\"b\":1,\"a\":2}]",
+      "canonical": "[3,1,2,\"b\",\"a\",{\"a\":2,\"b\":1}]",
+      "canonical-sha256": "9c9304a5b83e9da829dab1dac8cdbd108808a2ed2351d35a08aa9eb5f9b114b5"
+    },
+    {
+      "name": "whitespace-insignificant",
+      "description": "insignificant whitespace is removed",
+      "input-json": "{\n  \"a\" : 1,\n  \"b\" : [ 1, 2 ]\n}",
+      "canonical": "{\"a\":1,\"b\":[1,2]}",
+      "canonical-sha256": "8baa73198470c7bb4c3ce142a8fd651affc0310d878bb9bd159e37a573fb4874"
+    },
+    {
+      "name": "string-escape-decoded-names",
+      "description": "escaped names are decoded before sorting",
+      "input-json": "{\"\\u0061\\u0062\":\"\\u0063\"}",
+      "canonical": "{\"ab\":\"c\"}",
+      "canonical-sha256": "c89b256d9d008666d31e48ca00af0dc3b4848d2b76004c49b33867ef2b99d630"
+    },
+    {
+      "name": "string-escapes-minimal",
+      "description": "only the mandated short escapes are emitted",
+      "input-json": "{\"s\":\"\\\"\\\\\\b\\t\\n\\f\\r\"}",
+      "canonical": "{\"s\":\"\\\"\\\\\\b\\t\\n\\f\\r\"}",
+      "canonical-sha256": "4488429bf884aa83d2bf32cb5453e7f665492af47dcc864463696067e144cfdf"
+    },
+    {
+      "name": "string-control-chars",
+      "description": "C0 controls become lowercase \\u00xx; U+0020 and U+007F are emitted literally",
+      "input-json": "{\"s\":\"\\u0000\\u001f\\u0020\\u007f\"}",
+      "canonical": "{\"s\":\"\\u0000\\u001f \"}",
+      "canonical-sha256": "d0147863bdbed20be1f3e3fe770aea0b84808e21b8719377739e8e5d63c40370"
+    },
+    {
+      "name": "string-non-ascii-literal",
+      "description": "non-ASCII, including U+2028/U+2029, is emitted literally as UTF-8 and never \\u-escaped",
+      "input-json": "{\"s\":\"\\u00e9\\u20ac\\ud83d\\ude0a\\u2028\\u2029\"}",
+      "canonical": "{\"s\":\"é€😊  \"}",
+      "canonical-sha256": "bdb61b85145b7b589423a68382970e1cac54f7a74117891d04769275bf943fdc"
+    },
+    {
+      "name": "no-unicode-normalization",
+      "description": "NFC and NFD forms stay distinct names and distinct values; canonicalization never normalizes",
+      "input-json": "{\"\\u00e9\":\"\\u00e9\",\"e\\u0301\":\"e\\u0301\"}",
+      "canonical": "{\"é\":\"é\",\"é\":\"é\"}",
+      "canonical-sha256": "2b8599359615227d4bffe298511d6d9520d9cf98c59adf9541e6e023e41ffe7b"
+    },
+    {
+      "name": "number-integers",
+      "description": "integral values",
+      "input-json": "{\"a\":0,\"b\":-0,\"c\":1,\"d\":-1,\"e\":1.0,\"f\":1e0,\"g\":100,\"h\":-100}",
+      "canonical": "{\"a\":0,\"b\":0,\"c\":1,\"d\":-1,\"e\":1,\"f\":1,\"g\":100,\"h\":-100}",
+      "canonical-sha256": "32ba36417b5bc65121083f04fd994765a2968de0a6a0495dc0c4e83f905df487"
+    },
+    {
+      "name": "number-precision-loss",
+      "description": "9007199254740993 has no binary64 representation and serializes as ...992",
+      "input-json": "{\"a\":9007199254740992,\"b\":9007199254740993,\"c\":9007199254740994}",
+      "canonical": "{\"a\":9007199254740992,\"b\":9007199254740992,\"c\":9007199254740994}",
+      "canonical-sha256": "60598c1db7116986ee1645eb149f5524482344bf02609309d0190fd9062cf8b9"
+    },
+    {
+      "name": "number-exponent-boundaries",
+      "description": "the five ECMAScript Number::toString branches, at their boundaries",
+      "input-json": "{\"a\":1e-7,\"b\":1e-6,\"c\":0.000001,\"d\":1e20,\"e\":1e21,\"f\":1e30,\"g\":1e-323}",
+      "canonical": "{\"a\":1e-7,\"b\":0.000001,\"c\":0.000001,\"d\":100000000000000000000,\"e\":1e+21,\"f\":1e+30,\"g\":1e-323}",
+      "canonical-sha256": "222224bbec4dde3c7b597c919338d538d8c49f43410ddbc2b48d7765f3051c03"
+    },
+    {
+      "name": "number-extremes",
+      "description": "binary64 extremes",
+      "input-json": "{\"min-denormal\":5e-324,\"max-finite\":1.7976931348623157e308,\"neg\":-1.7976931348623157e308}",
+      "canonical": "{\"max-finite\":1.7976931348623157e+308,\"min-denormal\":5e-324,\"neg\":-1.7976931348623157e+308}",
+      "canonical-sha256": "1751e4704567e0b86dd8eae9e8c717d90e4679981eab6575795fccd211822ec8"
+    },
+    {
+      "name": "number-fractions",
+      "description": "fractional values use the shortest round-tripping digits",
+      "input-json": "{\"a\":10.1,\"b\":0.5,\"c\":-1e-7,\"d\":333333333.33333331,\"e\":2.220446049250313e-16}",
+      "canonical": "{\"a\":10.1,\"b\":0.5,\"c\":-1e-7,\"d\":333333333.3333333,\"e\":2.220446049250313e-16}",
+      "canonical-sha256": "5cb889bbceed1e2a0ffc4d197fb608b537ca632dd625ec376cd03c3aa1e947f3"
+    },
+    {
+      "name": "deep-nesting",
+      "description": "recursion through mixed containers",
+      "input-json": "{\"a\":{\"b\":{\"c\":{\"d\":[1,{\"f\":2,\"e\":[3,{\"h\":4,\"g\":5}]}]}}}}",
+      "canonical": "{\"a\":{\"b\":{\"c\":{\"d\":[1,{\"e\":[3,{\"g\":5,\"h\":4}],\"f\":2}]}}}}",
+      "canonical-sha256": "da287d839b7f807023f33e49ff77ad249dacd8d92193a5e39fa1ab2697f9f993"
+    },
+    {
+      "name": "envelope-shaped",
+      "description": "a protocol-object-shaped input, for sanity",
+      "input-json": "{\"v\":\"stozher/0.1\",\"seq\":0,\"prev-hash\":null,\"kind\":\"effect\",\"identity\":{\"subject\":\"agent:x\",\"component\":\"gateway\",\"key\":\"ed25519:aa\"}}",
+      "canonical": "{\"identity\":{\"component\":\"gateway\",\"key\":\"ed25519:aa\",\"subject\":\"agent:x\"},\"kind\":\"effect\",\"prev-hash\":null,\"seq\":0,\"v\":\"stozher/0.1\"}",
+      "canonical-sha256": "1e0c661442a9f7c0441555fb6676ab8523599773a9a76834a4728b9b9d3d6422"
+    }
+  ]
+}

@@ -1,0 +1,1346 @@
+{
+  "v": "stozher/0.1",
+  "kind": "mandate-chain",
+  "description": "Mandate chain verification (spec 03 section 5). Resolve `leaf-ref` in `mandates`, then walk to a human root using `roots`, `revocations`, `request`, `at`, `subject-key` and `max-delegation-depth`. On success `expected.human-root` and `expected.depth` MUST match; on failure `expected.error` MUST match.",
+  "roots": [
+    "ed25519:09b3c43478cc065aeeeba98ee919e6b007ff3ff122f86e0a4a3fbc5898092d3a",
+    "ed25519:767e4626d1fccefbac1670e43e1b88f0635f07b3556a6f2c3bb8dac4175bbf5d"
+  ],
+  "mandates": {
+    "943657cf9835279962b556bf4b369b4fa03a5feeb65bf8d83d6be35332c13004": {
+      "v": "stozher/0.1",
+      "kind": "mandate",
+      "mandate-kind": "interactive",
+      "grantor": {
+        "subject": "human:ivan",
+        "key": "ed25519:09b3c43478cc065aeeeba98ee919e6b007ff3ff122f86e0a4a3fbc5898092d3a",
+        "role": "human"
+      },
+      "grantee": {
+        "subject": "agent:claude-code/ivan-mbp",
+        "key": "ed25519:4a0beffbc56f699c7fc1eb522d5298e2e4210d054a0a33dbeea70751f61e2bfc"
+      },
+      "issued-at": "2026-07-26T08:00:00.000Z",
+      "not-before": "2026-07-26T08:00:00.000Z",
+      "not-after": "2026-07-26T18:00:00.000Z",
+      "parent": null,
+      "max-depth": 2,
+      "scope": {
+        "components": [
+          "gateway"
+        ],
+        "actions": [
+          "github.*"
+        ],
+        "classes": [
+          "read",
+          "benign",
+          "consequential"
+        ],
+        "resources": [
+          "repo:acme/backend"
+        ]
+      },
+      "budget": {
+        "requests": 5000,
+        "money-eur": "25.00"
+      },
+      "nonce": "642a73d8f46a358d8a955a2bb5bd5675",
+      "sig": {
+        "alg": "ed25519",
+        "key": "ed25519:09b3c43478cc065aeeeba98ee919e6b007ff3ff122f86e0a4a3fbc5898092d3a",
+        "value": "e0dc8de470303a4b9c7ca24327420218bc60d115ad4a0c6c291c1859d326f85b288b62858c645f14da62a12d9a8be952bacc5f80185ec4d48c118a5d60f21e04"
+      }
+    },
+    "caa82f3d9731544985d3ee0e8763623e21b1373818d6913681f23a17a8916d86": {
+      "v": "stozher/0.1",
+      "kind": "mandate",
+      "mandate-kind": "standing",
+      "grantor": {
+        "subject": "human:mila",
+        "key": "ed25519:767e4626d1fccefbac1670e43e1b88f0635f07b3556a6f2c3bb8dac4175bbf5d",
+        "role": "human"
+      },
+      "grantee": {
+        "subject": "agent:nightly-importer",
+        "key": "ed25519:9d88362815e38caea55513e6eade12df477c22bcf69bdc8659aa1c13d53c3e50"
+      },
+      "issued-at": "2026-07-26T08:00:00.000Z",
+      "not-before": "2026-07-26T08:00:00.000Z",
+      "not-after": "2026-10-24T08:00:00.000Z",
+      "parent": null,
+      "max-depth": 1,
+      "scope": {
+        "components": [
+          "gateway"
+        ],
+        "actions": [
+          "github.*"
+        ],
+        "classes": [
+          "read",
+          "benign",
+          "consequential"
+        ],
+        "resources": [
+          "repo:acme/backend"
+        ]
+      },
+      "budget": {
+        "requests": 5000,
+        "money-eur": "25.00"
+      },
+      "nonce": "dafa84a259586eebb4c1a7f90caefdfe",
+      "sig": {
+        "alg": "ed25519",
+        "key": "ed25519:767e4626d1fccefbac1670e43e1b88f0635f07b3556a6f2c3bb8dac4175bbf5d",
+        "value": "8b2cfc794027839b3b3ee6e15209129d60336fc408e792d7e8d642df5fd25a4ab68a448170a8fcdd4e0a02d18ad335968eec66363bcabf791f06135e49644509"
+      }
+    },
+    "fdfb2d60b6af932726fba9c4c4f17b85b7241c6f59f2d173b0464fa07fbfcd07": {
+      "v": "stozher/0.1",
+      "kind": "mandate",
+      "mandate-kind": "standing",
+      "grantor": {
+        "subject": "human:ivan",
+        "key": "ed25519:09b3c43478cc065aeeeba98ee919e6b007ff3ff122f86e0a4a3fbc5898092d3a",
+        "role": "human"
+      },
+      "grantee": {
+        "subject": "agent:claude-code/ivan-mbp",
+        "key": "ed25519:4a0beffbc56f699c7fc1eb522d5298e2e4210d054a0a33dbeea70751f61e2bfc"
+      },
+      "issued-at": "2026-07-26T08:00:00.000Z",
+      "not-before": "2026-07-26T08:00:00.000Z",
+      "not-after": "2026-07-20T08:00:00.000Z",
+      "parent": null,
+      "max-depth": 0,
+      "scope": {
+        "components": [
+          "gateway"
+        ],
+        "actions": [
+          "github.*"
+        ],
+        "classes": [
+          "read",
+          "benign",
+          "consequential"
+        ],
+        "resources": [
+          "repo:acme/backend"
+        ]
+      },
+      "budget": {
+        "requests": 5000,
+        "money-eur": "25.00"
+      },
+      "nonce": "9b46e00544b5331502f77c0b43b95d9b",
+      "sig": {
+        "alg": "ed25519",
+        "key": "ed25519:09b3c43478cc065aeeeba98ee919e6b007ff3ff122f86e0a4a3fbc5898092d3a",
+        "value": "5b16a5519c542837310ba5941587a9803c96ec704f020c1aa6df58199557956676c8f54860e7316af04e523cb3567e65a1be0ecd4c22cf8555e78dae910dcb03"
+      }
+    },
+    "81162b4c76336186b7489787782b2ddebff6d6ae41ccf12a9c710cc9735c21b0": {
+      "v": "stozher/0.1",
+      "kind": "mandate",
+      "mandate-kind": "interactive",
+      "grantor": {
+        "subject": "human:ivan",
+        "key": "ed25519:09b3c43478cc065aeeeba98ee919e6b007ff3ff122f86e0a4a3fbc5898092d3a",
+        "role": "human"
+      },
+      "grantee": {
+        "subject": "agent:claude-code/ivan-mbp",
+        "key": "ed25519:4a0beffbc56f699c7fc1eb522d5298e2e4210d054a0a33dbeea70751f61e2bfc"
+      },
+      "issued-at": "2026-07-26T08:00:00.000Z",
+      "not-before": "2026-07-27T08:00:00.000Z",
+      "not-after": "2026-07-27T18:00:00.000Z",
+      "parent": null,
+      "max-depth": 2,
+      "scope": {
+        "components": [
+          "gateway"
+        ],
+        "actions": [
+          "github.*"
+        ],
+        "classes": [
+          "read",
+          "benign",
+          "consequential"
+        ],
+        "resources": [
+          "repo:acme/backend"
+        ]
+      },
+      "budget": {
+        "requests": 5000,
+        "money-eur": "25.00"
+      },
+      "nonce": "642a73d8f46a358d8a955a2bb5bd5675",
+      "sig": {
+        "alg": "ed25519",
+        "key": "ed25519:09b3c43478cc065aeeeba98ee919e6b007ff3ff122f86e0a4a3fbc5898092d3a",
+        "value": "82f8b18641393f250c064dcd826bd0953acc04d43a2cbfa1e5af83ccf4a27e5ee356c76e338909b045c626ed512f20187ae655bb78dc120a32212e717300a202"
+      }
+    },
+    "5a6a66ac66c003e80c2bb938cc5c33cba957a697c1194e62171e1c638678b4ac": {
+      "v": "stozher/0.1",
+      "kind": "mandate",
+      "mandate-kind": "interactive",
+      "grantor": {
+        "subject": "human:ivan",
+        "key": "ed25519:09b3c43478cc065aeeeba98ee919e6b007ff3ff122f86e0a4a3fbc5898092d3a",
+        "role": "human"
+      },
+      "grantee": {
+        "subject": "agent:claude-code/ivan-mbp",
+        "key": "ed25519:4a0beffbc56f699c7fc1eb522d5298e2e4210d054a0a33dbeea70751f61e2bfc"
+      },
+      "issued-at": "2026-07-26T08:00:00.000Z",
+      "not-before": "2026-07-26T08:00:00.000Z",
+      "parent": null,
+      "max-depth": 2,
+      "scope": {
+        "components": [
+          "gateway"
+        ],
+        "actions": [
+          "github.*"
+        ],
+        "classes": [
+          "read",
+          "benign",
+          "consequential"
+        ],
+        "resources": [
+          "repo:acme/backend"
+        ]
+      },
+      "budget": {
+        "requests": 5000,
+        "money-eur": "25.00"
+      },
+      "nonce": "abababababababababababababababab",
+      "sig": {
+        "alg": "ed25519",
+        "key": "ed25519:09b3c43478cc065aeeeba98ee919e6b007ff3ff122f86e0a4a3fbc5898092d3a",
+        "value": "4d9255f65fec2e55fe651936d4557be48cd751ef2e6bb5377287b74c52538b4efaae889395f50462fd89923d0c8d186cbf09460abd1f22620e2514663a05900b"
+      }
+    },
+    "af20c6170141ca1d8324a0fbb7cc4e4c438fe5e6bec70069c1491f9d3ff68455": {
+      "v": "stozher/0.1",
+      "kind": "mandate",
+      "mandate-kind": "interactive",
+      "grantor": {
+        "subject": "human:mallory",
+        "key": "ed25519:b5c3f03ca2c90f750480b8899e9e2df44e1d71a4168b419cbc8732d216bbb673",
+        "role": "human"
+      },
+      "grantee": {
+        "subject": "agent:claude-code/ivan-mbp",
+        "key": "ed25519:4a0beffbc56f699c7fc1eb522d5298e2e4210d054a0a33dbeea70751f61e2bfc"
+      },
+      "issued-at": "2026-07-26T08:00:00.000Z",
+      "not-before": "2026-07-26T08:00:00.000Z",
+      "not-after": "2026-07-26T18:00:00.000Z",
+      "parent": null,
+      "max-depth": 2,
+      "scope": {
+        "components": [
+          "gateway"
+        ],
+        "actions": [
+          "github.*"
+        ],
+        "classes": [
+          "read",
+          "benign",
+          "consequential"
+        ],
+        "resources": [
+          "repo:acme/backend"
+        ]
+      },
+      "budget": {
+        "requests": 5000,
+        "money-eur": "25.00"
+      },
+      "nonce": "21bc54ab8b5e703bebc6795084479cf6",
+      "sig": {
+        "alg": "ed25519",
+        "key": "ed25519:b5c3f03ca2c90f750480b8899e9e2df44e1d71a4168b419cbc8732d216bbb673",
+        "value": "ec91fc6acdd822e5ec6a11548f72a3eb095b68082e78b469df9b2a258e6706068a0b09869441162ebc885914f1980573d9e21e289a21b5ee3dc26185eac76107"
+      }
+    },
+    "261dcbf74b1188fabba4b200ba574b4207aec30497db0f04e4178b121069f5da": {
+      "v": "stozher/0.1",
+      "kind": "mandate",
+      "mandate-kind": "standing",
+      "grantor": {
+        "subject": "agent:triage",
+        "key": "ed25519:0bab4865a246a78aae98ececc8399f7483eb86ccbb19d24536602f95069fc8a6",
+        "role": "agent"
+      },
+      "grantee": {
+        "subject": "agent:claude-code/ivan-mbp",
+        "key": "ed25519:4a0beffbc56f699c7fc1eb522d5298e2e4210d054a0a33dbeea70751f61e2bfc"
+      },
+      "issued-at": "2026-07-26T08:00:00.000Z",
+      "not-before": "2026-07-26T08:00:00.000Z",
+      "not-after": "2026-07-26T18:00:00.000Z",
+      "parent": null,
+      "max-depth": 0,
+      "scope": {
+        "components": [
+          "gateway"
+        ],
+        "actions": [
+          "github.*"
+        ],
+        "classes": [
+          "read",
+          "benign",
+          "consequential"
+        ],
+        "resources": [
+          "repo:acme/backend"
+        ]
+      },
+      "budget": {
+        "requests": 5000,
+        "money-eur": "25.00"
+      },
+      "nonce": "960e41ba29496f50200252e3349e81f3",
+      "sig": {
+        "alg": "ed25519",
+        "key": "ed25519:0bab4865a246a78aae98ececc8399f7483eb86ccbb19d24536602f95069fc8a6",
+        "value": "faa10c6ca8dc4236006184356f1aa736ce9576f545c475d3a3dfe99676b0ada9ad24c47edd512043e59a0b896f0eaed42c713d78a84764f3f2dc1b25f9019508"
+      }
+    },
+    "cc40d8c674847c69e8eee32e13cb72212394d6a0c5dbbce1b27545f70eaa4681": {
+      "v": "stozher/0.1",
+      "kind": "mandate",
+      "mandate-kind": "interactive",
+      "grantor": {
+        "subject": "human:ivan",
+        "key": "ed25519:09b3c43478cc065aeeeba98ee919e6b007ff3ff122f86e0a4a3fbc5898092d3a",
+        "role": "human"
+      },
+      "grantee": {
+        "subject": "human:ivan",
+        "key": "ed25519:09b3c43478cc065aeeeba98ee919e6b007ff3ff122f86e0a4a3fbc5898092d3a"
+      },
+      "issued-at": "2026-07-26T08:00:00.000Z",
+      "not-before": "2026-07-26T08:00:00.000Z",
+      "not-after": "2026-07-26T18:00:00.000Z",
+      "parent": null,
+      "max-depth": 2,
+      "scope": {
+        "components": [
+          "gateway"
+        ],
+        "actions": [
+          "github.*"
+        ],
+        "classes": [
+          "read",
+          "benign",
+          "consequential"
+        ],
+        "resources": [
+          "repo:acme/backend"
+        ]
+      },
+      "budget": {
+        "requests": 5000,
+        "money-eur": "25.00"
+      },
+      "nonce": "114ac27912dc4bfc9c5d177e5c7814f6",
+      "sig": {
+        "alg": "ed25519",
+        "key": "ed25519:09b3c43478cc065aeeeba98ee919e6b007ff3ff122f86e0a4a3fbc5898092d3a",
+        "value": "55d125204a2687a552614648ec270e8bdd6dc990ff417c3798c1aa9e05bc42db160f808fa2ee2766a0c779daf709403515272a6a1211b85c586f900afe52230e"
+      }
+    },
+    "32cff0468e5b6bbf4626b668671006d5adef3e38cd64eace304d239d6bf57fc3": {
+      "v": "stozher/0.1",
+      "kind": "mandate",
+      "mandate-kind": "interactive",
+      "grantor": {
+        "subject": "human:ivan",
+        "key": "ed25519:09b3c43478cc065aeeeba98ee919e6b007ff3ff122f86e0a4a3fbc5898092d3a",
+        "role": "human"
+      },
+      "grantee": {
+        "subject": "agent:claude-code/ivan-mbp",
+        "key": "ed25519:4a0beffbc56f699c7fc1eb522d5298e2e4210d054a0a33dbeea70751f61e2bfc"
+      },
+      "issued-at": "2026-07-26T08:00:00.000Z",
+      "not-before": "2026-07-26T08:00:00.000Z",
+      "not-after": "2026-07-26T18:00:00.000Z",
+      "parent": null,
+      "max-depth": 2,
+      "scope": {
+        "components": [
+          "gateway"
+        ],
+        "actions": [
+          "github.get_file"
+        ],
+        "classes": [
+          "read"
+        ],
+        "resources": [
+          "repo:acme/backend"
+        ]
+      },
+      "budget": {
+        "requests": 5000,
+        "money-eur": "25.00"
+      },
+      "nonce": "642a73d8f46a358d8a955a2bb5bd5675",
+      "sig": {
+        "alg": "ed25519",
+        "key": "ed25519:09b3c43478cc065aeeeba98ee919e6b007ff3ff122f86e0a4a3fbc5898092d3a",
+        "value": "a408774b0d0aea588a6efab3205be715378f59f39eb4fd9dcd509a450a572c933ad75635751ae477ca85dcfdba64e4a5319fadb8116fb12ac99a80e93ccf5007"
+      }
+    },
+    "20b081d07a02837add7e6b7752a8b0372601bc1dc6359d713d52f37ca11bd2cd": {
+      "v": "stozher/0.1",
+      "kind": "mandate",
+      "mandate-kind": "delegated",
+      "grantor": {
+        "subject": "agent:claude-code/ivan-mbp",
+        "key": "ed25519:4a0beffbc56f699c7fc1eb522d5298e2e4210d054a0a33dbeea70751f61e2bfc",
+        "role": "agent"
+      },
+      "grantee": {
+        "subject": "agent:triage",
+        "key": "ed25519:0bab4865a246a78aae98ececc8399f7483eb86ccbb19d24536602f95069fc8a6"
+      },
+      "issued-at": "2026-07-26T08:00:00.000Z",
+      "not-before": "2026-07-26T08:00:00.000Z",
+      "not-after": "2026-07-26T18:00:00.000Z",
+      "parent": "943657cf9835279962b556bf4b369b4fa03a5feeb65bf8d83d6be35332c13004",
+      "max-depth": 1,
+      "scope": {
+        "components": [
+          "gateway"
+        ],
+        "actions": [
+          "github.create_issue"
+        ],
+        "classes": [
+          "read",
+          "benign",
+          "consequential"
+        ],
+        "resources": [
+          "repo:acme/backend"
+        ]
+      },
+      "budget": {
+        "requests": 5000,
+        "money-eur": "25.00"
+      },
+      "nonce": "4e9558860f2165704e1f42d72e8052d0",
+      "sig": {
+        "alg": "ed25519",
+        "key": "ed25519:4a0beffbc56f699c7fc1eb522d5298e2e4210d054a0a33dbeea70751f61e2bfc",
+        "value": "eb03079ffb8a2d532089a10738e9989986afd5f558b2d7c042ea7198ae8055f5989e8df284dc595cc6f4ae5bac3f8709342f862f5e7b289a90daf72568f3c704"
+      }
+    },
+    "15735e1ed63ed8705adb7bf1e3d7545b6c5fb1203451633f1e12427655f38b2b": {
+      "v": "stozher/0.1",
+      "kind": "mandate",
+      "mandate-kind": "delegated",
+      "grantor": {
+        "subject": "agent:triage",
+        "key": "ed25519:0bab4865a246a78aae98ececc8399f7483eb86ccbb19d24536602f95069fc8a6",
+        "role": "agent"
+      },
+      "grantee": {
+        "subject": "agent:sub-worker",
+        "key": "ed25519:55da656c349f5c6730e703d972522db869faa07ed653ebf33ea9fc87a9c0c6ef"
+      },
+      "issued-at": "2026-07-26T08:00:00.000Z",
+      "not-before": "2026-07-26T08:00:00.000Z",
+      "not-after": "2026-07-26T18:00:00.000Z",
+      "parent": "20b081d07a02837add7e6b7752a8b0372601bc1dc6359d713d52f37ca11bd2cd",
+      "max-depth": 0,
+      "scope": {
+        "components": [
+          "gateway"
+        ],
+        "actions": [
+          "github.create_issue"
+        ],
+        "classes": [
+          "read",
+          "benign",
+          "consequential"
+        ],
+        "resources": [
+          "repo:acme/backend"
+        ]
+      },
+      "budget": {
+        "requests": 5000,
+        "money-eur": "25.00"
+      },
+      "nonce": "93a80874454f57602e9723f25739aad8",
+      "sig": {
+        "alg": "ed25519",
+        "key": "ed25519:0bab4865a246a78aae98ececc8399f7483eb86ccbb19d24536602f95069fc8a6",
+        "value": "d681d4f60d346ba736068e9d061691092bc820fe7042560900cd3b1b8e67f03362eba54a05b016d5ea2c550d07d545be11362604eeeb1caa147c7f5ba7f48b04"
+      }
+    },
+    "c17cfdf7949b8139d138ce9c58bf6a1c7244cef03507d3f5dde7395e08aa2bfd": {
+      "v": "stozher/0.1",
+      "kind": "mandate",
+      "mandate-kind": "delegated",
+      "grantor": {
+        "subject": "agent:sub-worker",
+        "key": "ed25519:55da656c349f5c6730e703d972522db869faa07ed653ebf33ea9fc87a9c0c6ef",
+        "role": "agent"
+      },
+      "grantee": {
+        "subject": "agent:deep-worker",
+        "key": "ed25519:e437e78265721c3a918bf56ceb9da97ac621d619db6273f949e83fa0cd1ae1c5"
+      },
+      "issued-at": "2026-07-26T08:00:00.000Z",
+      "not-before": "2026-07-26T08:00:00.000Z",
+      "not-after": "2026-07-26T18:00:00.000Z",
+      "parent": "15735e1ed63ed8705adb7bf1e3d7545b6c5fb1203451633f1e12427655f38b2b",
+      "max-depth": 0,
+      "scope": {
+        "components": [
+          "gateway"
+        ],
+        "actions": [
+          "github.create_issue"
+        ],
+        "classes": [
+          "read",
+          "benign",
+          "consequential"
+        ],
+        "resources": [
+          "repo:acme/backend"
+        ]
+      },
+      "budget": {
+        "requests": 5000,
+        "money-eur": "25.00"
+      },
+      "nonce": "602b383c665eeb2ef704a2e401e09e7b",
+      "sig": {
+        "alg": "ed25519",
+        "key": "ed25519:55da656c349f5c6730e703d972522db869faa07ed653ebf33ea9fc87a9c0c6ef",
+        "value": "37dd6bbbc4e3b3df9e20c9f60b632017347e39bfddabfeb4f94db150a4ec91801885889acb018f32253615a65bc65bccd8ff3b55420f01031e06d83193156305"
+      }
+    },
+    "b2a075509cf7a1023334fd41ab93b797b4cfd3971f7e06d2548ff511014dca07": {
+      "v": "stozher/0.1",
+      "kind": "mandate",
+      "mandate-kind": "delegated",
+      "grantor": {
+        "subject": "agent:claude-code/ivan-mbp",
+        "key": "ed25519:4a0beffbc56f699c7fc1eb522d5298e2e4210d054a0a33dbeea70751f61e2bfc",
+        "role": "agent"
+      },
+      "grantee": {
+        "subject": "agent:triage",
+        "key": "ed25519:0bab4865a246a78aae98ececc8399f7483eb86ccbb19d24536602f95069fc8a6"
+      },
+      "issued-at": "2026-07-26T08:00:00.000Z",
+      "not-before": "2026-07-26T08:00:00.000Z",
+      "not-after": "2026-07-26T18:00:00.000Z",
+      "parent": "943657cf9835279962b556bf4b369b4fa03a5feeb65bf8d83d6be35332c13004",
+      "max-depth": 1,
+      "scope": {
+        "components": [
+          "gateway"
+        ],
+        "actions": [
+          "*"
+        ],
+        "classes": [
+          "read",
+          "benign",
+          "consequential"
+        ],
+        "resources": [
+          "repo:acme/backend"
+        ]
+      },
+      "budget": {
+        "requests": 5000,
+        "money-eur": "25.00"
+      },
+      "nonce": "4e9558860f2165704e1f42d72e8052d0",
+      "sig": {
+        "alg": "ed25519",
+        "key": "ed25519:4a0beffbc56f699c7fc1eb522d5298e2e4210d054a0a33dbeea70751f61e2bfc",
+        "value": "e1c4d0a4c74625ccd1283d7438e9d0dab9eeaa6d181f5df2d1ad8c2f1a85b2188d3549747e72489237a199676b61b5c014484e07ba7ca2424b1989ffb55abb00"
+      }
+    },
+    "35d2e7755048da823200b869a67e543cdab2f43fedb55a127cd03327d52b71b2": {
+      "v": "stozher/0.1",
+      "kind": "mandate",
+      "mandate-kind": "delegated",
+      "grantor": {
+        "subject": "agent:claude-code/ivan-mbp",
+        "key": "ed25519:4a0beffbc56f699c7fc1eb522d5298e2e4210d054a0a33dbeea70751f61e2bfc",
+        "role": "agent"
+      },
+      "grantee": {
+        "subject": "agent:triage",
+        "key": "ed25519:0bab4865a246a78aae98ececc8399f7483eb86ccbb19d24536602f95069fc8a6"
+      },
+      "issued-at": "2026-07-26T08:00:00.000Z",
+      "not-before": "2026-07-26T08:00:00.000Z",
+      "not-after": "2026-07-26T18:00:00.000Z",
+      "parent": "32cff0468e5b6bbf4626b668671006d5adef3e38cd64eace304d239d6bf57fc3",
+      "max-depth": 0,
+      "scope": {
+        "components": [
+          "gateway"
+        ],
+        "actions": [
+          "github.get_file"
+        ],
+        "classes": [
+          "read",
+          "consequential"
+        ],
+        "resources": [
+          "repo:acme/backend"
+        ]
+      },
+      "budget": {
+        "requests": 5000,
+        "money-eur": "25.00"
+      },
+      "nonce": "c6ef65331f8a92f4e1ac5256af56b5b8",
+      "sig": {
+        "alg": "ed25519",
+        "key": "ed25519:4a0beffbc56f699c7fc1eb522d5298e2e4210d054a0a33dbeea70751f61e2bfc",
+        "value": "c0513c16eb0f91ca64c7debbb8d26f03e3353e925bb31f04ca07907a8d206944414e1c2bd63e2820be0461fb082fe859ec1e93071495112ffa13e06a89a3870b"
+      }
+    },
+    "dd52be18d795f23503b012c3e6873ea266e0dfa1843ddadd7cd579d28a4a2f88": {
+      "v": "stozher/0.1",
+      "kind": "mandate",
+      "mandate-kind": "delegated",
+      "grantor": {
+        "subject": "agent:triage",
+        "key": "ed25519:0bab4865a246a78aae98ececc8399f7483eb86ccbb19d24536602f95069fc8a6",
+        "role": "agent"
+      },
+      "grantee": {
+        "subject": "agent:sub-worker",
+        "key": "ed25519:55da656c349f5c6730e703d972522db869faa07ed653ebf33ea9fc87a9c0c6ef"
+      },
+      "issued-at": "2026-07-26T08:00:00.000Z",
+      "not-before": "2026-07-26T08:00:00.000Z",
+      "not-after": "2026-07-26T18:00:00.000Z",
+      "parent": "943657cf9835279962b556bf4b369b4fa03a5feeb65bf8d83d6be35332c13004",
+      "max-depth": 0,
+      "scope": {
+        "components": [
+          "gateway"
+        ],
+        "actions": [
+          "github.*"
+        ],
+        "classes": [
+          "read",
+          "benign",
+          "consequential"
+        ],
+        "resources": [
+          "repo:acme/backend"
+        ]
+      },
+      "budget": {
+        "requests": 5000,
+        "money-eur": "25.00"
+      },
+      "nonce": "2121b8ff74b48383a5a9549a82c15b69",
+      "sig": {
+        "alg": "ed25519",
+        "key": "ed25519:0bab4865a246a78aae98ececc8399f7483eb86ccbb19d24536602f95069fc8a6",
+        "value": "36d50d9e14828b7574aeff2d4fa75c1fcfe9d4c8afa777932c92864037d6feb1851ae0485bea915f05f779a11ec912fd9bb12fc22b010bae22a20719de0bc30f"
+      }
+    },
+    "a811d27569283190075ab36d0ea7e402bf0f7b4a2a8756ab3c19b238157cf0c4": {
+      "v": "stozher/0.1",
+      "kind": "mandate",
+      "mandate-kind": "delegated",
+      "grantor": {
+        "subject": "agent:claude-code/ivan-mbp",
+        "key": "ed25519:4a0beffbc56f699c7fc1eb522d5298e2e4210d054a0a33dbeea70751f61e2bfc",
+        "role": "agent"
+      },
+      "grantee": {
+        "subject": "agent:triage",
+        "key": "ed25519:0bab4865a246a78aae98ececc8399f7483eb86ccbb19d24536602f95069fc8a6"
+      },
+      "issued-at": "2026-07-26T08:00:00.000Z",
+      "not-before": "2026-07-26T08:00:00.000Z",
+      "not-after": "2026-07-27T18:00:00.000Z",
+      "parent": "943657cf9835279962b556bf4b369b4fa03a5feeb65bf8d83d6be35332c13004",
+      "max-depth": 0,
+      "scope": {
+        "components": [
+          "gateway"
+        ],
+        "actions": [
+          "github.*"
+        ],
+        "classes": [
+          "read",
+          "benign",
+          "consequential"
+        ],
+        "resources": [
+          "repo:acme/backend"
+        ]
+      },
+      "budget": {
+        "requests": 5000,
+        "money-eur": "25.00"
+      },
+      "nonce": "4e9558860f2165704e1f42d72e8052d0",
+      "sig": {
+        "alg": "ed25519",
+        "key": "ed25519:4a0beffbc56f699c7fc1eb522d5298e2e4210d054a0a33dbeea70751f61e2bfc",
+        "value": "c42aeed64bdc576abdfde71dd1a71b326d1695d670e3051da817cf1c53dfc3c481fd08fc28f89ec84939df03a4fa8e9ce6b0db1122fafc0c53d62a932752be08"
+      }
+    },
+    "09a816c1486d76e613e77ccc7f4eaeac0edbdca2dfe25b83fc864410aa36ec7d": {
+      "v": "stozher/0.1",
+      "kind": "mandate",
+      "mandate-kind": "delegated",
+      "grantor": {
+        "subject": "agent:claude-code/ivan-mbp",
+        "key": "ed25519:4a0beffbc56f699c7fc1eb522d5298e2e4210d054a0a33dbeea70751f61e2bfc",
+        "role": "agent"
+      },
+      "grantee": {
+        "subject": "agent:triage",
+        "key": "ed25519:0bab4865a246a78aae98ececc8399f7483eb86ccbb19d24536602f95069fc8a6"
+      },
+      "issued-at": "2026-07-26T08:00:00.000Z",
+      "not-before": "2026-07-26T08:00:00.000Z",
+      "not-after": "2026-07-26T18:00:00.000Z",
+      "parent": null,
+      "max-depth": 0,
+      "scope": {
+        "components": [
+          "gateway"
+        ],
+        "actions": [
+          "github.*"
+        ],
+        "classes": [
+          "read",
+          "benign",
+          "consequential"
+        ],
+        "resources": [
+          "repo:acme/backend"
+        ]
+      },
+      "budget": {
+        "requests": 5000,
+        "money-eur": "25.00"
+      },
+      "nonce": "09fe9bf1a010b3948fab4afab246fbb9",
+      "sig": {
+        "alg": "ed25519",
+        "key": "ed25519:4a0beffbc56f699c7fc1eb522d5298e2e4210d054a0a33dbeea70751f61e2bfc",
+        "value": "7e2cf5a8017528682a9241ef1b33dd692167b8a588cc7958b808dd63b2f770b6384024ea6e45d8fedb4cb8eabc287892819c9cdacf46a9e343d8ce6e919cc507"
+      }
+    }
+  },
+  "keys": [
+    {
+      "label": "human:ivan",
+      "secret-key": "0a049eec7c12db0ac1cd04ef10ece009a580dfa9b439247d24a2a8ae3e824d77",
+      "public-key": "09b3c43478cc065aeeeba98ee919e6b007ff3ff122f86e0a4a3fbc5898092d3a",
+      "key-id": "ed25519:09b3c43478cc065aeeeba98ee919e6b007ff3ff122f86e0a4a3fbc5898092d3a"
+    },
+    {
+      "label": "human:mila",
+      "secret-key": "1375fb3029a6d42b3d1e5e3b3b157ac3879d9ba5ccc6aaf8ba3f637ab6f578c9",
+      "public-key": "767e4626d1fccefbac1670e43e1b88f0635f07b3556a6f2c3bb8dac4175bbf5d",
+      "key-id": "ed25519:767e4626d1fccefbac1670e43e1b88f0635f07b3556a6f2c3bb8dac4175bbf5d"
+    },
+    {
+      "label": "human:mallory",
+      "secret-key": "950b76f858d90b8f31200708a00b412ff3fb911712c0c7c010c392e63d020876",
+      "public-key": "b5c3f03ca2c90f750480b8899e9e2df44e1d71a4168b419cbc8732d216bbb673",
+      "key-id": "ed25519:b5c3f03ca2c90f750480b8899e9e2df44e1d71a4168b419cbc8732d216bbb673"
+    },
+    {
+      "label": "agent:claude-code/ivan-mbp",
+      "secret-key": "1b7d882b4eb6415fa19c689b623c361ca034011ad7437f255c83053a9a377d0d",
+      "public-key": "4a0beffbc56f699c7fc1eb522d5298e2e4210d054a0a33dbeea70751f61e2bfc",
+      "key-id": "ed25519:4a0beffbc56f699c7fc1eb522d5298e2e4210d054a0a33dbeea70751f61e2bfc"
+    },
+    {
+      "label": "agent:triage",
+      "secret-key": "672c513b926233aeb427b90af6bae503e96b49d3252997cbf89cfe591f6514fa",
+      "public-key": "0bab4865a246a78aae98ececc8399f7483eb86ccbb19d24536602f95069fc8a6",
+      "key-id": "ed25519:0bab4865a246a78aae98ececc8399f7483eb86ccbb19d24536602f95069fc8a6"
+    },
+    {
+      "label": "agent:sub-worker",
+      "secret-key": "63132015401fd684cc7ffb859de4d730a23a5672d61c513942f4bc169283c710",
+      "public-key": "55da656c349f5c6730e703d972522db869faa07ed653ebf33ea9fc87a9c0c6ef",
+      "key-id": "ed25519:55da656c349f5c6730e703d972522db869faa07ed653ebf33ea9fc87a9c0c6ef"
+    },
+    {
+      "label": "agent:deep-worker",
+      "secret-key": "fdc7e893811617b453d08dc23a72ca854a96b944c1d0ca5a908c74679a946b78",
+      "public-key": "e437e78265721c3a918bf56ceb9da97ac621d619db6273f949e83fa0cd1ae1c5",
+      "key-id": "ed25519:e437e78265721c3a918bf56ceb9da97ac621d619db6273f949e83fa0cd1ae1c5"
+    },
+    {
+      "label": "agent:nightly-importer",
+      "secret-key": "1ef8add92c1929622b028ab2c25bf6a450573cbd2ac25388f4b39751e2db24a4",
+      "public-key": "9d88362815e38caea55513e6eade12df477c22bcf69bdc8659aa1c13d53c3e50",
+      "key-id": "ed25519:9d88362815e38caea55513e6eade12df477c22bcf69bdc8659aa1c13d53c3e50"
+    },
+    {
+      "label": "kernel:checkpoint",
+      "secret-key": "8238f36b02927ca6d920817ba07ad8143f13c23bbf874c8b78f70bb0d3983ad7",
+      "public-key": "fc0b55f654f203a79d517113dcf9f40232124354b8a48bbfa3eeaf5c20dfbfd3",
+      "key-id": "ed25519:fc0b55f654f203a79d517113dcf9f40232124354b8a48bbfa3eeaf5c20dfbfd3"
+    },
+    {
+      "label": "org:policy",
+      "secret-key": "60fc63a893fa7901ea5003fed97c2cba79d1b05f98942f5a6bcbc8829d1eac93",
+      "public-key": "4e05c3ea19acf2ece1ad5d7602ef4f563f09b08e10ea294006aa8b655aa38f29",
+      "key-id": "ed25519:4e05c3ea19acf2ece1ad5d7602ef4f563f09b08e10ea294006aa8b655aa38f29"
+    }
+  ],
+  "vectors": [
+    {
+      "name": "valid-interactive-to-human-root",
+      "description": "an interactive mandate granted directly by an enrolled human root",
+      "leaf-ref": "943657cf9835279962b556bf4b369b4fa03a5feeb65bf8d83d6be35332c13004",
+      "subject-key": "ed25519:4a0beffbc56f699c7fc1eb522d5298e2e4210d054a0a33dbeea70751f61e2bfc",
+      "request": {
+        "component": "gateway",
+        "action": "github.create_issue",
+        "classification": "consequential",
+        "resource": "repo:acme/backend"
+      },
+      "at": "2026-07-26T09:15:00.000Z",
+      "max-delegation-depth": 3,
+      "revocations": [],
+      "expected": {
+        "valid": true,
+        "error": null,
+        "human-root": "human:ivan",
+        "root-key": "ed25519:09b3c43478cc065aeeeba98ee919e6b007ff3ff122f86e0a4a3fbc5898092d3a",
+        "depth": 0
+      }
+    },
+    {
+      "name": "valid-standing-to-human-root",
+      "description": "a standing mandate: autonomy with a mandatory expiry, still terminating at a named human",
+      "leaf-ref": "caa82f3d9731544985d3ee0e8763623e21b1373818d6913681f23a17a8916d86",
+      "subject-key": "ed25519:9d88362815e38caea55513e6eade12df477c22bcf69bdc8659aa1c13d53c3e50",
+      "request": {
+        "component": "gateway",
+        "action": "github.create_issue",
+        "classification": "consequential",
+        "resource": "repo:acme/backend"
+      },
+      "at": "2026-08-01T03:00:00.000Z",
+      "max-delegation-depth": 3,
+      "revocations": [],
+      "expected": {
+        "valid": true,
+        "error": null,
+        "human-root": "human:mila",
+        "root-key": "ed25519:767e4626d1fccefbac1670e43e1b88f0635f07b3556a6f2c3bb8dac4175bbf5d",
+        "depth": 0
+      }
+    },
+    {
+      "name": "valid-delegated-depth-1",
+      "description": "agent to agent delegation, narrowed scope, walked back to the human root",
+      "leaf-ref": "20b081d07a02837add7e6b7752a8b0372601bc1dc6359d713d52f37ca11bd2cd",
+      "subject-key": "ed25519:0bab4865a246a78aae98ececc8399f7483eb86ccbb19d24536602f95069fc8a6",
+      "request": {
+        "component": "gateway",
+        "action": "github.create_issue",
+        "classification": "consequential",
+        "resource": "repo:acme/backend"
+      },
+      "at": "2026-07-26T09:15:00.000Z",
+      "max-delegation-depth": 3,
+      "revocations": [],
+      "expected": {
+        "valid": true,
+        "error": null,
+        "human-root": "human:ivan",
+        "root-key": "ed25519:09b3c43478cc065aeeeba98ee919e6b007ff3ff122f86e0a4a3fbc5898092d3a",
+        "depth": 1
+      }
+    },
+    {
+      "name": "valid-delegated-depth-2",
+      "description": "two delegated links; the root granted a hop budget of 2 and it is exactly consumed",
+      "leaf-ref": "15735e1ed63ed8705adb7bf1e3d7545b6c5fb1203451633f1e12427655f38b2b",
+      "subject-key": "ed25519:55da656c349f5c6730e703d972522db869faa07ed653ebf33ea9fc87a9c0c6ef",
+      "request": {
+        "component": "gateway",
+        "action": "github.create_issue",
+        "classification": "consequential",
+        "resource": "repo:acme/backend"
+      },
+      "at": "2026-07-26T09:15:00.000Z",
+      "max-delegation-depth": 3,
+      "revocations": [],
+      "expected": {
+        "valid": true,
+        "error": null,
+        "human-root": "human:ivan",
+        "root-key": "ed25519:09b3c43478cc065aeeeba98ee919e6b007ff3ff122f86e0a4a3fbc5898092d3a",
+        "depth": 2
+      }
+    },
+    {
+      "name": "expired-standing-mandate",
+      "description": "a standing mandate whose expiry has passed authorizes nothing",
+      "leaf-ref": "fdfb2d60b6af932726fba9c4c4f17b85b7241c6f59f2d173b0464fa07fbfcd07",
+      "subject-key": "ed25519:4a0beffbc56f699c7fc1eb522d5298e2e4210d054a0a33dbeea70751f61e2bfc",
+      "request": {
+        "component": "gateway",
+        "action": "github.create_issue",
+        "classification": "consequential",
+        "resource": "repo:acme/backend"
+      },
+      "at": "2026-07-26T09:15:00.000Z",
+      "max-delegation-depth": 3,
+      "revocations": [],
+      "expected": {
+        "valid": false,
+        "error": "mandate-expired"
+      }
+    },
+    {
+      "name": "not-yet-valid",
+      "description": "a mandate that has not started",
+      "leaf-ref": "81162b4c76336186b7489787782b2ddebff6d6ae41ccf12a9c710cc9735c21b0",
+      "subject-key": "ed25519:4a0beffbc56f699c7fc1eb522d5298e2e4210d054a0a33dbeea70751f61e2bfc",
+      "request": {
+        "component": "gateway",
+        "action": "github.create_issue",
+        "classification": "consequential",
+        "resource": "repo:acme/backend"
+      },
+      "at": "2026-07-26T09:15:00.000Z",
+      "max-delegation-depth": 3,
+      "revocations": [],
+      "expected": {
+        "valid": false,
+        "error": "mandate-not-yet-valid"
+      }
+    },
+    {
+      "name": "missing-expiry",
+      "description": "there is no representation of a mandate without an expiry",
+      "leaf-ref": "5a6a66ac66c003e80c2bb938cc5c33cba957a697c1194e62171e1c638678b4ac",
+      "subject-key": "ed25519:4a0beffbc56f699c7fc1eb522d5298e2e4210d054a0a33dbeea70751f61e2bfc",
+      "request": {
+        "component": "gateway",
+        "action": "github.create_issue",
+        "classification": "consequential",
+        "resource": "repo:acme/backend"
+      },
+      "at": "2026-07-26T09:15:00.000Z",
+      "max-delegation-depth": 3,
+      "revocations": [],
+      "expected": {
+        "valid": false,
+        "error": "mandate-missing-expiry"
+      }
+    },
+    {
+      "name": "delegated-exceeds-max-depth",
+      "description": "the third delegated link: its parent's hop budget was already 0",
+      "leaf-ref": "c17cfdf7949b8139d138ce9c58bf6a1c7244cef03507d3f5dde7395e08aa2bfd",
+      "subject-key": "ed25519:e437e78265721c3a918bf56ceb9da97ac621d619db6273f949e83fa0cd1ae1c5",
+      "request": {
+        "component": "gateway",
+        "action": "github.create_issue",
+        "classification": "consequential",
+        "resource": "repo:acme/backend"
+      },
+      "at": "2026-07-26T09:15:00.000Z",
+      "max-delegation-depth": 3,
+      "revocations": [],
+      "expected": {
+        "valid": false,
+        "error": "mandate-delegation-depth-exceeded"
+      }
+    },
+    {
+      "name": "delegated-exceeds-configured-depth",
+      "description": "the same valid chain rejected because the deployment caps delegation depth at 1",
+      "leaf-ref": "15735e1ed63ed8705adb7bf1e3d7545b6c5fb1203451633f1e12427655f38b2b",
+      "subject-key": "ed25519:55da656c349f5c6730e703d972522db869faa07ed653ebf33ea9fc87a9c0c6ef",
+      "request": {
+        "component": "gateway",
+        "action": "github.create_issue",
+        "classification": "consequential",
+        "resource": "repo:acme/backend"
+      },
+      "at": "2026-07-26T09:15:00.000Z",
+      "max-delegation-depth": 1,
+      "revocations": [],
+      "expected": {
+        "valid": false,
+        "error": "mandate-delegation-depth-exceeded"
+      }
+    },
+    {
+      "name": "chain-root-grantor-not-human",
+      "description": "a chain that terminates at an agent asserting a standing grant does not terminate at a human",
+      "leaf-ref": "261dcbf74b1188fabba4b200ba574b4207aec30497db0f04e4178b121069f5da",
+      "subject-key": "ed25519:4a0beffbc56f699c7fc1eb522d5298e2e4210d054a0a33dbeea70751f61e2bfc",
+      "request": {
+        "component": "gateway",
+        "action": "github.create_issue",
+        "classification": "consequential",
+        "resource": "repo:acme/backend"
+      },
+      "at": "2026-07-26T09:15:00.000Z",
+      "max-delegation-depth": 3,
+      "revocations": [],
+      "expected": {
+        "valid": false,
+        "error": "mandate-root-grantor-not-human"
+      }
+    },
+    {
+      "name": "chain-root-not-enrolled",
+      "description": "the grantor claims role human but the key is not an enrolled root: claiming is not being",
+      "leaf-ref": "af20c6170141ca1d8324a0fbb7cc4e4c438fe5e6bec70069c1491f9d3ff68455",
+      "subject-key": "ed25519:4a0beffbc56f699c7fc1eb522d5298e2e4210d054a0a33dbeea70751f61e2bfc",
+      "request": {
+        "component": "gateway",
+        "action": "github.create_issue",
+        "classification": "consequential",
+        "resource": "repo:acme/backend"
+      },
+      "at": "2026-07-26T09:15:00.000Z",
+      "max-delegation-depth": 3,
+      "revocations": [],
+      "expected": {
+        "valid": false,
+        "error": "mandate-root-not-enrolled"
+      }
+    },
+    {
+      "name": "self-grant",
+      "description": "authority is never self-issued",
+      "leaf-ref": "cc40d8c674847c69e8eee32e13cb72212394d6a0c5dbbce1b27545f70eaa4681",
+      "subject-key": "ed25519:09b3c43478cc065aeeeba98ee919e6b007ff3ff122f86e0a4a3fbc5898092d3a",
+      "request": {
+        "component": "gateway",
+        "action": "github.create_issue",
+        "classification": "consequential",
+        "resource": "repo:acme/backend"
+      },
+      "at": "2026-07-26T09:15:00.000Z",
+      "max-delegation-depth": 3,
+      "revocations": [],
+      "expected": {
+        "valid": false,
+        "error": "mandate-self-grant"
+      }
+    },
+    {
+      "name": "scope-widened-by-delegation",
+      "description": "a delegated mandate claiming actions ['*'] under a parent limited to github.*",
+      "leaf-ref": "b2a075509cf7a1023334fd41ab93b797b4cfd3971f7e06d2548ff511014dca07",
+      "subject-key": "ed25519:0bab4865a246a78aae98ececc8399f7483eb86ccbb19d24536602f95069fc8a6",
+      "request": {
+        "component": "gateway",
+        "action": "github.create_issue",
+        "classification": "consequential",
+        "resource": "repo:acme/backend"
+      },
+      "at": "2026-07-26T09:15:00.000Z",
+      "max-delegation-depth": 3,
+      "revocations": [],
+      "expected": {
+        "valid": false,
+        "error": "mandate-scope-widened"
+      }
+    },
+    {
+      "name": "scope-widened-class",
+      "description": "a delegated mandate adding a weight class the parent never held",
+      "leaf-ref": "35d2e7755048da823200b869a67e543cdab2f43fedb55a127cd03327d52b71b2",
+      "subject-key": "ed25519:0bab4865a246a78aae98ececc8399f7483eb86ccbb19d24536602f95069fc8a6",
+      "request": {
+        "component": "gateway",
+        "action": "github.get_file",
+        "classification": "read",
+        "resource": "repo:acme/backend"
+      },
+      "at": "2026-07-26T09:15:00.000Z",
+      "max-delegation-depth": 3,
+      "revocations": [],
+      "expected": {
+        "valid": false,
+        "error": "mandate-scope-widened"
+      }
+    },
+    {
+      "name": "delegation-not-held",
+      "description": "the grantor is not the parent's grantee: it is delegating authority it was never given",
+      "leaf-ref": "dd52be18d795f23503b012c3e6873ea266e0dfa1843ddadd7cd579d28a4a2f88",
+      "subject-key": "ed25519:55da656c349f5c6730e703d972522db869faa07ed653ebf33ea9fc87a9c0c6ef",
+      "request": {
+        "component": "gateway",
+        "action": "github.create_issue",
+        "classification": "consequential",
+        "resource": "repo:acme/backend"
+      },
+      "at": "2026-07-26T09:15:00.000Z",
+      "max-delegation-depth": 3,
+      "revocations": [],
+      "expected": {
+        "valid": false,
+        "error": "mandate-delegation-not-held"
+      }
+    },
+    {
+      "name": "window-outside-parent",
+      "description": "a delegated mandate outliving its parent",
+      "leaf-ref": "a811d27569283190075ab36d0ea7e402bf0f7b4a2a8756ab3c19b238157cf0c4",
+      "subject-key": "ed25519:0bab4865a246a78aae98ececc8399f7483eb86ccbb19d24536602f95069fc8a6",
+      "request": {
+        "component": "gateway",
+        "action": "github.create_issue",
+        "classification": "consequential",
+        "resource": "repo:acme/backend"
+      },
+      "at": "2026-07-26T09:15:00.000Z",
+      "max-delegation-depth": 3,
+      "revocations": [],
+      "expected": {
+        "valid": false,
+        "error": "mandate-window-outside-parent"
+      }
+    },
+    {
+      "name": "delegated-without-parent",
+      "description": "a delegated mandate with no parent has nothing to walk to",
+      "leaf-ref": "09a816c1486d76e613e77ccc7f4eaeac0edbdca2dfe25b83fc864410aa36ec7d",
+      "subject-key": "ed25519:0bab4865a246a78aae98ececc8399f7483eb86ccbb19d24536602f95069fc8a6",
+      "request": {
+        "component": "gateway",
+        "action": "github.create_issue",
+        "classification": "consequential",
+        "resource": "repo:acme/backend"
+      },
+      "at": "2026-07-26T09:15:00.000Z",
+      "max-delegation-depth": 3,
+      "revocations": [],
+      "expected": {
+        "valid": false,
+        "error": "mandate-delegated-without-parent"
+      }
+    },
+    {
+      "name": "scope-not-permitted",
+      "description": "the mandate is valid but does not cover this action",
+      "leaf-ref": "943657cf9835279962b556bf4b369b4fa03a5feeb65bf8d83d6be35332c13004",
+      "subject-key": "ed25519:4a0beffbc56f699c7fc1eb522d5298e2e4210d054a0a33dbeea70751f61e2bfc",
+      "request": {
+        "component": "gateway",
+        "action": "slack.post_message",
+        "classification": "consequential",
+        "resource": "repo:acme/backend"
+      },
+      "at": "2026-07-26T09:15:00.000Z",
+      "max-delegation-depth": 3,
+      "revocations": [],
+      "expected": {
+        "valid": false,
+        "error": "mandate-scope-not-permitted"
+      }
+    },
+    {
+      "name": "resource-not-permitted",
+      "description": "right action, wrong resource",
+      "leaf-ref": "943657cf9835279962b556bf4b369b4fa03a5feeb65bf8d83d6be35332c13004",
+      "subject-key": "ed25519:4a0beffbc56f699c7fc1eb522d5298e2e4210d054a0a33dbeea70751f61e2bfc",
+      "request": {
+        "component": "gateway",
+        "action": "github.create_issue",
+        "classification": "consequential",
+        "resource": "repo:acme/secrets"
+      },
+      "at": "2026-07-26T09:15:00.000Z",
+      "max-delegation-depth": 3,
+      "revocations": [],
+      "expected": {
+        "valid": false,
+        "error": "mandate-scope-not-permitted"
+      }
+    },
+    {
+      "name": "grantee-key-mismatch",
+      "description": "a mandate is not transferable: only the grantee may sign under it",
+      "leaf-ref": "943657cf9835279962b556bf4b369b4fa03a5feeb65bf8d83d6be35332c13004",
+      "subject-key": "ed25519:0bab4865a246a78aae98ececc8399f7483eb86ccbb19d24536602f95069fc8a6",
+      "request": {
+        "component": "gateway",
+        "action": "github.create_issue",
+        "classification": "consequential",
+        "resource": "repo:acme/backend"
+      },
+      "at": "2026-07-26T09:15:00.000Z",
+      "max-delegation-depth": 3,
+      "revocations": [],
+      "expected": {
+        "valid": false,
+        "error": "mandate-grantee-key-mismatch"
+      }
+    },
+    {
+      "name": "revoked-mandate",
+      "description": "revocation is itself a signed envelope-shaped object and takes effect at revoked-at",
+      "leaf-ref": "caa82f3d9731544985d3ee0e8763623e21b1373818d6913681f23a17a8916d86",
+      "subject-key": "ed25519:9d88362815e38caea55513e6eade12df477c22bcf69bdc8659aa1c13d53c3e50",
+      "request": {
+        "component": "gateway",
+        "action": "github.create_issue",
+        "classification": "consequential",
+        "resource": "repo:acme/backend"
+      },
+      "at": "2026-08-01T03:00:00.000Z",
+      "max-delegation-depth": 3,
+      "revocations": [
+        {
+          "v": "stozher/0.1",
+          "kind": "revocation",
+          "revokes": "caa82f3d9731544985d3ee0e8763623e21b1373818d6913681f23a17a8916d86",
+          "revoked-at": "2026-07-26T09:00:00.000Z",
+          "reason": "laptop lost",
+          "sig": {
+            "alg": "ed25519",
+            "key": "ed25519:767e4626d1fccefbac1670e43e1b88f0635f07b3556a6f2c3bb8dac4175bbf5d",
+            "value": "346c0381d7aa4e6d40b61fc94da24fc9a718f66ebf6720cefd1092ab0a244ee115a9d1c3b1d005b52a6c5c721126b5e4429650e8241f790ea0e5d1ccc665ba0f"
+          }
+        }
+      ],
+      "expected": {
+        "valid": false,
+        "error": "mandate-revoked"
+      }
+    },
+    {
+      "name": "revoked-mandate-before-revocation-instant",
+      "description": "an effect emitted before the revocation instant stays valid: the audit records what was permitted at the time",
+      "leaf-ref": "caa82f3d9731544985d3ee0e8763623e21b1373818d6913681f23a17a8916d86",
+      "subject-key": "ed25519:9d88362815e38caea55513e6eade12df477c22bcf69bdc8659aa1c13d53c3e50",
+      "request": {
+        "component": "gateway",
+        "action": "github.create_issue",
+        "classification": "consequential",
+        "resource": "repo:acme/backend"
+      },
+      "at": "2026-07-26T08:30:00.000Z",
+      "max-delegation-depth": 3,
+      "revocations": [
+        {
+          "v": "stozher/0.1",
+          "kind": "revocation",
+          "revokes": "caa82f3d9731544985d3ee0e8763623e21b1373818d6913681f23a17a8916d86",
+          "revoked-at": "2026-07-26T09:00:00.000Z",
+          "reason": "laptop lost",
+          "sig": {
+            "alg": "ed25519",
+            "key": "ed25519:767e4626d1fccefbac1670e43e1b88f0635f07b3556a6f2c3bb8dac4175bbf5d",
+            "value": "346c0381d7aa4e6d40b61fc94da24fc9a718f66ebf6720cefd1092ab0a244ee115a9d1c3b1d005b52a6c5c721126b5e4429650e8241f790ea0e5d1ccc665ba0f"
+          }
+        }
+      ],
+      "expected": {
+        "valid": true,
+        "error": null,
+        "human-root": "human:mila",
+        "root-key": "ed25519:767e4626d1fccefbac1670e43e1b88f0635f07b3556a6f2c3bb8dac4175bbf5d",
+        "depth": 0
+      }
+    },
+    {
+      "name": "revoked-ancestor-invalidates-descendant",
+      "description": "revoking the root invalidates everything delegated beneath it",
+      "leaf-ref": "20b081d07a02837add7e6b7752a8b0372601bc1dc6359d713d52f37ca11bd2cd",
+      "subject-key": "ed25519:0bab4865a246a78aae98ececc8399f7483eb86ccbb19d24536602f95069fc8a6",
+      "request": {
+        "component": "gateway",
+        "action": "github.create_issue",
+        "classification": "consequential",
+        "resource": "repo:acme/backend"
+      },
+      "at": "2026-07-26T09:15:00.000Z",
+      "max-delegation-depth": 3,
+      "revocations": [
+        {
+          "v": "stozher/0.1",
+          "kind": "revocation",
+          "revokes": "943657cf9835279962b556bf4b369b4fa03a5feeb65bf8d83d6be35332c13004",
+          "revoked-at": "2026-07-26T09:00:00.000Z",
+          "reason": "session ended",
+          "sig": {
+            "alg": "ed25519",
+            "key": "ed25519:09b3c43478cc065aeeeba98ee919e6b007ff3ff122f86e0a4a3fbc5898092d3a",
+            "value": "9ef80560f0df9358eda7772a2bab747a2f874a6e9e58e394a5879e6a8372eaef4fac8ab6c3d4af10a361662e9df3b0780a86faeddf1c3ebeb9d24665bbfba10f"
+          }
+        }
+      ],
+      "expected": {
+        "valid": false,
+        "error": "mandate-revoked"
+      }
+    },
+    {
+      "name": "unresolved-mandate",
+      "description": "a reference to a mandate nobody has",
+      "leaf-ref": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "subject-key": "ed25519:4a0beffbc56f699c7fc1eb522d5298e2e4210d054a0a33dbeea70751f61e2bfc",
+      "request": {
+        "component": "gateway",
+        "action": "github.create_issue",
+        "classification": "consequential",
+        "resource": "repo:acme/backend"
+      },
+      "at": "2026-07-26T09:15:00.000Z",
+      "max-delegation-depth": 3,
+      "revocations": [],
+      "expected": {
+        "valid": false,
+        "error": "mandate-unresolved"
+      }
+    }
+  ]
+}

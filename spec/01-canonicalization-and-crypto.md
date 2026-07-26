@@ -52,9 +52,14 @@ are where independent implementations diverge in practice; each has test vectors
 A canonicalizer MUST reject, rather than silently repair:
 
 - duplicate member names in the same object (`jcs-duplicate-key`);
-- unpaired UTF-16 surrogates in string escapes (`jcs-lone-surrogate`);
-- `NaN`, `Infinity`, `-Infinity`, and any non-finite number (`jcs-non-finite-number`);
-- input that is not well-formed JSON per RFC 8259 (`jcs-malformed-json`).
+- unpaired UTF-16 surrogates in string escapes, in values and in member names (`jcs-lone-surrogate`);
+- input that is not well-formed JSON per RFC 8259 (`jcs-malformed-json`). This includes the tokens
+  `NaN`, `Infinity` and `-Infinity` — RFC 8259 defines no such literals — and numeric literals whose
+  value lies outside the binary64 range (`1e400`), which have no canonical form;
+- a non-finite number reaching an API that canonicalizes an already-parsed in-memory value rather
+  than text (`jcs-non-finite-number`). Text input can only produce this condition through the
+  malformed-JSON path above; the distinct code exists because the two entry points fail at different
+  layers and an implementation should not have to lie about which one it was.
 
 ### 3.2 Member ordering
 
