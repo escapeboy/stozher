@@ -60,9 +60,48 @@ pub struct Config {
     pub roots: Vec<ConfiguredRoot>,
     /// Permitted callers.
     pub callers: Vec<ConfiguredCaller>,
+    /// The approver-ping channels (ADR-0002: Slack, SMTP, generic webhook, and nothing else).
+    pub notifications: Vec<ConfiguredChannel>,
+    /// Where this deployment's console answers, for the link inside an approver ping.
+    pub console_base_url: Option<String>,
 }
 
-const MEMBERS: [&str; 10] = [
+/// One configured notification channel. Credentials appear only as the **names** of environment
+/// variables (`*-env`), never as values: a configuration file is copied, diffed and pasted into
+/// tickets, and a webhook URL with a token in it is a secret in all three places.
+#[derive(Debug, Clone)]
+pub enum ConfiguredChannel {
+    /// Slack incoming webhook. The URL is the credential.
+    Slack {
+        /// Environment variable holding the webhook URL.
+        url_env: String,
+    },
+    /// A generic webhook receiving the ping as JSON.
+    Webhook {
+        /// Environment variable holding the URL.
+        url_env: String,
+        /// Environment variable holding a bearer token, if the endpoint wants one.
+        token_env: Option<String>,
+    },
+    /// Email through an SMTP relay.
+    Smtp {
+        /// Relay host.
+        host: String,
+        /// Relay port.
+        port: u16,
+        /// Envelope sender.
+        from: String,
+        /// Recipients. A rotation MAY decide whom to notify; the *signature* is always one
+        /// person's (§06 §5), so a list here says nothing about who may approve.
+        to: Vec<String>,
+        /// SMTP username, when the relay wants one.
+        username: Option<String>,
+        /// Environment variable holding the password.
+        password_env: Option<String>,
+    },
+}
+
+const MEMBERS: [&str; 12] = [
     "bind",
     "database",
     "kernel-seed",
@@ -73,6 +112,27 @@ const MEMBERS: [&str; 10] = [
     "max-future-skew-seconds",
     "roots",
     "callers",
+    "notifications",
+    "console-base-url",
+];
+
+/// Members of a `notifications[]` entry, per channel. Closed, so a misspelled key is a startup
+/// failure rather than a channel that silently never fires.
+const CHANNEL_MEMBERS: [(&str, &[&str]); 3] = [
+    ("slack", &["channel", "webhook-url-env"]),
+    ("webhook", &["channel", "url-env", "token-env"]),
+    (
+        "smtp",
+        &[
+            "channel",
+            "host",
+            "port",
+            "from",
+            "to",
+            "username",
+            "password-env",
+        ],
+    ),
 ];
 
 impl Config {
@@ -182,6 +242,16 @@ impl Config {
             });
         }
 
+        let mut notifications = Vec::new();
+        for entry in map
+            .get("notifications")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+        {
+            notifications.push(parse_channel(entry)?);
+        }
+
         Ok(Self {
             bind: text("bind", "127.0.0.1:8787"),
             database: PathBuf::from(text("database", "var/stozher.db")),
@@ -196,7 +266,51 @@ impl Config {
                 .unwrap_or(300),
             roots,
             callers,
+            notifications,
+            console_base_url: map
+                .get("console-base-url")
+                .and_then(Value::as_str)
+                .map(str::to_owned),
         })
+    }
+
+    /// Build the approver-ping adapter this configuration describes.
+    ///
+    /// Zero channels is a legitimate deployment — a single operator watching the console — and the
+    /// pending page says so in words rather than rendering an empty notification column that reads
+    /// like "delivered".
+    #[must_use]
+    pub fn notifier(&self) -> crate::notify::Notifier {
+        let channels = self
+            .notifications
+            .iter()
+            .map(|configured| -> Box<dyn crate::notify::Channel> {
+                match configured.clone() {
+                    ConfiguredChannel::Slack { url_env } => {
+                        Box::new(crate::notify::SlackWebhook::new(url_env))
+                    }
+                    ConfiguredChannel::Webhook { url_env, token_env } => {
+                        Box::new(crate::notify::Webhook::new(url_env, token_env))
+                    }
+                    ConfiguredChannel::Smtp {
+                        host,
+                        port,
+                        from,
+                        to,
+                        username,
+                        password_env,
+                    } => Box::new(crate::notify::Smtp::new(
+                        host,
+                        port,
+                        from,
+                        to,
+                        username,
+                        password_env,
+                    )),
+                }
+            })
+            .collect();
+        crate::notify::Notifier::new(channels)
     }
 
     /// Resolve a bearer token to its caller subject, in constant time with respect to the token.
@@ -220,6 +334,99 @@ impl Config {
                 "the presented credential does not resolve to a configured caller",
             )
         })
+    }
+}
+
+/// Parse one `notifications[]` entry.
+///
+/// A member ending in `-env` names an environment variable. A member that *looked* like a secret —
+/// `webhook-url`, `password` — is not in any channel's member list, so writing one is a startup
+/// failure with the misspelling named, not a secret quietly living in a file.
+fn parse_channel(entry: &Value) -> Result<ConfiguredChannel> {
+    let map = entry.as_object().ok_or_else(|| {
+        Error::new(
+            "config-malformed",
+            "notifications[] entries must be objects",
+        )
+    })?;
+    let channel = map
+        .get("channel")
+        .and_then(Value::as_str)
+        .ok_or_else(|| Error::new("config-malformed", "notifications[].channel is required"))?;
+    let allowed = CHANNEL_MEMBERS
+        .iter()
+        .find(|(name, _)| *name == channel)
+        .map(|(_, members)| *members)
+        .ok_or_else(|| {
+            // ADR-0002 fixes the set at three. A fourth is a product decision that has to argue
+            // with the inclusion test, not a configuration key someone fills in.
+            Error::new(
+                "config-malformed",
+                format!(
+                    "notifications[].channel {channel:?} is not one of slack, smtp, webhook — \
+                     Stozher owns exactly one outbound and exactly these three channels"
+                ),
+            )
+        })?;
+    for key in map.keys() {
+        if !allowed.contains(&key.as_str()) {
+            return Err(Error::new(
+                "config-malformed",
+                format!("notifications[] {channel} channel has no member {key:?}"),
+            ));
+        }
+    }
+    let required = |name: &str| -> Result<String> {
+        map.get(name)
+            .and_then(Value::as_str)
+            .filter(|value| !value.is_empty())
+            .map(str::to_owned)
+            .ok_or_else(|| {
+                Error::new(
+                    "config-malformed",
+                    format!("notifications[] {channel} channel requires {name}"),
+                )
+            })
+    };
+    let optional = |name: &str| map.get(name).and_then(Value::as_str).map(str::to_owned);
+
+    match channel {
+        "slack" => Ok(ConfiguredChannel::Slack {
+            url_env: required("webhook-url-env")?,
+        }),
+        "webhook" => Ok(ConfiguredChannel::Webhook {
+            url_env: required("url-env")?,
+            token_env: optional("token-env"),
+        }),
+        _ => {
+            let to: Vec<String> = map
+                .get("to")
+                .and_then(Value::as_array)
+                .map(|list| {
+                    list.iter()
+                        .filter_map(Value::as_str)
+                        .map(str::to_owned)
+                        .collect()
+                })
+                .unwrap_or_default();
+            if to.is_empty() {
+                return Err(Error::new(
+                    "config-malformed",
+                    "notifications[] smtp channel requires at least one recipient in to",
+                ));
+            }
+            let port = map.get("port").and_then(Value::as_u64).unwrap_or(25);
+            Ok(ConfiguredChannel::Smtp {
+                host: required("host")?,
+                port: u16::try_from(port).map_err(|_| {
+                    Error::new("config-malformed", format!("notifications[] port {port}"))
+                })?,
+                from: required("from")?,
+                to,
+                username: optional("username"),
+                password_env: optional("password-env"),
+            })
+        }
     }
 }
 
@@ -286,6 +493,41 @@ mod tests {
             Config::parse(&document).unwrap_err().code(),
             "config-malformed"
         );
+    }
+
+    #[test]
+    fn a_notification_channel_names_the_variable_holding_its_secret_not_the_secret() {
+        let mut document = document();
+        document["notifications"] = serde_json::json!([
+            { "channel": "slack", "webhook-url-env": "STOZHER_SLACK_WEBHOOK" },
+            { "channel": "webhook", "url-env": "STOZHER_WEBHOOK_URL", "token-env": "STOZHER_WEBHOOK_TOKEN" },
+            { "channel": "smtp", "host": "127.0.0.1", "port": 25, "from": "stozher@acme.internal",
+              "to": ["ivan@acme.internal"] }
+        ]);
+        let config = Config::parse(&document).unwrap();
+        assert_eq!(config.notifications.len(), 3);
+        assert_eq!(config.notifier().channel_count(), 3);
+
+        // The literal spelling is not a member of any channel, so a secret in the file is a
+        // startup failure rather than a secret in the file.
+        document["notifications"] = serde_json::json!([
+            { "channel": "slack", "webhook-url": "https://hooks.slack.com/services/T/B/xoxb-secret" }
+        ]);
+        assert_eq!(
+            Config::parse(&document).unwrap_err().code(),
+            "config-malformed"
+        );
+    }
+
+    #[test]
+    fn a_fourth_notification_channel_is_refused() {
+        // ADR-0002 fixes the set at three: "the only outbound Stozher owns … 2-3 channels max".
+        let mut document = document();
+        document["notifications"] =
+            serde_json::json!([ { "channel": "sms", "url-env": "STOZHER_SMS" } ]);
+        let error = Config::parse(&document).unwrap_err();
+        assert_eq!(error.code(), "config-malformed");
+        assert!(error.detail().contains("slack, smtp, webhook"));
     }
 
     #[test]

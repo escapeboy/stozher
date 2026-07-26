@@ -46,10 +46,12 @@ pub mod clock;
 pub mod codes;
 pub mod config;
 pub mod console;
+pub mod gatequeue;
 pub mod http;
 pub mod ingest;
 pub mod keys;
 pub mod manifest;
+pub mod notify;
 pub mod policy;
 pub mod store;
 
@@ -64,6 +66,11 @@ pub struct Kernel {
     pub config: Config,
     /// The ingest pipeline, which owns the store.
     pub ingest: Ingest,
+    /// The approver ping — the only outbound this product owns (ADR-0002).
+    pub notifier: notify::Notifier,
+    /// Per-process entropy behind the console's CSRF tokens. Regenerated on every start, so a
+    /// token cannot outlive the process that issued it, and never leaves the process itself.
+    console_nonce: [u8; 32],
 }
 
 impl Kernel {
@@ -77,7 +84,11 @@ impl Kernel {
         let seed = keys::Seed::load(&config.kernel_seed)?;
         let kernel_key = seed.derive(keys::ROLE_KERNEL_CHECKPOINT, 0)?;
         let store = Store::open(&config.database, &config.rejection_stream).await?;
-        Self::assemble(config, store, kernel_key, Arc::new(clock::SystemClock)).await
+        let notifier = config.notifier();
+        let mut kernel =
+            Self::assemble(config, store, kernel_key, Arc::new(clock::SystemClock)).await?;
+        kernel.notifier = notifier;
+        Ok(kernel)
     }
 
     /// Assemble a kernel around an already-open store and key — the seam tests use.
@@ -106,6 +117,47 @@ impl Kernel {
                 kernel_core_stream: config.kernel_core_stream.clone(),
             },
         );
-        Ok(Self { config, ingest })
+        let mut console_nonce = [0u8; 32];
+        getrandom::fill(&mut console_nonce).map_err(|e| {
+            stozher_core::error::Error::new("kernel-entropy-unavailable", e.to_string())
+        })?;
+        Ok(Self {
+            config,
+            ingest,
+            notifier: notify::Notifier::default(),
+            console_nonce,
+        })
+    }
+
+    /// The CSRF token for one caller and one pending request.
+    ///
+    /// The console authenticates with a `Bearer` credential, which a browser cannot attach
+    /// cross-site — but ADR-0008 records that reaching the console from a browser today needs a
+    /// header-injecting reverse proxy, and an injected header *is* an ambient credential. This binds
+    /// the mutating form to (this process, this caller, this request), so a page a caller never
+    /// fetched cannot produce a token that a decision route accepts.
+    #[must_use]
+    pub fn csrf_token(&self, caller: &str, request_hash: &str) -> String {
+        let mut material = Vec::with_capacity(64 + caller.len() + request_hash.len());
+        material.extend_from_slice(&self.console_nonce);
+        material.extend_from_slice(caller.as_bytes());
+        material.push(0);
+        material.extend_from_slice(request_hash.as_bytes());
+        stozher_core::crypto::sha256_hex(&material)
+    }
+
+    /// Whether a presented CSRF token is the one this process would have issued.
+    #[must_use]
+    pub fn csrf_ok(&self, caller: &str, request_hash: &str, presented: &str) -> bool {
+        let expected = self.csrf_token(caller, request_hash);
+        let (a, b) = (expected.as_bytes(), presented.as_bytes());
+        if a.len() != b.len() {
+            return false;
+        }
+        let mut difference = 0u8;
+        for (x, y) in a.iter().zip(b) {
+            difference |= x ^ y;
+        }
+        difference == 0
     }
 }

@@ -317,7 +317,7 @@ async fn the_export_is_the_signed_bytes_not_a_rendering_of_them() {
 }
 
 #[tokio::test]
-async fn the_pending_page_states_what_it_cannot_see() {
+async fn the_pending_page_shows_blocked_effects_and_names_them_as_terminated() {
     let world = world().await;
     let blocked = world
         .effect(
@@ -331,12 +331,15 @@ async fn the_pending_page_states_what_it_cannot_see() {
     let page = get(&world, "/console/pending").await;
     assert_eq!(page.status, StatusCode::OK);
     assert!(page.body.contains("github.create_issue"), "{}", page.body);
-    // Display only: nothing on the page can be submitted, and the page says why rather than
-    // implying the queue is complete.
-    assert!(!page.body.to_lowercase().contains("<form"), "{}", page.body);
+    // S3's version of this test asserted the page carried no form, because there was nothing a
+    // human could sign. S4 makes the queue kernel-native, so the assertion that matters now is the
+    // opposite one and lives in `gate_queue_and_console_decisions.rs`. What is still true here is
+    // that a `blocked` *effect envelope* is not a queue entry — it already terminated — and the
+    // page must not present it as something that can still be answered.
     assert!(
-        page.body.contains("ADR-0007"),
-        "the S4 boundary is named on the page"
+        page.body.contains("Did not reach the world"),
+        "a blocked effect must not be presented as answerable: {}",
+        page.body
     );
 }
 

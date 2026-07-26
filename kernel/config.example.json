@@ -26,5 +26,25 @@
       "subject": "agent:gateway",
       "token-sha256": "2222222222222222222222222222222222222222222222222222222222222222"
     }
+  ],
+
+  "console-base-url": "https://stozher.acme.internal",
+
+  "_comment-notifications": "REMOVE THIS MEMBER TOO. The approver ping is the only outbound Stozher owns (ADR-0002) and there are exactly three channels; a fourth is refused at startup, as is a misspelled member inside one. Every credential is named by the environment variable that holds it and is never written here. Zero channels is a legitimate deployment — one operator watching the console — and the pending page says so in words rather than rendering an empty column that reads like 'delivered'. The smtp channel speaks plain SMTP to a relay: with no credential that is the strongest form of 'no plaintext secrets', because there is no secret. If username and password-env are set, it sends AUTH PLAIN only to a loopback relay and refuses otherwise rather than putting a password on the wire in the clear.",
+
+  "notifications": [
+    { "channel": "slack", "webhook-url-env": "STOZHER_SLACK_WEBHOOK" },
+    {
+      "channel": "webhook",
+      "url-env": "STOZHER_WEBHOOK_URL",
+      "token-env": "STOZHER_WEBHOOK_TOKEN"
+    },
+    {
+      "channel": "smtp",
+      "host": "127.0.0.1",
+      "port": 25,
+      "from": "stozher@acme.internal",
+      "to": ["ivan@acme.internal"]
+    }
   ]
 }

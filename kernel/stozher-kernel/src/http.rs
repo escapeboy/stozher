@@ -14,8 +14,13 @@
 //! where it is refused unless it is signed by the kernel's checkpoint key and reproduces the stream's
 //! real head. The second deletes payload rows and nothing else. Neither can append an effect.
 //!
-//! The console ([`crate::console`]) is merged into this table and registers `get` routes only, so
-//! serving a UI from the same binary adds no write path.
+//! `POST /v1/gate/requests` (§06 §4.3, ADR-0008 §A) writes a *question* — a parked action request —
+//! to a table with no chain-bearing column. It appends nothing, and a row it writes permits nothing:
+//! the answer is a human's signature, which enters through `POST /v1/ingest` like everything else.
+//!
+//! The console ([`crate::console`]) is merged into this table. It registers `get` routes for every
+//! page and exactly one `post` — the decision route — which likewise appends only by submitting a
+//! signed envelope through `POST /v1/ingest`'s own pipeline.
 
 use std::sync::Arc;
 
@@ -38,6 +43,11 @@ pub fn router(kernel: Arc<Kernel>) -> Router {
         .route("/v1/policy/current", get(get_policy_current))
         .route("/v1/policy/{policy_version}", get(get_policy_version))
         .route("/v1/revocations", get(get_revocations))
+        .route(
+            "/v1/gate/requests",
+            post(post_gate_request).get(get_gate_requests),
+        )
+        .route("/v1/gate/requests/{request_hash}", get(get_gate_request))
         .route("/v1/envelopes", get(get_envelopes))
         .route("/v1/envelopes/{id}", get(get_envelope))
         .route("/v1/envelopes/{id}/mandate", get(get_envelope_mandate))
@@ -253,6 +263,183 @@ async fn get_revocations(State(kernel): State<Arc<Kernel>>, headers: HeaderMap) 
             .insert(axum::http::header::ETAG, value);
     }
     response
+}
+
+/// Submit a parked request to the kernel-native pending queue — `spec/06 §4.3`, ADR-0008 §A.
+///
+/// # This is a write route that cannot append an effect
+///
+/// `spec/06 §1.1` already said the action request "is submitted over an authenticated channel
+/// (§10 §1)"; it never named the channel, which is the whole of ADR-0008 §A. This is that channel.
+/// It writes one row to `gate_requests`, a table with no chain-bearing column that
+/// [`crate::store::Store::append`] never touches, and it appends nothing: the route table's
+/// invariant — exactly one route can cause an envelope to be appended — is unchanged.
+///
+/// A row here **grants nothing**. It is a question. The answer is a human's signature, which enters
+/// through `POST /v1/ingest` like everything else, and the effect that eventually consumes it is
+/// still checked by all eleven steps of §06 §2.
+async fn post_gate_request(
+    State(kernel): State<Arc<Kernel>>,
+    headers: HeaderMap,
+    body: axum::body::Bytes,
+) -> Response {
+    let submitted_by = match caller(&kernel, &headers) {
+        Caller::Subject(subject) => subject,
+        Caller::Refused(response) => return response,
+    };
+    let now = kernel.ingest.clock().now();
+    let request = match std::str::from_utf8(&body)
+        .map_err(|e| {
+            stozher_core::error::Error::new("jcs-malformed-json", format!("body is not UTF-8: {e}"))
+        })
+        .and_then(stozher_core::jcs::parse)
+    {
+        Ok(request) => request,
+        Err(e) => {
+            return refusal(StatusCode::UNPROCESSABLE_ENTITY, e.code(), e.detail(), None);
+        }
+    };
+    let queued = match crate::gatequeue::validate(&request, &now) {
+        Ok(queued) => queued,
+        Err(e) => {
+            return refusal(StatusCode::UNPROCESSABLE_ENTITY, e.code(), e.detail(), None);
+        }
+    };
+    let fresh = match kernel
+        .ingest
+        .store()
+        .queue_gate_request(&queued, &submitted_by, &now)
+        .await
+    {
+        Ok(fresh) => fresh,
+        Err(e) => return unavailable(&e),
+    };
+
+    // The park is durable before any channel is touched, so a notification adapter that is down
+    // costs an approver a ping and never costs the queue a request (§06 §4.3). Delivery runs off
+    // the response path because a slow webhook must not hold the component that parked — which for
+    // the gateway is a sync MCP handler (`docs/gateway-integration-constraints.md` §2).
+    if fresh {
+        let ping = crate::notify::Ping {
+            request_hash: queued.request_hash.clone(),
+            subject: queued.subject.clone(),
+            component: queued.component.clone(),
+            action: queued.action.clone(),
+            target: queued.target.clone(),
+            classification: queued.classification.clone(),
+            not_after: queued.not_after.clone(),
+            console_url: kernel.config.console_base_url.clone(),
+        };
+        let kernel = Arc::clone(&kernel);
+        let notifying = Arc::clone(&kernel);
+        let request_hash = queued.request_hash.clone();
+        tokio::spawn(async move {
+            let attempts =
+                match tokio::task::spawn_blocking(move || notifying.notifier.notify(&ping)).await {
+                    Ok(attempts) => attempts,
+                    Err(e) => {
+                        tracing::error!(error = %e, "the notification worker panicked");
+                        return;
+                    }
+                };
+            let at = kernel.ingest.clock().now();
+            if let Err(e) = kernel
+                .ingest
+                .store()
+                .record_notifications(&request_hash, &attempts, &at)
+                .await
+            {
+                tracing::error!(error = %e, "a notification outcome could not be recorded");
+            }
+        });
+    }
+
+    json(
+        if fresh {
+            StatusCode::CREATED
+        } else {
+            StatusCode::OK
+        },
+        &serde_json::json!({
+            "stozher": stozher_core::VERSION,
+            "result": "queued",
+            "request-hash": queued.request_hash,
+            "not-after": queued.not_after,
+            "idempotent": !fresh,
+            "channels": kernel.notifier.channel_count()
+        }),
+    )
+}
+
+/// The queue, for the console and for an operator's own tooling.
+async fn get_gate_requests(
+    State(kernel): State<Arc<Kernel>>,
+    headers: HeaderMap,
+    Query(params): Query<std::collections::HashMap<String, String>>,
+) -> Response {
+    if let Caller::Refused(response) = caller(&kernel, &headers) {
+        return response;
+    }
+    let answered = params.get("answered").map(String::as_str) == Some("true");
+    let limit = params
+        .get("limit")
+        .and_then(|l| l.parse::<i64>().ok())
+        .unwrap_or(200);
+    let now = kernel.ingest.clock().now();
+    match kernel
+        .ingest
+        .store()
+        .gate_queue(answered, &now, limit)
+        .await
+    {
+        Ok(rows) => json(
+            StatusCode::OK,
+            &serde_json::json!({ "count": rows.len(), "requests": rows }),
+        ),
+        Err(e) => unavailable(&e),
+    }
+}
+
+/// One request and, when a human has answered it, the signed decision.
+///
+/// The decision is returned **verbatim**. A component polling this must run §06 §2 over it itself
+/// before acting: a kernel that handed back a verdict a component trusted on sight would be the
+/// ambient approval §06 §2 exists to make unrepresentable, moved one process to the left.
+async fn get_gate_request(
+    State(kernel): State<Arc<Kernel>>,
+    headers: HeaderMap,
+    Path(request_hash): Path<String>,
+) -> Response {
+    if let Caller::Refused(response) = caller(&kernel, &headers) {
+        return response;
+    }
+    let store = kernel.ingest.store();
+    let (request, submitted_by) = match store.gate_request(&request_hash).await {
+        Ok(Some(found)) => found,
+        Ok(None) => {
+            return refusal(
+                StatusCode::NOT_FOUND,
+                "not-found",
+                "no such parked request",
+                None,
+            );
+        }
+        Err(e) => return unavailable(&e),
+    };
+    let decision = match store.gate_decision(&request_hash).await {
+        Ok(decision) => decision,
+        Err(e) => return unavailable(&e),
+    };
+    json(
+        StatusCode::OK,
+        &serde_json::json!({
+            "stozher": stozher_core::VERSION,
+            "request-hash": request_hash,
+            "request": request,
+            "submitted-by": submitted_by,
+            "decision": decision
+        }),
+    )
 }
 
 async fn get_envelopes(

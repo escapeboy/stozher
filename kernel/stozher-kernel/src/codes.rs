@@ -49,6 +49,11 @@ pub const MANIFEST_MALFORMED: &str = "x-manifest-malformed";
 /// whose evidence does not identify a well-formed key to enrol or retire.
 pub const ROOT_ENROLLMENT_MALFORMED: &str = "x-root-enrollment-malformed";
 
+/// §06 §5 — "Approval decisions MUST themselves be recorded as envelopes … so the approval history
+/// is chained". It does not name the refusal for a *second* decision over a request a named human
+/// has already answered, which must not be representable: one request, one answer.
+pub const GATE_DECISION_ALREADY_RECORDED: &str = "x-gate-decision-already-recorded";
+
 /// An infrastructure failure — the database is unreachable or corrupt.
 ///
 /// **Not a rejection.** A rejection means "this object is invalid"; this means "the kernel could not
@@ -64,7 +69,7 @@ pub const CALLER_UNAUTHENTICATED: &str = "x-caller-unauthenticated";
 
 /// The complete register. A test asserts on this so the list cannot grow without the growth being
 /// a visible, reviewed diff.
-pub const REGISTER: [&str; 8] = [
+pub const REGISTER: [&str; 10] = [
     POLICY_OFFLINE_ALLOWS_GATED,
     POLICY_CHANGE_TARGET_MISMATCH,
     POLICY_CHANGE_DOCUMENT_UNBOUND,
@@ -73,6 +78,8 @@ pub const REGISTER: [&str; 8] = [
     CHECKPOINT_STREAM_UNKNOWN,
     MANIFEST_MALFORMED,
     ROOT_ENROLLMENT_MALFORMED,
+    GATE_DECISION_ALREADY_RECORDED,
+    crate::notify::NOTIFY_FAILED,
 ];
 
 #[cfg(test)]

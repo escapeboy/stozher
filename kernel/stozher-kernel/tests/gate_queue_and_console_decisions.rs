@@ -1,0 +1,891 @@
+//! S4: the kernel-native pending queue, the console's one mutating route, and the approver ping.
+//!
+//! # What these tests are for
+//!
+//! ADR-0008 §A left one S3 bullet unmet for a structural reason: `spec/06 §4.3` obliges the kernel
+//! to record a parked request, but no envelope kind could carry one to it. These tests assert the
+//! resolution — a request-submission route, per `spec/06 §1.1`'s own "submitted over an
+//! authenticated channel" — and then attack it.
+//!
+//! # The adversarial half is the point
+//!
+//! ADR-0002 records a shipped product that bypassed its own gate through an ambient container
+//! binding. The positive tests below show the mechanism working; the negative ones show that the
+//! *new surface S4 adds* — a write route and a console form — did not become a second way to
+//! satisfy `requires-gate`. A rewritten request, a stranger's signature, a self-approval, a replay
+//! and an approval borrowed from another action must each permit nothing, and each is attempted
+//! here rather than argued about.
+
+use std::sync::{Arc, Mutex};
+
+use axum::body::Body;
+use axum::http::{Request, StatusCode};
+use http_body_util::BodyExt;
+use serde_json::{Value, json};
+use stozher_core::jcs;
+use stozher_kernel::notify::{Channel, Ping};
+use stozher_kernel::store::EnvelopeQuery;
+use stozher_kernel::{http, notify};
+use stozher_testkit::{
+    Ask, CORE_STREAM, EFFECT_STREAM, TOKEN, TestKey, World, revise, world, world_with_channels,
+};
+use tower::ServiceExt;
+
+// -- a channel that records instead of sending ---------------------------------------------------
+
+/// A real [`Channel`] whose wire is a vector. The adapter under test is the shipped one; only the
+/// transport is a double, because a gate that needed a Slack workspace to run is a gate nobody runs.
+#[derive(Debug, Default)]
+struct Capturing {
+    pings: Mutex<Vec<Ping>>,
+    fail: bool,
+}
+
+impl Capturing {
+    fn shared() -> Arc<Self> {
+        Arc::new(Self::default())
+    }
+
+    fn failing() -> Arc<Self> {
+        Arc::new(Self {
+            pings: Mutex::default(),
+            fail: true,
+        })
+    }
+
+    fn seen(&self) -> Vec<Ping> {
+        self.pings.lock().expect("the capture lock").clone()
+    }
+}
+
+/// So the test can hold one handle and the notifier another.
+#[derive(Debug)]
+struct Shared(Arc<Capturing>);
+
+impl Channel for Shared {
+    fn name(&self) -> &str {
+        "capturing"
+    }
+
+    fn deliver(&self, ping: &Ping) -> stozher_core::error::Result<()> {
+        self.0
+            .pings
+            .lock()
+            .expect("the capture lock")
+            .push(ping.clone());
+        if self.0.fail {
+            return Err(stozher_core::error::Error::new(
+                notify::NOTIFY_FAILED,
+                "the test channel is down",
+            ));
+        }
+        Ok(())
+    }
+}
+
+// -- plumbing ------------------------------------------------------------------------------------
+
+struct Answer {
+    status: StatusCode,
+    body: String,
+}
+
+impl Answer {
+    fn json(&self) -> Value {
+        serde_json::from_str(&self.body).unwrap_or(Value::Null)
+    }
+}
+
+async fn call(
+    world: &World,
+    method: &str,
+    uri: &str,
+    body: Option<String>,
+    headers: &[(&str, String)],
+) -> Answer {
+    let mut builder = Request::builder().method(method).uri(uri);
+    for (name, value) in headers {
+        builder = builder.header(*name, value.clone());
+    }
+    let request = builder
+        .body(body.map_or_else(Body::empty, Body::from))
+        .expect("a request");
+    let response = http::router(Arc::clone(&world.kernel))
+        .oneshot(request)
+        .await
+        .expect("the router responds");
+    let status = response.status();
+    let bytes = response
+        .into_body()
+        .collect()
+        .await
+        .expect("collecting the body")
+        .to_bytes();
+    Answer {
+        status,
+        body: String::from_utf8_lossy(&bytes).into_owned(),
+    }
+}
+
+fn bearer() -> Vec<(&'static str, String)> {
+    vec![("authorization", format!("Bearer {TOKEN}"))]
+}
+
+async fn get(world: &World, uri: &str) -> Answer {
+    call(world, "GET", uri, None, &bearer()).await
+}
+
+async fn post_json(world: &World, uri: &str, body: &Value) -> Answer {
+    let mut headers = bearer();
+    headers.push(("content-type", "application/json".to_owned()));
+    call(
+        world,
+        "POST",
+        uri,
+        Some(jcs::canonicalize(body).expect("canonicalizing")),
+        &headers,
+    )
+    .await
+}
+
+/// A `consequential` `github.create_issue` draft, and the action request that describes it exactly.
+///
+/// Both come from the same draft so the two objects agree field for field — which is what step (10)
+/// of §06 §2 checks, and what every "approval for A cannot authorize B" test below breaks on
+/// purpose.
+async fn draft_and_request(world: &World, action: &str) -> (Value, Value) {
+    let draft = world.effect(action, "consequential", json!({})).await;
+    let args_hash = draft["execution"]["args-hash"]
+        .as_str()
+        .expect("args-hash")
+        .to_owned();
+    let target = draft["execution"]["target"]
+        .as_str()
+        .expect("target")
+        .to_owned();
+    let request = world.action_request(&Ask {
+        requester: &world.agent,
+        component: "gateway",
+        mandate_ref: &world.standing_mandate,
+        policy_version: &world.policy_version,
+        classification: "consequential",
+        action,
+        target: &target,
+        args_hash: &args_hash,
+    });
+    (draft, request)
+}
+
+/// Park a request through the kernel-native route and return its hash.
+async fn park(world: &World, request: &Value) -> String {
+    let answer = post_json(world, "/v1/gate/requests", request).await;
+    assert_eq!(answer.status, StatusCode::CREATED, "{}", answer.body);
+    answer.json()["request-hash"]
+        .as_str()
+        .expect("a request hash")
+        .to_owned()
+}
+
+/// Answer a parked request through the console, exactly as a human would: a signed decision object
+/// plus the CSRF token the page issued to this caller.
+async fn decide_in_console(world: &World, request_hash: &str, decision: &Value) -> Answer {
+    let body = json!({
+        "csrf": world.kernel.csrf_token("agent:test-harness", request_hash),
+        "decision": decision
+    });
+    post_json(
+        world,
+        &format!("/console/pending/{request_hash}/decide"),
+        &body,
+    )
+    .await
+}
+
+/// Wait for the notification worker, which runs off the response path on purpose.
+async fn settle() {
+    for _ in 0..200 {
+        tokio::task::yield_now().await;
+        tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+    }
+}
+
+// -- 1. the park is visible, which is the ADR-0008 §A bullet -------------------------------------
+
+#[tokio::test]
+async fn a_parked_request_is_visible_in_the_console_pending_queue() {
+    let world = world().await;
+    let (_, request) = draft_and_request(&world, "github.create_issue").await;
+    let request_hash = park(&world, &request).await;
+
+    // Asserted against the bytes the kernel rendered, not the return value of a function.
+    let page = get(&world, "/console/pending").await;
+    assert_eq!(page.status, StatusCode::OK);
+    assert!(
+        page.body.contains(&request_hash),
+        "the park is not on the page: {}",
+        page.body
+    );
+    assert!(page.body.contains("github.create_issue"), "{}", page.body);
+    assert!(page.body.contains("agent:gateway/dev"), "{}", page.body);
+    // The approver must be able to read the exact object their signature would cover.
+    assert!(
+        page.body.contains("action-request"),
+        "the request object itself is not shown: {}",
+        page.body
+    );
+    // And a control to answer it — the capability S3 deliberately did not have.
+    assert!(
+        page.body.contains(&format!(
+            "action=\"/console/pending/{request_hash}/decide\""
+        )),
+        "{}",
+        page.body
+    );
+}
+
+#[tokio::test]
+async fn parking_a_request_appends_nothing_to_any_chain() {
+    let world = world().await;
+    let before = world
+        .ingest()
+        .store()
+        .envelope_count()
+        .await
+        .expect("counting");
+    let (_, request) = draft_and_request(&world, "github.create_issue").await;
+    park(&world, &request).await;
+    let after = world
+        .ingest()
+        .store()
+        .envelope_count()
+        .await
+        .expect("counting");
+    // A question is not an effect. `Store::append` is crate-private and this route never reaches it.
+    assert_eq!(before, after, "submitting a request appended an envelope");
+}
+
+#[tokio::test]
+async fn a_request_that_has_already_expired_never_enters_the_queue() {
+    let world = world().await;
+    let (_, request) = draft_and_request(&world, "github.create_issue").await;
+    let expired = {
+        let mut request = request;
+        request["not-after"] = Value::from("2026-07-26T08:00:00.000Z");
+        request
+    };
+    let answer = post_json(&world, "/v1/gate/requests", &expired).await;
+    assert_eq!(answer.status, StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(
+        answer.json()["reason-code"].as_str(),
+        Some("gate-request-expired")
+    );
+}
+
+#[tokio::test]
+async fn a_request_carrying_a_member_the_approver_was_never_shown_is_refused() {
+    let world = world().await;
+    let (_, request) = draft_and_request(&world, "github.create_issue").await;
+    let mut smuggled = request;
+    smuggled["approved"] = Value::Bool(true);
+    let answer = post_json(&world, "/v1/gate/requests", &smuggled).await;
+    assert_eq!(answer.status, StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(
+        answer.json()["reason-code"].as_str(),
+        Some("schema-unknown-member")
+    );
+}
+
+#[tokio::test]
+async fn the_queue_is_not_readable_without_a_credential() {
+    let world = world().await;
+    for (method, uri) in [
+        ("GET", "/v1/gate/requests"),
+        ("POST", "/v1/gate/requests"),
+        ("GET", "/console/pending"),
+    ] {
+        let answer = call(&world, method, uri, Some("{}".to_owned()), &[]).await;
+        assert_eq!(answer.status, StatusCode::UNAUTHORIZED, "{method} {uri}");
+    }
+}
+
+// -- 2. the ping fires, and a failure to notify is a record --------------------------------------
+
+#[tokio::test]
+async fn the_approver_ping_fires_and_its_delivery_is_recorded() {
+    let capture = Capturing::shared();
+    let world = world_with_channels(vec![Box::new(Shared(Arc::clone(&capture)))]).await;
+    let (_, request) = draft_and_request(&world, "github.create_issue").await;
+    let request_hash = park(&world, &request).await;
+    settle().await;
+
+    let pings = capture.seen();
+    assert_eq!(pings.len(), 1, "the approver was not pinged");
+    assert_eq!(pings[0].request_hash, request_hash);
+    assert_eq!(pings[0].action, "github.create_issue");
+    // §10 §6: a ping carries no arguments, no other pending requests, no policy, no key material.
+    let rendered = format!("{}{}", pings[0].body(), pings[0].to_json());
+    assert!(!rendered.contains("ed25519:"), "{rendered}");
+
+    let page = get(&world, "/console/pending").await;
+    assert!(
+        page.body.contains("delivered on 1 channel(s)"),
+        "{}",
+        page.body
+    );
+}
+
+#[tokio::test]
+async fn a_failed_ping_is_recorded_and_the_park_still_stands() {
+    let capture = Capturing::failing();
+    let world = world_with_channels(vec![Box::new(Shared(Arc::clone(&capture)))]).await;
+    let (_, request) = draft_and_request(&world, "github.create_issue").await;
+    let request_hash = park(&world, &request).await;
+    settle().await;
+
+    assert_eq!(capture.seen().len(), 1, "the channel was not tried");
+    // The park is what must survive a channel outage. An approver ping that failed silently, with
+    // the request dropped, is the failure mode this assertion exists for.
+    let queued = get(&world, "/v1/gate/requests").await;
+    assert_eq!(queued.json()["count"].as_u64(), Some(1));
+    assert_eq!(
+        queued.json()["requests"][0]["request-hash"].as_str(),
+        Some(request_hash.as_str())
+    );
+
+    let page = get(&world, "/console/pending").await;
+    assert!(page.body.contains("not delivered"), "{}", page.body);
+    assert!(
+        page.body.contains("the test channel is down"),
+        "the failure reason is not shown: {}",
+        page.body
+    );
+}
+
+#[tokio::test]
+async fn a_deployment_with_no_channel_says_so_rather_than_rendering_silence() {
+    let world = world().await;
+    let (_, request) = draft_and_request(&world, "github.create_issue").await;
+    park(&world, &request).await;
+
+    let page = get(&world, "/console/pending").await;
+    // The `[unknown]` vs `[clean]` distinction: "nobody was told" must never look like "told".
+    assert!(
+        page.body.contains("No notification channel is configured"),
+        "{}",
+        page.body
+    );
+}
+
+// -- 3. approving produces a real signed decision that survives all nine steps --------------------
+
+#[tokio::test]
+async fn approving_in_the_console_records_a_chained_gate_decision_envelope() {
+    let world = world().await;
+    let (_, request) = draft_and_request(&world, "github.create_issue").await;
+    let request_hash = park(&world, &request).await;
+
+    let decision = world.decide(&request, "approve", None, &world.root);
+    let answer = decide_in_console(&world, &request_hash, &decision).await;
+    assert_eq!(answer.status, StatusCode::CREATED, "{}", answer.body);
+    let envelope_id = answer.json()["envelope-id"]
+        .as_str()
+        .expect("an envelope id")
+        .to_owned();
+
+    // §06 §5: the decision is itself an envelope on the kernel's core stream, so the approval
+    // history is chained and checkpointed independently of the effects that consume it.
+    let recorded = get(&world, &format!("/v1/envelopes/{envelope_id}")).await;
+    assert_eq!(recorded.status, StatusCode::OK);
+    let envelope = &recorded.json()["envelope"];
+    assert_eq!(envelope["kind"].as_str(), Some("gate-decision"));
+    assert_eq!(envelope["stream"].as_str(), Some(CORE_STREAM));
+    assert_eq!(
+        envelope["decision-of"].as_str(),
+        Some(request_hash.as_str())
+    );
+    // The inner signature is the human's; the envelope's own is the kernel attesting receipt.
+    assert_eq!(
+        envelope["decision"]["sig"]["key"].as_str(),
+        Some(world.root.id.as_str())
+    );
+
+    // The chain still verifies with the decision in it: the report names a failure when there is
+    // one, so the absence of a reason code — with the head recomputed over every envelope — is the
+    // verification passing.
+    let verified = get(&world, &format!("/v1/streams/{CORE_STREAM}/verify")).await;
+    assert_eq!(verified.status, StatusCode::OK);
+    assert!(
+        verified.json()["reason-code"].is_null(),
+        "the core stream stopped verifying once a decision was on it: {}",
+        verified.body
+    );
+    let console_verify = get(&world, &format!("/console/streams/{CORE_STREAM}/verify")).await;
+    assert!(
+        console_verify.body.contains("VALID") && !console_verify.body.contains("INVALID"),
+        "{}",
+        console_verify.body
+    );
+
+    // And a component can fetch the decision to carry with its work (§06 §3).
+    let fetched = get(&world, &format!("/v1/gate/requests/{request_hash}")).await;
+    assert_eq!(fetched.json()["decision"], decision);
+
+    // The console moves it out of the parked section and into the answered one.
+    let page = get(&world, "/console/pending").await;
+    assert!(
+        page.body.contains("Answered by a named human"),
+        "{}",
+        page.body
+    );
+    assert!(page.body.contains("Nothing is parked."), "{}", page.body);
+}
+
+#[tokio::test]
+async fn the_recorded_approval_lets_the_exact_approved_effect_through_and_nothing_else() {
+    let world = world().await;
+    let (draft, request) = draft_and_request(&world, "github.create_issue").await;
+    let request_hash = park(&world, &request).await;
+    let decision = world.decide(&request, "approve", None, &world.root);
+    assert_eq!(
+        decide_in_console(&world, &request_hash, &decision)
+            .await
+            .status,
+        StatusCode::CREATED
+    );
+
+    // The permission is data that travels with the work (§06 §3): the component embeds the request
+    // and the decision verbatim, and ingest runs all eleven steps over the pair.
+    let authorization = json!({ "request": request, "decision": decision });
+    let effect = revise(
+        &draft,
+        json!({ "authorization": authorization }),
+        &world.agent,
+    );
+    world.accept(&effect, &[]).await;
+
+    let applied = world
+        .ingest()
+        .store()
+        .query(&EnvelopeQuery {
+            action: Some("github.create_issue"),
+            outcome: Some("applied"),
+            limit: 10,
+            ..Default::default()
+        })
+        .await
+        .expect("querying");
+    assert_eq!(applied.len(), 1, "the approved effect did not land");
+}
+
+#[tokio::test]
+async fn denying_captures_the_reason_and_the_effect_is_refused() {
+    let world = world().await;
+    let (draft, request) = draft_and_request(&world, "github.create_issue").await;
+    let request_hash = park(&world, &request).await;
+
+    let decision = world.decide(
+        &request,
+        "deny",
+        Some("we do not file public issues on behalf of customers"),
+        &world.root,
+    );
+    let answer = decide_in_console(&world, &request_hash, &decision).await;
+    assert_eq!(answer.status, StatusCode::CREATED, "{}", answer.body);
+    assert_eq!(answer.json()["decision"].as_str(), Some("deny"));
+
+    // The reason is captured — it is what the calling agent is owed (§06 §4.1) and the training
+    // data policy tier 3 would learn from (`docs/design/policy-model.md`).
+    let page = get(&world, "/console/pending").await;
+    assert!(
+        page.body
+            .contains("we do not file public issues on behalf of customers"),
+        "{}",
+        page.body
+    );
+
+    // An effect that reports itself applied while carrying the denial is refused (§06 §2 step 7).
+    let authorization = json!({ "request": request, "decision": decision });
+    let effect = revise(
+        &draft,
+        json!({ "authorization": authorization }),
+        &world.agent,
+    );
+    world.reject(&effect, &[], "gate-denied").await;
+}
+
+#[tokio::test]
+async fn a_denial_without_a_reason_is_refused_at_the_console() {
+    let world = world().await;
+    let (_, request) = draft_and_request(&world, "github.create_issue").await;
+    let request_hash = park(&world, &request).await;
+    let decision = world.decide(&request, "deny", None, &world.root);
+    let answer = decide_in_console(&world, &request_hash, &decision).await;
+    assert_eq!(answer.status, StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(
+        answer.json()["reason-code"].as_str(),
+        Some("gate-denial-without-reason")
+    );
+}
+
+// -- 4. adversarial: the new surface is not a second way in --------------------------------------
+
+#[tokio::test]
+async fn self_approval_is_refused_at_the_console() {
+    let world = world().await;
+    // The subject asks, and then signs its own request with its own key.
+    let (_, request) = draft_and_request(&world, "github.create_issue").await;
+    let request_hash = park(&world, &request).await;
+    let decision = world.decide(&request, "approve", None, &world.agent);
+    let answer = decide_in_console(&world, &request_hash, &decision).await;
+    assert_eq!(answer.status, StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(
+        answer.json()["reason-code"].as_str(),
+        Some("gate-self-approval")
+    );
+}
+
+#[tokio::test]
+async fn a_strangers_signature_permits_nothing() {
+    let world = world().await;
+    let (draft, request) = draft_and_request(&world, "github.create_issue").await;
+    let request_hash = park(&world, &request).await;
+
+    // A key enrolled nowhere. It signs a perfectly well-formed approval.
+    let decision = world.decide(&request, "approve", None, &world.stranger);
+    let answer = decide_in_console(&world, &request_hash, &decision).await;
+    assert_eq!(answer.status, StatusCode::FORBIDDEN, "{}", answer.body);
+    assert_eq!(
+        answer.json()["reason-code"].as_str(),
+        Some("gate-approver-not-permitted")
+    );
+
+    // And even if it reached an emitter some other way, ingest refuses the effect for the same
+    // reason — the console is not the only place this is checked.
+    let effect = revise(
+        &draft,
+        json!({ "authorization": { "request": request, "decision": decision } }),
+        &world.agent,
+    );
+    world
+        .reject(&effect, &[], "gate-approver-not-permitted")
+        .await;
+}
+
+#[tokio::test]
+async fn a_decision_whose_request_was_rewritten_permits_nothing() {
+    let world = world().await;
+    let (draft, request) = draft_and_request(&world, "github.create_issue").await;
+    park(&world, &request).await;
+    let decision = world.decide(&request, "approve", None, &world.root);
+
+    // A real signature paired with a request body that is not the one it covers. This is the
+    // failure mode step (2) exists for, and the reason the request travels verbatim.
+    let mut rewritten = request;
+    rewritten["target"] = Value::from("repo:acme/production-secrets");
+    let effect = revise(
+        &draft,
+        json!({ "authorization": { "request": rewritten, "decision": decision } }),
+        &world.agent,
+    );
+    world
+        .reject(&effect, &[], "gate-authorization-request-hash-mismatch")
+        .await;
+}
+
+#[tokio::test]
+async fn an_approval_for_one_action_cannot_authorize_another_field_by_field() {
+    let world = world().await;
+
+    // Approve `github.create_issue` for real, through the whole path.
+    let (_, request) = draft_and_request(&world, "github.create_issue").await;
+    let request_hash = park(&world, &request).await;
+    let decision = world.decide(&request, "approve", None, &world.root);
+    assert_eq!(
+        decide_in_console(&world, &request_hash, &decision)
+            .await
+            .status,
+        StatusCode::CREATED
+    );
+    let authorization = json!({ "request": request, "decision": decision });
+
+    // Now try to spend that approval on something else, one bound member at a time. Every one of
+    // these is a valid signature over a real request — what fails is that the *effect* is not the
+    // approved effect (§06 §2 step 10).
+    for (member, overrides) in [
+        (
+            "action",
+            json!({ "execution": { "action": "github.close_issue" } }),
+        ),
+        (
+            "target",
+            json!({ "execution": { "target": "repo:acme/production-secrets" } }),
+        ),
+        (
+            "args-hash",
+            json!({ "execution": { "args-hash": "ff".repeat(32) } }),
+        ),
+        (
+            "component",
+            json!({ "identity": { "component": "boruna" } }),
+        ),
+        (
+            "mandate-ref",
+            // A mandate that is itself wide enough for this action, so the walk succeeds and the
+            // refusal can only come from step (10) — swapping in a *narrower* one would be caught
+            // one check earlier and would prove something else.
+            json!({ "mandate-ref": world.budgeted_mandate.clone() }),
+        ),
+    ] {
+        let draft = world
+            .effect("github.create_issue", "consequential", json!({}))
+            .await;
+        let mut changed = overrides;
+        stozher_testkit::merge(
+            &mut changed,
+            json!({ "authorization": authorization.clone() }),
+        );
+        let effect = revise(&draft, changed, &world.agent);
+        match world.submit(&effect, &[]).await {
+            stozher_kernel::Outcome::Rejected { reason, .. } => assert_eq!(
+                reason, "gate-authorization-action-mismatch",
+                "changing {member} was refused by something other than the approval binding"
+            ),
+            other => panic!("changing {member} was not refused: {other:?}"),
+        }
+    }
+}
+
+#[tokio::test]
+async fn a_single_use_approval_cannot_be_spent_twice() {
+    let world = world().await;
+    let (draft, request) = draft_and_request(&world, "github.create_issue").await;
+    let request_hash = park(&world, &request).await;
+    let decision = world.decide(&request, "approve", None, &world.root);
+    assert_eq!(
+        decide_in_console(&world, &request_hash, &decision)
+            .await
+            .status,
+        StatusCode::CREATED
+    );
+    let authorization = json!({ "request": request, "decision": decision });
+
+    let first = revise(
+        &draft,
+        json!({ "authorization": authorization.clone() }),
+        &world.agent,
+    );
+    world.accept(&first, &[]).await;
+
+    // A *different* envelope carrying the same approval — the FleetQ re-execution shape, done the
+    // right way and then done once too often. Everything the approval binds is identical, so the
+    // only thing that can refuse this is the replay set itself.
+    let (seq, prev) = world.head(EFFECT_STREAM).await;
+    let second = revise(
+        &draft,
+        json!({ "seq": seq, "prev-hash": prev, "authorization": authorization }),
+        &world.agent,
+    );
+    world
+        .reject(&second, &[], "gate-authorization-replayed")
+        .await;
+}
+
+#[tokio::test]
+async fn one_request_gets_one_answer() {
+    let world = world().await;
+    let (_, request) = draft_and_request(&world, "github.create_issue").await;
+    let request_hash = park(&world, &request).await;
+
+    let approve = world.decide(&request, "approve", None, &world.root);
+    assert_eq!(
+        decide_in_console(&world, &request_hash, &approve)
+            .await
+            .status,
+        StatusCode::CREATED
+    );
+
+    // The approver cannot overwrite their own answer. (A *different* human would be refused one
+    // step earlier, at `gate-approver-not-permitted`, which is a different property — see
+    // `a_strangers_signature_permits_nothing`.)
+    let deny = world.decide(&request, "deny", Some("on reflection, no"), &world.root);
+    let answer = decide_in_console(&world, &request_hash, &deny).await;
+    assert_eq!(
+        answer.status,
+        StatusCode::UNPROCESSABLE_ENTITY,
+        "{}",
+        answer.body
+    );
+    assert_eq!(
+        answer.json()["reason-code"].as_str(),
+        Some("x-gate-decision-already-recorded")
+    );
+    let fetched = get(&world, &format!("/v1/gate/requests/{request_hash}")).await;
+    assert_eq!(
+        fetched.json()["decision"]["decision"].as_str(),
+        Some("approve")
+    );
+}
+
+#[tokio::test]
+async fn the_decision_route_refuses_a_token_it_did_not_issue() {
+    let world = world().await;
+    let (_, request) = draft_and_request(&world, "github.create_issue").await;
+    let request_hash = park(&world, &request).await;
+    let decision = world.decide(&request, "approve", None, &world.root);
+
+    for forged in ["", "00", &"ab".repeat(32)] {
+        let body = json!({ "csrf": forged, "decision": decision });
+        let answer = post_json(
+            &world,
+            &format!("/console/pending/{request_hash}/decide"),
+            &body,
+        )
+        .await;
+        assert!(
+            answer.status == StatusCode::FORBIDDEN || answer.status == StatusCode::BAD_REQUEST,
+            "a forged token {forged:?} was accepted: {} {}",
+            answer.status,
+            answer.body
+        );
+    }
+    // Nothing was recorded by any of those attempts.
+    let fetched = get(&world, &format!("/v1/gate/requests/{request_hash}")).await;
+    assert_eq!(fetched.json()["decision"], Value::Null);
+}
+
+#[tokio::test]
+async fn a_token_issued_to_one_request_does_not_answer_another() {
+    let world = world().await;
+    let (_, first) = draft_and_request(&world, "github.create_issue").await;
+    let first_hash = park(&world, &first).await;
+    let (_, second) = draft_and_request(&world, "github.close_issue").await;
+    let second_hash = park(&world, &second).await;
+
+    let decision = world.decide(&second, "approve", None, &world.root);
+    let body = json!({
+        "csrf": world.kernel.csrf_token("agent:test-harness", &first_hash),
+        "decision": decision
+    });
+    let answer = post_json(
+        &world,
+        &format!("/console/pending/{second_hash}/decide"),
+        &body,
+    )
+    .await;
+    assert_eq!(answer.status, StatusCode::FORBIDDEN, "{}", answer.body);
+}
+
+#[tokio::test]
+async fn the_console_still_has_exactly_one_write_verb() {
+    let world = world().await;
+    // Every read page stays `GET`-only; S3's ten-path assertion lives in `console_and_revocations`
+    // and still holds. What this adds is the other half: the decision path itself answers nothing
+    // but `POST`, so no read route was accidentally widened to reach it.
+    for method in ["GET", "PUT", "PATCH", "DELETE"] {
+        let answer = call(
+            &world,
+            method,
+            &format!("/console/pending/{}/decide", "ab".repeat(32)),
+            None,
+            &bearer(),
+        )
+        .await;
+        assert_eq!(
+            answer.status,
+            StatusCode::METHOD_NOT_ALLOWED,
+            "{method} on the decision route was routed somewhere"
+        );
+    }
+}
+
+#[tokio::test]
+async fn a_decision_over_a_request_the_kernel_never_queued_is_refused_by_the_console() {
+    let world = world().await;
+    let (_, request) = draft_and_request(&world, "github.create_issue").await;
+    let request_hash = jcs::object_hash(&request).expect("hashing");
+    let decision = world.decide(&request, "approve", None, &world.root);
+
+    // Never parked, so there is nothing to answer. The console cannot be used to mint a decision
+    // for a request the kernel has not seen.
+    let answer = decide_in_console(&world, &request_hash, &decision).await;
+    assert_eq!(answer.status, StatusCode::NOT_FOUND, "{}", answer.body);
+}
+
+#[tokio::test]
+async fn an_approver_who_is_not_the_requesters_key_but_is_the_requesters_subject_is_refused() {
+    // §06 §5 prohibits self-approval over the *subject*, not only the keypair: a human holding a
+    // second key is still one human, and "escalation terminates at a named human" is about the
+    // person. Here the root `human:ivan` asks, and then answers with the same root key's subject.
+    let world = world().await;
+    let requester = TestKey::new(0x21, &world.root.subject);
+    let draft = world
+        .effect(
+            "github.create_issue",
+            "consequential",
+            json!({
+                "identity": { "subject": world.root.subject.clone(), "key": requester.id.as_str() }
+            }),
+        )
+        .await;
+    let request = world.action_request(&Ask {
+        requester: &requester,
+        component: "gateway",
+        mandate_ref: &world.standing_mandate,
+        policy_version: &world.policy_version,
+        classification: "consequential",
+        action: "github.create_issue",
+        target: draft["execution"]["target"].as_str().expect("target"),
+        args_hash: draft["execution"]["args-hash"].as_str().expect("args-hash"),
+    });
+    let request_hash = park(&world, &request).await;
+
+    let decision = world.decide(&request, "approve", None, &world.root);
+    let answer = decide_in_console(&world, &request_hash, &decision).await;
+    assert_eq!(answer.status, StatusCode::FORBIDDEN, "{}", answer.body);
+    assert_eq!(
+        answer.json()["reason-code"].as_str(),
+        Some("gate-self-approval")
+    );
+}
+
+#[tokio::test]
+async fn an_approval_decided_after_the_request_expired_is_refused() {
+    let world = world().await;
+    let (_, request) = draft_and_request(&world, "github.create_issue").await;
+    let request_hash = park(&world, &request).await;
+
+    // The request's window closes at 17:00; the human answers at 18:00. §06 §2 step (8).
+    let late = world.root.sign(&json!({
+        "v": stozher_core::VERSION,
+        "kind": "gate-decision",
+        "request-hash": request_hash,
+        "decision": "approve",
+        "decided-at": "2026-07-26T18:00:00.000Z",
+        "not-after": "2026-07-26T18:15:00.000Z",
+        "single-use": true,
+        "reason": Value::Null
+    }));
+    let answer = decide_in_console(&world, &request_hash, &late).await;
+    assert_eq!(answer.status, StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(
+        answer.json()["reason-code"].as_str(),
+        Some("gate-request-expired")
+    );
+}
+
+#[tokio::test]
+async fn the_queue_says_when_a_request_has_timed_out_rather_than_leaving_it_answerable() {
+    let world = world().await;
+    let (_, request) = draft_and_request(&world, "github.create_issue").await;
+    park(&world, &request).await;
+
+    // §06 §4.6: a timed-out gate is a block, never an allow, and an implementation MUST NOT provide
+    // an "approve on timeout" option. The page must not present a dead request as live.
+    world.clock.advance_seconds(9 * 3600);
+    let page = get(&world, "/console/pending").await;
+    assert!(
+        page.body.contains("expired; a timed-out gate is a block"),
+        "{}",
+        page.body
+    );
+}
