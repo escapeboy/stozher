@@ -1,0 +1,50 @@
+# --- keys: never commit key material of any kind ---
+*.key
+*.pem
+*.p8
+*.pk8
+*.jwk
+*.seed
+keys/
+secrets/
+*.privkey
+*.private
+root-key*
+operator-key*
+
+# --- stores: event store / db artifacts ---
+*.db
+*.db-wal
+*.db-shm
+*.sqlite
+*.sqlite3
+store/
+data/
+var/
+
+# --- env / config with secrets ---
+.env
+.env.*
+!.env.example
+*.local.toml
+
+# --- build artifacts ---
+target/
+**/target/
+Cargo.lock.bak
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+dist/
+build/
+*.egg-info/
+node_modules/
+
+# --- tooling / os ---
+.DS_Store
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.serena/
+*.log
