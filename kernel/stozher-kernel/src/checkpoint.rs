@@ -132,10 +132,7 @@ pub async fn decay_with_checkpoints(
     checkpoint_stream: &str,
 ) -> Result<DecayReport> {
     let now = ingest.clock().now();
-    let affected = ingest
-        .store()
-        .streams_with_expiring_payloads(&now)
-        .await?;
+    let affected = ingest.store().streams_with_expiring_payloads(&now).await?;
     let mut checkpointed = Vec::new();
     for stream in &affected {
         if let Some(appended) = emit(ingest, stream, checkpoint_stream).await? {

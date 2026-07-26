@@ -56,7 +56,10 @@ async fn the_ceremony_publishes_a_policy_a_human_signed() {
         Some(world.root.id.as_str()),
         "the first policy is approved by an enrolled human root"
     );
-    assert_eq!(change["human-root"].as_str(), Some(world.root.subject.as_str()));
+    assert_eq!(
+        change["human-root"].as_str(),
+        Some(world.root.subject.as_str())
+    );
 }
 
 #[tokio::test]

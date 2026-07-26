@@ -43,7 +43,7 @@ use crate::keys::SigningKey;
 use crate::manifest::Manifest;
 use crate::policy::{ClassifyInput, Decision, Policy, class_weight};
 use crate::store::{
-    Appended, AppendPlan, CheckpointRow, GateUse, PayloadRow, Projections, RejectionInput,
+    AppendPlan, Appended, CheckpointRow, GateUse, PayloadRow, Projections, RejectionInput,
     RejectionRecord, STREAM_KIND_EFFECT, STREAM_KIND_SIGNAL, Store,
 };
 
@@ -239,9 +239,12 @@ impl Ingest {
         let text = std::str::from_utf8(raw)
             .map_err(|e| Error::new("jcs-malformed-json", format!("body is not UTF-8: {e}")))?;
         let request = jcs::parse(text)?;
-        let request_map = request
-            .as_object()
-            .ok_or_else(|| Error::new("schema-type-mismatch", "an ingest request must be an object"))?;
+        let request_map = request.as_object().ok_or_else(|| {
+            Error::new(
+                "schema-type-mismatch",
+                "an ingest request must be an object",
+            )
+        })?;
         for key in request_map.keys() {
             if !["envelope", "payloads"].contains(&key.as_str()) {
                 return Err(Error::new("schema-unknown-member", key.clone()));
@@ -377,9 +380,15 @@ impl Ingest {
                     // receipt by this component and nothing about the content's truth (§07 §2.2).
                     self.collect_payloads(env, &payloads, &policy, None, &mut plan)?;
                 }
-                "mandate" => self.validate_mandate_grant(env, &policy, &roots, &mut plan).await?,
+                "mandate" => {
+                    self.validate_mandate_grant(env, &policy, &roots, &mut plan)
+                        .await?
+                }
                 "revocation" => self.validate_revocation(env, &roots, &mut plan).await?,
-                "gate-decision" => self.validate_gate_decision(env, &roots, &policy, &emitted_at).await?,
+                "gate-decision" => {
+                    self.validate_gate_decision(env, &roots, &policy, &emitted_at)
+                        .await?
+                }
                 "checkpoint" => self.validate_checkpoint(env, &mut plan).await?,
                 other => {
                     return Err(Error::new(
@@ -393,7 +402,10 @@ impl Ingest {
         // An `authorization` that is *present* is always fully verified, even when policy did not
         // demand one: an envelope must not be able to carry an unverified authorization-shaped
         // object that a later reader might trust (§06 §2, closing note).
-        if plan.gate_use.is_none() && env.get("authorization").is_some() && !EFFECT_KINDS.contains(&kind.as_str()) {
+        if plan.gate_use.is_none()
+            && env.get("authorization").is_some()
+            && !EFFECT_KINDS.contains(&kind.as_str())
+        {
             return Err(Error::new(
                 "schema-unknown-member",
                 format!("a {kind} envelope must not carry authorization"),
@@ -509,8 +521,15 @@ impl Ingest {
                         .to_owned(),
                 };
                 plan.human_root = Some(
-                    self.walk_mandate_with_depth(env, roots, subject_key, emitted_at, 3, Some(&request))
-                        .await?,
+                    self.walk_mandate_with_depth(
+                        env,
+                        roots,
+                        subject_key,
+                        emitted_at,
+                        3,
+                        Some(&request),
+                    )
+                    .await?,
                 );
                 plan.effective_class = Some(declared_class.to_owned());
                 let ok = gate::verify_authorization(env, true, roots, &HashSet::new())?
@@ -637,7 +656,8 @@ impl Ingest {
             }
             _ => {}
         }
-        self.validate_commitment(env, manifest.as_ref(), subject).await?;
+        self.validate_commitment(env, manifest.as_ref(), subject)
+            .await?;
 
         // §05 §3 step 4 — the gate rule.
         let decision = policy.decision_for(&effective);
@@ -977,7 +997,9 @@ impl Ingest {
         if !roots.contains(subject_key) {
             return Err(Error::new(
                 "mandate-root-not-enrolled",
-                format!("{subject_key} is not an enrolled human root and may not change the root set"),
+                format!(
+                    "{subject_key} is not an enrolled human root and may not change the root set"
+                ),
             ));
         }
         let target = env["execution"]["target"].as_str().unwrap_or_default();
@@ -1026,22 +1048,19 @@ impl Ingest {
         let manifest = manifest.ok_or_else(|| {
             Error::new(
                 "durable-transition-not-permitted",
-                format!(
-                    "no registered manifest declares durable object {object_type:?}"
-                ),
+                format!("no registered manifest declares durable object {object_type:?}"),
             )
         })?;
         // The state is the fold of the object's transition envelopes in chain order — never a
         // "current state" row that could be written directly (§02 §8).
-        let history = self.store.durable_transitions(object_type, object_id).await?;
+        let history = self
+            .store
+            .durable_transitions(object_type, object_id)
+            .await?;
         let mut folded: Option<String> = None;
         for (past, _) in &history {
-            folded = Some(manifest.check_transition(
-                object_type,
-                past,
-                "agent",
-                folded.as_deref(),
-            )?);
+            folded =
+                Some(manifest.check_transition(object_type, past, "agent", folded.as_deref())?);
         }
         // §08 §2: a `["human"]`-only transition is refused from an agent key regardless of the
         // agent's mandate. The role comes from the subject class, which is the only thing about the
@@ -1068,11 +1087,16 @@ impl Ingest {
         let issued_at = mandate["issued-at"]
             .as_str()
             .ok_or_else(|| Error::new("schema-missing-member", "mandate.issued-at"))?;
-        let parent = match mandate["parent"].as_str() {
-            Some(parent_ref) => Some(self.store.mandate(parent_ref).await?.ok_or_else(|| {
-                Error::new("mandate-unresolved", format!("no mandate {parent_ref}"))
-            })?),
-            None => None,
+        // Only a delegated grant has a parent to resolve. Resolving unconditionally would report
+        // `mandate-unresolved` for a *root* mandate that wrongly carries one, hiding the real defect
+        // (`mandate-root-has-parent`) behind a lookup failure.
+        let parent = match (mandate["mandate-kind"].as_str(), mandate["parent"].as_str()) {
+            (Some("delegated"), Some(parent_ref)) => {
+                Some(self.store.mandate(parent_ref).await?.ok_or_else(|| {
+                    Error::new("mandate-unresolved", format!("no mandate {parent_ref}"))
+                })?)
+            }
+            _ => None,
         };
         let ceiling = policy.standing_lifetime_ceiling(issued_at)?;
         verify_grant(
@@ -1183,8 +1207,15 @@ impl Ingest {
             .and_then(Value::as_object)
             .ok_or_else(|| Error::new("schema-missing-member", "checkpoint"))?;
         for key in body.keys() {
-            if !["stream", "from-seq", "to-seq", "head-hash", "count", "observed-at"]
-                .contains(&key.as_str())
+            if ![
+                "stream",
+                "from-seq",
+                "to-seq",
+                "head-hash",
+                "count",
+                "observed-at",
+            ]
+            .contains(&key.as_str())
             {
                 return Err(Error::new(
                     "schema-unknown-member",
@@ -1362,11 +1393,14 @@ impl Ingest {
                 jcs::canonicalize(body)?.into_bytes()
             } else {
                 hex::decode(body.as_str().unwrap_or_default()).map_err(|e| {
-                    Error::new("encoding-not-lowercase-hex", format!("payloads[].payload: {e}"))
+                    Error::new(
+                        "encoding-not-lowercase-hex",
+                        format!("payloads[].payload: {e}"),
+                    )
                 })?
             };
-            let retain_until = retain_until_for(env, payload_hash)
-                .unwrap_or_else(|| emitted_at.to_owned());
+            let retain_until =
+                retain_until_for(env, payload_hash).unwrap_or_else(|| emitted_at.to_owned());
             plan.payloads.push(PayloadRow {
                 payload_hash: payload_hash.to_owned(),
                 media_type: media_type.to_owned(),
@@ -1465,6 +1499,10 @@ fn truncate(text: &str, limit: usize) -> String {
 /// # Errors
 ///
 /// Any chain or structural code from [`chain::verify_chain`].
-pub fn verify_range(envelopes: &[Value], stream: &str, anchor: Option<&str>) -> Result<chain::ChainResult> {
+pub fn verify_range(
+    envelopes: &[Value],
+    stream: &str,
+    anchor: Option<&str>,
+) -> Result<chain::ChainResult> {
     chain::verify_chain(envelopes, stream, anchor)
 }

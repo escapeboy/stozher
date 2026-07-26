@@ -154,11 +154,16 @@ async fn get_policy_current(State(kernel): State<Arc<Kernel>>, headers: HeaderMa
     }
     match kernel.ingest.store().current_policy().await {
         Ok(Some(document)) => {
-            let version = document["policy-version"].as_str().unwrap_or_default().to_owned();
+            let version = document["policy-version"]
+                .as_str()
+                .unwrap_or_default()
+                .to_owned();
             let mut response = json(StatusCode::OK, &document);
             // §05 §2.2: the version is the ETag, so a component can ask "has it changed" cheaply.
             if let Ok(value) = axum::http::HeaderValue::from_str(&format!("\"{version}\"")) {
-                response.headers_mut().insert(axum::http::header::ETAG, value);
+                response
+                    .headers_mut()
+                    .insert(axum::http::header::ETAG, value);
             }
             response
         }
@@ -287,7 +292,9 @@ async fn get_envelope_mandate(
             let mut chain = Vec::new();
             let mut cursor = Some(mandate_ref.to_owned());
             while let Some(current) = cursor.take() {
-                let Some(mandate) = ancestry.get(&current) else { break };
+                let Some(mandate) = ancestry.get(&current) else {
+                    break;
+                };
                 chain.push(serde_json::json!({
                     "mandate-id": current,
                     "mandate-kind": mandate["mandate-kind"],

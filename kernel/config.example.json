@@ -1,0 +1,30 @@
+{
+  "_comment": "REMOVE THIS MEMBER BEFORE USE — the configuration schema is closed and will refuse it. Copy this file, fill in the keys from your bootstrap ceremony, and keep it out of version control if your caller tokens are not already hashed elsewhere. It holds no secrets: caller credentials appear only as SHA-256 hashes of their bearer tokens, and the only key material referenced is a path to a file the kernel refuses to read unless it is mode 0600.",
+
+  "bind": "127.0.0.1:8787",
+  "database": "var/stozher.db",
+  "kernel-seed": "keys/kernel.seed",
+
+  "policy-key": "ed25519:0000000000000000000000000000000000000000000000000000000000000000",
+
+  "kernel-core-stream": "kernel:core",
+  "checkpoint-stream": "kernel:checkpoints",
+  "rejection-stream": "kernel:rejections",
+
+  "max-future-skew-seconds": 300,
+
+  "roots": [
+    {
+      "subject": "human:ivan",
+      "key": "ed25519:1111111111111111111111111111111111111111111111111111111111111111",
+      "enrolled-at": "2026-07-26T08:00:00.000Z"
+    }
+  ],
+
+  "callers": [
+    {
+      "subject": "agent:gateway",
+      "token-sha256": "2222222222222222222222222222222222222222222222222222222222222222"
+    }
+  ]
+}

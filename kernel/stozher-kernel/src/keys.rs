@@ -97,10 +97,7 @@ impl Seed {
         }
         if let Some(parent) = path.parent().filter(|p| !p.as_os_str().is_empty()) {
             fs::create_dir_all(parent).map_err(|e| {
-                Error::new(
-                    "key-file-unwritable",
-                    format!("{}: {e}", parent.display()),
-                )
+                Error::new("key-file-unwritable", format!("{}: {e}", parent.display()))
             })?;
         }
         create_owner_only(path, hex::encode(self.0).as_bytes())?;
@@ -245,7 +242,11 @@ mod tests {
         );
         // Refusing to overwrite is the point: a replaced seed orphans every past signature.
         assert_eq!(
-            Seed::generate().unwrap().write_new(&path).unwrap_err().code(),
+            Seed::generate()
+                .unwrap()
+                .write_new(&path)
+                .unwrap_err()
+                .code(),
             "key-file-exists"
         );
         fs::remove_file(&path).unwrap();

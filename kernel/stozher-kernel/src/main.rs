@@ -84,7 +84,10 @@ fn run(config_path: Option<PathBuf>, mode: Mode) -> ExitCode {
         eprintln!("--config <path> is required");
         return ExitCode::FAILURE;
     };
-    let runtime = match tokio::runtime::Builder::new_multi_thread().enable_all().build() {
+    let runtime = match tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+    {
         Ok(runtime) => runtime,
         Err(e) => {
             eprintln!("cannot start the async runtime: {e}");

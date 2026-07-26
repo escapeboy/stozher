@@ -113,18 +113,25 @@ impl Config {
                 .to_owned()
         };
         let required = |name: &str| -> Result<&str> {
-            map.get(name).and_then(Value::as_str).ok_or_else(|| {
-                Error::new("config-malformed", format!("{name} is required"))
-            })
+            map.get(name)
+                .and_then(Value::as_str)
+                .ok_or_else(|| Error::new("config-malformed", format!("{name} is required")))
         };
 
         let policy_key = KeyId::parse(required("policy-key")?)?;
 
         let mut roots = Vec::new();
-        for entry in map.get("roots").and_then(Value::as_array).into_iter().flatten() {
-            let key = KeyId::parse(entry["key"].as_str().ok_or_else(|| {
-                Error::new("config-malformed", "roots[].key is required")
-            })?)?;
+        for entry in map
+            .get("roots")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+        {
+            let key = KeyId::parse(
+                entry["key"]
+                    .as_str()
+                    .ok_or_else(|| Error::new("config-malformed", "roots[].key is required"))?,
+            )?;
             let subject = entry["subject"]
                 .as_str()
                 .filter(|s| s.starts_with("human:") && s.len() > "human:".len())
@@ -148,7 +155,12 @@ impl Config {
         }
 
         let mut callers = Vec::new();
-        for entry in map.get("callers").and_then(Value::as_array).into_iter().flatten() {
+        for entry in map
+            .get("callers")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+        {
             let subject = entry["subject"]
                 .as_str()
                 .ok_or_else(|| Error::new("config-malformed", "callers[].subject is required"))?
@@ -255,22 +267,34 @@ mod tests {
             "subject": "agent:gateway",
             "token-sha256": "secret"
         });
-        assert_eq!(Config::parse(&document).unwrap_err().code(), "config-malformed");
+        assert_eq!(
+            Config::parse(&document).unwrap_err().code(),
+            "config-malformed"
+        );
     }
 
     #[test]
     fn a_root_must_be_a_named_human() {
         let mut document = document();
         document["roots"][0]["subject"] = Value::from("the-team");
-        assert_eq!(Config::parse(&document).unwrap_err().code(), "config-malformed");
+        assert_eq!(
+            Config::parse(&document).unwrap_err().code(),
+            "config-malformed"
+        );
         document["roots"][0]["subject"] = Value::from("human:");
-        assert_eq!(Config::parse(&document).unwrap_err().code(), "config-malformed");
+        assert_eq!(
+            Config::parse(&document).unwrap_err().code(),
+            "config-malformed"
+        );
     }
 
     #[test]
     fn unknown_members_are_refused_rather_than_ignored() {
         let mut document = document();
         document["gate-bypass"] = Value::from(true);
-        assert_eq!(Config::parse(&document).unwrap_err().code(), "config-malformed");
+        assert_eq!(
+            Config::parse(&document).unwrap_err().code(),
+            "config-malformed"
+        );
     }
 }

@@ -79,9 +79,9 @@ impl Manifest {
     /// `schema-missing-member`, `schema-type-mismatch`, `envelope-classification-unknown`, or
     /// [`MANIFEST_MALFORMED`].
     pub fn parse(document: &Value) -> Result<Self> {
-        let map = document.as_object().ok_or_else(|| {
-            Error::new(MANIFEST_MALFORMED, "a manifest must be a JSON object")
-        })?;
+        let map = document
+            .as_object()
+            .ok_or_else(|| Error::new(MANIFEST_MALFORMED, "a manifest must be a JSON object"))?;
         for key in map.keys() {
             if key != "sig" && !MEMBERS.contains(&key.as_str()) {
                 return Err(Error::new("schema-unknown-member", key.clone()));
@@ -122,7 +122,9 @@ impl Manifest {
         let version = map["version"]
             .as_str()
             .filter(|v| !v.is_empty())
-            .ok_or_else(|| Error::new("schema-type-mismatch", "version must be a non-empty string"))?;
+            .ok_or_else(|| {
+                Error::new("schema-type-mismatch", "version must be a non-empty string")
+            })?;
         let subject_class = map["subject-class"].as_str().unwrap_or_default();
         if !SUBJECT_CLASSES.contains(&subject_class) {
             return Err(Error::new(
@@ -151,16 +153,16 @@ impl Manifest {
             }
         }
 
-        let actions = map["actions"].as_array().ok_or_else(|| {
-            Error::new("schema-type-mismatch", "actions must be an array")
-        })?;
+        let actions = map["actions"]
+            .as_array()
+            .ok_or_else(|| Error::new("schema-type-mismatch", "actions must be an array"))?;
         if actions.is_empty() {
             return Err(Error::new(MANIFEST_MALFORMED, "actions must be non-empty"));
         }
         for action in actions {
-            let entry = action.as_object().ok_or_else(|| {
-                Error::new("schema-type-mismatch", "an action must be an object")
-            })?;
+            let entry = action
+                .as_object()
+                .ok_or_else(|| Error::new("schema-type-mismatch", "an action must be an object"))?;
             for key in entry.keys() {
                 if !ACTION_MEMBERS.contains(&key.as_str()) {
                     return Err(Error::new(
@@ -169,7 +171,13 @@ impl Manifest {
                     ));
                 }
             }
-            for required in ["action", "class", "evidence-schema", "idempotent", "target-kind"] {
+            for required in [
+                "action",
+                "class",
+                "evidence-schema",
+                "idempotent",
+                "target-kind",
+            ] {
                 if !entry.contains_key(required) {
                     return Err(Error::new(
                         "schema-missing-member",
@@ -201,7 +209,9 @@ impl Manifest {
             if !schemas.contains_key(schema_id) {
                 return Err(Error::new(
                     "manifest-evidence-schema-missing",
-                    format!("{identifier} declares evidence-schema {schema_id:?}, which is not defined"),
+                    format!(
+                        "{identifier} declares evidence-schema {schema_id:?}, which is not defined"
+                    ),
                 ));
             }
             let has_degrade = entry.get("degrade").is_some_and(|d| !d.is_null());
@@ -243,7 +253,9 @@ impl Manifest {
                 (_, Some(_)) => {
                     return Err(Error::new(
                         MANIFEST_MALFORMED,
-                        format!("{identifier} is class {class} and must not declare an aggregate rule"),
+                        format!(
+                            "{identifier} is class {class} and must not declare an aggregate rule"
+                        ),
                     ));
                 }
                 (_, None) => {}
@@ -261,16 +273,18 @@ impl Manifest {
             if !BUDGET_DIMENSIONS.contains(&dimension) && !monetary {
                 return Err(Error::new(
                     MANIFEST_MALFORMED,
-                    format!("budget-dimensions holds {dimension:?}, which is not a budget dimension"),
+                    format!(
+                        "budget-dimensions holds {dimension:?}, which is not a budget dimension"
+                    ),
                 ));
             }
         }
 
         validate_durable_objects(&map["durable-objects"])?;
 
-        let conformance = map["conformance"].as_object().ok_or_else(|| {
-            Error::new("schema-type-mismatch", "conformance must be an object")
-        })?;
+        let conformance = map["conformance"]
+            .as_object()
+            .ok_or_else(|| Error::new("schema-type-mismatch", "conformance must be an object"))?;
         for required in ["self-test", "vectors-version"] {
             if conformance.get(required).and_then(Value::as_str).is_none() {
                 return Err(Error::new(
@@ -379,18 +393,18 @@ impl Manifest {
                     format!("{object_type} declares no transition {transition:?}"),
                 )
             })?;
-        let signers = entry["signers"].as_array().ok_or_else(|| {
-            Error::new("schema-missing-member", "transitions[].signers")
-        })?;
+        let signers = entry["signers"]
+            .as_array()
+            .ok_or_else(|| Error::new("schema-missing-member", "transitions[].signers"))?;
         if !signers.iter().any(|s| s.as_str() == Some(signer_role)) {
             return Err(Error::new(
                 "durable-transition-not-permitted",
                 format!("{transition} on {object_type} may not be signed by a {signer_role}"),
             ));
         }
-        let from = entry["from"].as_array().ok_or_else(|| {
-            Error::new("schema-missing-member", "transitions[].from")
-        })?;
+        let from = entry["from"]
+            .as_array()
+            .ok_or_else(|| Error::new("schema-missing-member", "transitions[].from"))?;
         let permitted = match folded_state {
             // `from: []` marks a creation transition, so an object that does not exist yet is
             // exactly what it applies to.
@@ -414,9 +428,9 @@ impl Manifest {
 }
 
 fn validate_durable_objects(objects: &Value) -> Result<()> {
-    let objects = objects.as_array().ok_or_else(|| {
-        Error::new("schema-type-mismatch", "durable-objects must be an array")
-    })?;
+    let objects = objects
+        .as_array()
+        .ok_or_else(|| Error::new("schema-type-mismatch", "durable-objects must be an array"))?;
     for object in objects {
         let map = object.as_object().ok_or_else(|| {
             Error::new("schema-type-mismatch", "a durable object must be an object")
@@ -437,9 +451,9 @@ fn validate_durable_objects(objects: &Value) -> Result<()> {
                 ));
             }
         }
-        let transitions = map["transitions"].as_array().ok_or_else(|| {
-            Error::new("schema-type-mismatch", "transitions must be an array")
-        })?;
+        let transitions = map["transitions"]
+            .as_array()
+            .ok_or_else(|| Error::new("schema-type-mismatch", "transitions must be an array"))?;
         if transitions.is_empty() {
             return Err(Error::new(
                 MANIFEST_MALFORMED,
@@ -473,7 +487,10 @@ fn validate_durable_objects(objects: &Value) -> Result<()> {
                 ));
             }
             let signers = entry["signers"].as_array().ok_or_else(|| {
-                Error::new("schema-type-mismatch", "transitions[].signers must be an array")
+                Error::new(
+                    "schema-type-mismatch",
+                    "transitions[].signers must be an array",
+                )
             })?;
             if signers.is_empty() {
                 return Err(Error::new(

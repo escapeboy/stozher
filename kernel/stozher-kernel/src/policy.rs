@@ -315,12 +315,7 @@ impl Policy {
         let ttl = self.document["evidence-ttl"]
             .get(class)
             .and_then(Value::as_str)
-            .ok_or_else(|| {
-                Error::new(
-                    "schema-missing-member",
-                    format!("evidence-ttl.{class}"),
-                )
-            })?;
+            .ok_or_else(|| Error::new("schema-missing-member", format!("evidence-ttl.{class}")))?;
         clock::add_duration(emitted_at, ttl)
     }
 
@@ -345,9 +340,9 @@ impl Policy {
     }
 
     fn validate_classification(&self) -> Result<()> {
-        let classification = self.document["classification"]
-            .as_object()
-            .ok_or_else(|| Error::new("schema-type-mismatch", "classification must be an object"))?;
+        let classification = self.document["classification"].as_object().ok_or_else(|| {
+            Error::new("schema-type-mismatch", "classification must be an object")
+        })?;
         for key in classification.keys() {
             if !["default-unknown", "by-action", "reclassify"].contains(&key.as_str()) {
                 return Err(Error::new(
@@ -365,7 +360,10 @@ impl Policy {
             .get("by-action")
             .and_then(Value::as_object)
             .ok_or_else(|| {
-                Error::new("schema-type-mismatch", "classification.by-action must be an object")
+                Error::new(
+                    "schema-type-mismatch",
+                    "classification.by-action must be an object",
+                )
             })?;
         for class in by_action.values() {
             require_class(class.as_str().unwrap_or_default())?;
@@ -374,11 +372,17 @@ impl Policy {
             .get("reclassify")
             .and_then(Value::as_array)
             .ok_or_else(|| {
-                Error::new("schema-type-mismatch", "classification.reclassify must be an array")
+                Error::new(
+                    "schema-type-mismatch",
+                    "classification.reclassify must be an array",
+                )
             })?;
         for entry in reclassify {
             let map = entry.as_object().ok_or_else(|| {
-                Error::new("schema-type-mismatch", "a reclassify entry must be an object")
+                Error::new(
+                    "schema-type-mismatch",
+                    "a reclassify entry must be an object",
+                )
             })?;
             for key in map.keys() {
                 if !["subject", "action", "resource", "class", "reason"].contains(&key.as_str()) {
@@ -434,12 +438,12 @@ impl Policy {
                     }
                 }
                 Some("gate") => {
-                    let approvers = map
-                        .get("approvers")
-                        .and_then(Value::as_array)
-                        .ok_or_else(|| {
-                            Error::new("schema-missing-member", "gate-rules[].approvers")
-                        })?;
+                    let approvers =
+                        map.get("approvers")
+                            .and_then(Value::as_array)
+                            .ok_or_else(|| {
+                                Error::new("schema-missing-member", "gate-rules[].approvers")
+                            })?;
                     if approvers.is_empty() {
                         // A gate with nobody able to sign is a gate that can never open, which
                         // reads as "blocked" but is authored as "gated". Refuse the ambiguity.
@@ -480,10 +484,9 @@ impl Policy {
             require_class(key)?;
         }
         for class in CLASSES {
-            let duration = ttl
-                .get(class)
-                .and_then(Value::as_str)
-                .ok_or_else(|| Error::new("schema-missing-member", format!("evidence-ttl.{class}")))?;
+            let duration = ttl.get(class).and_then(Value::as_str).ok_or_else(|| {
+                Error::new("schema-missing-member", format!("evidence-ttl.{class}"))
+            })?;
             clock::parse_duration_seconds(duration)?;
         }
         Ok(())
@@ -501,16 +504,19 @@ impl Policy {
                 ));
             }
         }
-        if delegation.get("max-depth").and_then(Value::as_u64).is_none() {
-            return Err(Error::new(
-                "schema-missing-member",
-                "delegation.max-depth",
-            ));
+        if delegation
+            .get("max-depth")
+            .and_then(Value::as_u64)
+            .is_none()
+        {
+            return Err(Error::new("schema-missing-member", "delegation.max-depth"));
         }
         let lifetime = delegation
             .get("max-standing-lifetime")
             .and_then(Value::as_str)
-            .ok_or_else(|| Error::new("schema-missing-member", "delegation.max-standing-lifetime"))?;
+            .ok_or_else(|| {
+                Error::new("schema-missing-member", "delegation.max-standing-lifetime")
+            })?;
         clock::parse_duration_seconds(lifetime)?;
         Ok(())
     }
@@ -521,10 +527,7 @@ impl Policy {
             .ok_or_else(|| Error::new("schema-type-mismatch", "offline must be an object"))?;
         for (class, behaviour) in offline {
             require_class(class)?;
-            if !matches!(
-                behaviour.as_str(),
-                Some("allow" | "block" | "degrade")
-            ) {
+            if !matches!(behaviour.as_str(), Some("allow" | "block" | "degrade")) {
                 return Err(Error::new(
                     "schema-type-mismatch",
                     format!("offline.{class} is {behaviour}"),
@@ -594,10 +597,7 @@ fn reclassify_match<'a>(entry: &'a Value, input: &ClassifyInput<'_>) -> Option<(
     entry["class"].as_str().map(|class| (specificity, class))
 }
 
-fn string_member<'a>(
-    map: &'a serde_json::Map<String, Value>,
-    name: &str,
-) -> Result<&'a str> {
+fn string_member<'a>(map: &'a serde_json::Map<String, Value>, name: &str) -> Result<&'a str> {
     map.get(name)
         .and_then(Value::as_str)
         .ok_or_else(|| Error::new("schema-missing-member", name.to_owned()))

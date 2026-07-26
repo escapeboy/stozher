@@ -338,7 +338,11 @@ pub struct GrantParams<'a> {
 /// # Errors
 ///
 /// The `mandate-*` codes of §03, `scope-bad-pattern`, `sig-invalid`, or `schema-missing-member`.
-pub fn verify_grant(mandate: &Value, parent: Option<&Value>, params: &GrantParams<'_>) -> Result<()> {
+pub fn verify_grant(
+    mandate: &Value,
+    parent: Option<&Value>,
+    params: &GrantParams<'_>,
+) -> Result<()> {
     let signer = verify_signed_object(mandate)?;
     let grantor_key = key_at(mandate, "grantor")?;
     if signer != grantor_key {
