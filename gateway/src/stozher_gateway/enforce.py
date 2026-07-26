@@ -1,0 +1,592 @@
+"""The chokepoint. Every proxied call transits `Enforcer.call` exactly once.
+
+One function, not per-tool logic: ADR-0002 records what happens when authorization lives in many
+places — FleetQ re-executed approved proposals by flipping an ambient container binding, and no
+amount of care in the individual call sites would have caught it. Here there is exactly one path
+from "an agent asked for something" to "the effect happened", and every check is on it.
+
+The order is §10 §2's, and it is not negotiable:
+
+    resolve → normalize → classify → prohibited? → mandate → gate → forward → emit → return
+
+Steps 1-3 and 8 are O(ms) and never block on the kernel. Only a gated call waits, and only for its
+own approval.
+"""
+
+from __future__ import annotations
+
+import logging
+from collections.abc import Callable
+from typing import Any, NamedTuple
+
+from . import clock as clock_module
+from .canonical import object_hash
+from .classify import Classification, Classifier
+from .config import GatewayConfig
+from .emitter import Emitter, WindowKey
+from .gate import ActionRequest, GateRefusedError, action_request, verify_authorization
+from .mandate import MandateRefusedError, MandateRequest, verify_mandate_chain
+from .policy import Policy
+from .refusal import RefusalError, refusal
+from .signing import SigningKey, object_id
+from .store import GatewayStore
+
+__all__ = ["Call", "Enforcer", "Session"]
+
+logger = logging.getLogger(__name__)
+
+#: How long a parked request may sit in the queue before it must be re-asked.
+_REQUEST_LIFETIME_SECONDS = 3600.0
+
+
+class Session:
+    """An authenticated caller: a derived subject key, a mandate, and a stream of its own."""
+
+    def __init__(
+        self,
+        name: str,
+        subject: str,
+        key: SigningKey,
+        mandate: dict[str, Any],
+        stream: str,
+    ) -> None:
+        self.name = name
+        self.subject = subject
+        self.key = key
+        self.mandate = mandate
+        self.mandate_ref = object_id(mandate)
+        self.stream = stream
+
+
+class Call(NamedTuple):
+    """What the caller asked for, before anything has been decided about it."""
+
+    server: str
+    tool: str
+    arguments: dict[str, Any]
+    schema: Any
+
+
+class Enforcer:
+    """Classification, mandate verification, gating and emission for every proxied call."""
+
+    def __init__(
+        self,
+        config: GatewayConfig,
+        store: GatewayStore,
+        classifier: Classifier,
+        emitter: Emitter,
+        policy_of: Callable[[], tuple[Policy, bool]],
+        clock: clock_module.Clock | None = None,
+    ) -> None:
+        self._config = config
+        self._store = store
+        self._classifier = classifier
+        self._emitter = emitter
+        #: Returns the policy in force and whether it is fresh. Raising means no verified policy
+        #: exists, which is a refusal to act rather than a permissive default (§05 §2.3).
+        self._policy_of = policy_of
+        self._clock = clock or clock_module.Clock()
+        self._component = config.gateway.component
+
+    # -- the one entry point ------------------------------------------------------------------
+
+    def call(self, session: Session, call: Call, forward: Callable[[], Any]) -> Any:
+        """Govern one proxied tool call. Raises :class:`RefusalError`; otherwise returns `forward()`."""
+        policy, fresh = self._policy(call)
+        classification = self._classify(session, call, policy)
+        target = self._target(call)
+        args_hash = object_hash(call.arguments)
+
+        if classification.classification == "prohibited":
+            # §05 §3 step 2: nothing permits a prohibited action — not a mandate, not an approval.
+            # The attempt is recorded with full evidence, because attempts are the most
+            # audit-valuable records in the system.
+            envelope_id = self._emit_effect(
+                session, call, classification, target, args_hash, "attempted", policy
+            )
+            raise refusal(
+                "prohibited",
+                "policy-prohibited",
+                "this action is prohibited by organization policy",
+                action=classification.action,
+                classification=classification.classification,
+                classification_tier=classification.tier,
+                envelope_id=envelope_id,
+            )
+
+        self._require_mandate(session, call, classification, target, args_hash, policy)
+        self._require_online_enough(session, call, classification, target, args_hash, policy, fresh)
+
+        decision = policy.decision_for(classification.classification)
+        first_call = not classification.known
+        if decision.kind == "deny":
+            envelope_id = self._emit_effect(
+                session, call, classification, target, args_hash, "blocked", policy
+            )
+            raise refusal(
+                "denied",
+                "policy-denied",
+                "organization policy denies this class of action",
+                action=classification.action,
+                classification=classification.classification,
+                classification_tier=classification.tier,
+                envelope_id=envelope_id,
+            )
+
+        authorization: dict[str, Any] | None = None
+        if decision.kind == "gate" or first_call:
+            authorization = self._gate(
+                session, call, classification, target, args_hash, policy, decision.approvers, first_call
+            )
+
+        started_at = self._clock.now()
+        try:
+            result = forward()
+        except RefusalError:
+            raise
+        except Exception:
+            # §06 §6: an application that fails is still a record. There is no row in the terminal
+            # state table in which an action is silently skipped.
+            self._emit_effect(
+                session,
+                call,
+                classification,
+                target,
+                args_hash,
+                "failed",
+                policy,
+                authorization=authorization,
+                started_at=started_at,
+            )
+            raise
+
+        if classification.classification == "read" and authorization is None:
+            self._fold_read(session, classification, args_hash, policy)
+        else:
+            self._emit_effect(
+                session,
+                call,
+                classification,
+                target,
+                args_hash,
+                "applied",
+                policy,
+                authorization=authorization,
+                started_at=started_at,
+            )
+        # Zero-touch: the upstream result is returned unchanged. The gateway may refuse, and a
+        # refusal is visible; it never rewrites or summarizes what the agent asked for.
+        return result
+
+    def apply_pending_seeds(self, session: Session) -> int:
+        """Put every signed-but-unapplied catalog seed in force. Returns how many were applied.
+
+        Seeding is decoupled from replaying the call that provoked it: the approver's decision does
+        two things (§10 §4.2), and the catalog entry is about *future* calls of that tool. Tying it
+        to a retry of the original call would mean an approval that classified a tool never took
+        effect unless the agent happened to ask for the identical thing again.
+        """
+        applied = 0
+        policy, _ = self._policy_of()
+        approvers = [root.key for root in self._config.org.roots]
+        for parked in self._store.seeded_pending():
+            if self._store.catalog_entry(parked.server, parked.tool) is not None:
+                continue
+            if self._seed_catalog(session, parked, policy, approvers):
+                applied += 1
+        return applied
+
+    # -- steps --------------------------------------------------------------------------------
+
+    def _policy(self, call: Call) -> tuple[Policy, bool]:
+        try:
+            return self._policy_of()
+        except Exception as e:  # noqa: BLE001 - any failure to hold a verified policy fails closed
+            raise refusal(
+                "blocked",
+                "policy-not-published",
+                "the gateway holds no verified policy and will not guess one",
+                action=f"{call.server}.{call.tool}",
+            ) from e
+
+    def _classify(self, session: Session, call: Call, policy: Policy) -> Classification:
+        proposed = self._classifier.classify(call.server, call.tool, call.schema)
+        effective = policy.classify(
+            session.subject, proposed.action, self._target(call), proposed.classification
+        )
+        return Classification(proposed.action, effective, proposed.tier)
+
+    def _target(self, call: Call) -> str:
+        """The thing acted upon, in the gateway's namespace.
+
+        The gateway can name the server it is fronting; it cannot in general name the row, repo or
+        channel inside it without reading arguments whose meaning only a manifest declares (§08).
+        Naming the boundary it actually knows is honest; inferring a finer one would be a guess in
+        the field a mandate's `resources` scope is checked against.
+        """
+        return f"mcp:{call.server}"
+
+    def _require_mandate(
+        self,
+        session: Session,
+        call: Call,
+        classification: Classification,
+        target: str,
+        args_hash: str,
+        policy: Policy,
+    ) -> None:
+        request = MandateRequest(
+            self._component, classification.action, classification.classification, target
+        )
+        try:
+            verify_mandate_chain(
+                {session.mandate_ref: session.mandate},
+                session.mandate_ref,
+                request,
+                at=self._clock.now(),
+                subject_key=session.key.id,
+                roots=[root.key for root in self._config.org.roots],
+                revocations=[],
+                max_depth=policy.max_delegation_depth(),
+            )
+        except MandateRefusedError as e:
+            envelope_id = self._emit_effect(
+                session, call, classification, target, args_hash, "blocked", policy
+            )
+            raise refusal(
+                "blocked",
+                e.code,
+                e.detail,
+                action=classification.action,
+                classification=classification.classification,
+                classification_tier=classification.tier,
+                envelope_id=envelope_id,
+            ) from e
+
+    def _require_online_enough(
+        self,
+        session: Session,
+        call: Call,
+        classification: Classification,
+        target: str,
+        args_hash: str,
+        policy: Policy,
+        fresh: bool,
+    ) -> None:
+        """While the cached policy is stale, apply `offline` behaviour per class (§05 §6, §7)."""
+        if fresh:
+            return
+        behaviour = policy.offline_for(classification.classification)
+        if behaviour == "allow":
+            return
+        envelope_id = self._emit_effect(
+            session, call, classification, target, args_hash, "blocked", policy
+        )
+        raise refusal(
+            "blocked",
+            "policy-stale-offline",
+            f"the cached policy is stale and this class is {behaviour} while offline",
+            action=classification.action,
+            classification=classification.classification,
+            classification_tier=classification.tier,
+            envelope_id=envelope_id,
+        )
+
+    def _gate(
+        self,
+        session: Session,
+        call: Call,
+        classification: Classification,
+        target: str,
+        args_hash: str,
+        policy: Policy,
+        approver_subjects: list[str],
+        first_call: bool,
+    ) -> dict[str, Any]:
+        """Park, or proceed on an approval already signed for exactly this call.
+
+        First-call gating (§10 §4) parks an unknown tool even when the heuristic guessed `read` and
+        even when the class would otherwise be allowed: unknown is not ungoverned. The approver's
+        decision does two things — it authorizes this call, and it seeds the org catalog entry that
+        future calls resolve through — and those are two signatures and two records, never one.
+        """
+        ask = ActionRequest(
+            subject=session.subject,
+            key=session.key.id,
+            component=self._component,
+            mandate_ref=session.mandate_ref,
+            policy_version=policy.version,
+            classification=classification.classification,
+            action=classification.action,
+            target=target,
+            args_hash=args_hash,
+        )
+        fields = {
+            "subject": ask.subject,
+            "key": ask.key,
+            "component": ask.component,
+            "mandate-ref": ask.mandate_ref,
+            "policy-version": ask.policy_version,
+            "classification": ask.classification,
+            "action": ask.action,
+            "target": ask.target,
+            "args-hash": ask.args_hash,
+        }
+        approvers = self._config.org.approver_keys(approver_subjects) or [
+            root.key for root in self._config.org.roots
+        ]
+        parked = self._store.decided_for(fields)
+        if parked is not None and parked.decision is not None:
+            return self._consume(session, call, classification, parked, approvers, policy)
+
+        request = action_request(
+            ask,
+            requested_at=self._clock.now(),
+            not_after=clock_module.shift(self._clock.now(), _REQUEST_LIFETIME_SECONDS),
+        )
+        request_hash = object_hash(request)
+        self._store.park(
+            request_hash,
+            request,
+            call.server,
+            call.tool,
+            classification.classification,
+            call.schema,
+            first_call,
+            self._clock.now(),
+        )
+        raise refusal(
+            "parked",
+            "gate-parked",
+            f"awaiting approval from {', '.join(approver_subjects) or 'an enrolled human root'}",
+            action=classification.action,
+            classification=classification.classification,
+            classification_tier=classification.tier,
+            request_hash=request_hash,
+            hint=f"pending request {request_hash}",
+        )
+
+    def _consume(
+        self,
+        session: Session,
+        call: Call,
+        classification: Classification,
+        parked: Any,
+        approvers: list[str],
+        policy: Policy,
+    ) -> dict[str, Any]:
+        """Verify a decision through §06 §2 and, if it approves, put its catalog seed in force."""
+        authorization = {"request": parked.request, "decision": parked.decision}
+        probe = {
+            "identity": {
+                "subject": parked.request["subject"],
+                "key": parked.request["key"],
+                "component": parked.request["component"],
+            },
+            "mandate-ref": parked.request["mandate-ref"],
+            "policy-version": parked.request["policy-version"],
+            "classification": parked.request["classification"],
+            "execution": {
+                "action": parked.request["action"],
+                "target": parked.request["target"],
+                "args-hash": parked.request["args-hash"],
+            },
+            "emitted-at": self._clock.now(),
+            "authorization": authorization,
+        }
+        try:
+            ok = verify_authorization(
+                probe, True, approvers, self._seen_hashes(parked.request_hash), self._clock.now()
+            )
+        except GateRefusedError as e:
+            self._store.consume(parked.request_hash, self._clock.now())
+            if e.code == "gate-denied":
+                # §06 §4.5: a signed denial is as much a record as a signed approval, and the audit
+                # must show that a human said no, with the reason.
+                envelope_id = self._emit_effect(
+                    session,
+                    call,
+                    classification,
+                    parked.request["target"],
+                    parked.request["args-hash"],
+                    "denied",
+                    policy,
+                    authorization=authorization,
+                )
+                raise refusal(
+                    "denied",
+                    "gate-denied",
+                    e.detail,
+                    action=classification.action,
+                    classification=classification.classification,
+                    classification_tier=classification.tier,
+                    request_hash=parked.request_hash,
+                    envelope_id=envelope_id,
+                    decided_by=parked.decision["sig"]["key"],
+                    decided_at=parked.decision["decided-at"],
+                ) from e
+            raise refusal(
+                "blocked",
+                e.code,
+                e.detail,
+                action=classification.action,
+                classification=classification.classification,
+                classification_tier=classification.tier,
+                request_hash=parked.request_hash,
+            ) from e
+
+        assert ok is not None
+        if self._store.catalog_entry(parked.server, parked.tool) is None:
+            # Seeding may already have happened at session open. Emitting the seed envelope twice
+            # would spend the approver's single-use signature on the second copy and the kernel
+            # would refuse it `gate-authorization-replayed` — correctly, which is why the guard is
+            # here rather than a hope that it never happens.
+            self._seed_catalog(session, parked, policy, approvers)
+        self._store.consume(parked.request_hash, self._clock.now())
+        self._store.record_gate_use(ok.request_hash, self._clock.now())
+        return authorization
+
+    def _seed_catalog(
+        self, session: Session, parked: Any, policy: Policy, approvers: list[str]
+    ) -> bool:
+        """Put an org-seeded catalog entry in force — its own gated, chained envelope (§10 §4.3)."""
+        if parked.catalog_class is None or parked.seed is None:
+            return False
+        action = f"{self._classifier.scope(parked.server)}.{parked.tool}"
+        entry = {"server": parked.server, "tool": parked.tool, "class": parked.catalog_class}
+        seed_request = parked.seed["request"]
+        probe = {
+            "identity": {
+                "subject": seed_request["subject"],
+                "key": seed_request["key"],
+                "component": seed_request["component"],
+            },
+            "mandate-ref": seed_request["mandate-ref"],
+            "policy-version": seed_request["policy-version"],
+            "classification": seed_request["classification"],
+            "execution": {
+                "action": seed_request["action"],
+                "target": seed_request["target"],
+                "args-hash": seed_request["args-hash"],
+            },
+            "emitted-at": self._clock.now(),
+            "authorization": parked.seed,
+        }
+        try:
+            verify_authorization(probe, True, approvers, set(), self._clock.now())
+        except GateRefusedError as e:
+            # The catalog entry must not come into force without its own signature. A seed that
+            # does not verify is dropped; the tool stays unclassified and the next call parks again.
+            logger.error("the catalog seed for %s was refused: %s", action, e.code)
+            return False
+        payload_hash = object_hash(entry)
+        now = self._clock.now()
+        body = {
+            "v": "stozher/0.1",
+            "kind": "effect",
+            "emitted-at": now,
+            "identity": {
+                "subject": session.subject,
+                "key": session.key.id,
+                "component": self._component,
+            },
+            "mandate-ref": session.mandate_ref,
+            "policy-version": policy.version,
+            "classification": seed_request["classification"],
+            "execution": {
+                "action": seed_request["action"],
+                "target": seed_request["target"],
+                "args-hash": seed_request["args-hash"],
+                "outcome": "applied",
+                "started-at": now,
+                "finished-at": now,
+            },
+            "evidence": {
+                "schema": "kernel.seed_catalog_entry.v1",
+                "media-type": "application/json",
+                "payload-hash": payload_hash,
+                "retain-until": self._retain_until(now, seed_request["classification"], policy),
+            },
+            "authorization": parked.seed,
+        }
+        payloads = [
+            {"payload-hash": payload_hash, "media-type": "application/json", "payload": entry}
+        ]
+        envelope_id = self._emitter.append(session.key, session.stream, body, payloads)
+        self._store.seed_catalog(
+            parked.server, parked.tool, action, parked.catalog_class, now, envelope_id
+        )
+        return True
+
+    def _seen_hashes(self, request_hash: str) -> set[str]:
+        return {request_hash} if self._store.gate_seen(request_hash) else set()
+
+    # -- emission -----------------------------------------------------------------------------
+
+    def _fold_read(
+        self, session: Session, classification: Classification, args_hash: str, policy: Policy
+    ) -> None:
+        self._emitter.fold_read(
+            session.key,
+            WindowKey(session.stream, session.key.id, session.mandate_ref, policy.version),
+            classification.action,
+            args_hash,
+        )
+
+    def _emit_effect(
+        self,
+        session: Session,
+        call: Call,
+        classification: Classification,
+        target: str,
+        args_hash: str,
+        outcome: str,
+        policy: Policy,
+        authorization: dict[str, Any] | None = None,
+        started_at: str | None = None,
+    ) -> str | None:
+        now = self._clock.now()
+        payload = {"server": call.server, "tool": call.tool, "arguments": call.arguments}
+        payload_hash = object_hash(payload)
+        body: dict[str, Any] = {
+            "v": "stozher/0.1",
+            "kind": "effect",
+            "emitted-at": now,
+            "identity": {
+                "subject": session.subject,
+                "key": session.key.id,
+                "component": self._component,
+            },
+            "mandate-ref": session.mandate_ref,
+            "policy-version": policy.version,
+            "classification": classification.classification,
+            "execution": {
+                "action": classification.action,
+                "target": target,
+                "args-hash": args_hash,
+                "outcome": outcome,
+                "started-at": started_at or now,
+                "finished-at": now,
+            },
+            "evidence": {
+                "schema": f"{classification.action}.v1",
+                "media-type": "application/json",
+                "payload-hash": payload_hash,
+                "retain-until": self._retain_until(now, classification.classification, policy),
+            },
+        }
+        if authorization is not None:
+            body["authorization"] = authorization
+        payloads = [
+            {"payload-hash": payload_hash, "media-type": "application/json", "payload": payload}
+        ]
+        try:
+            return self._emitter.append(session.key, session.stream, body, payloads)
+        except Exception:  # noqa: BLE001 - a local refusal must be loud, not fatal to the caller
+            logger.exception("the gateway could not chain an envelope for %s", classification.action)
+            return None
+
+    def _retain_until(self, at: str, classification: str, policy: Policy) -> str:
+        """`min(our preference, emitted-at + policy TTL)` — an emitter cannot buy longer retention."""
+        return clock_module.shift(at, clock_module.parse_duration(policy.evidence_ttl(classification)))

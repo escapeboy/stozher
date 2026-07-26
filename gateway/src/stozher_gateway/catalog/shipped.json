@@ -1,0 +1,283 @@
+{
+  "v": "stozher/0.1",
+  "kind": "catalog",
+  "catalog-version": "2026.07.1",
+  "description": "Tier B — the curated server+tool to action+class catalog shipped with the product (spec 08 section 5, spec 10 section 3). Org policy reclassification applies on top of every entry, in both directions; nothing here is final, and a shipped entry is never silently replaced by an org-seeded one.",
+  "class-notes": {
+    "read": "retrieves state and applies nothing. Exfiltration is a read, which is why reads are still recorded — folded into aggregation records rather than dropped.",
+    "benign": "applies an effect with no consequence outside the caller's own session. A heuristic may never assign this; it takes shipped curation or a manifest.",
+    "consequential": "changes state a human would want to have approved: writes, sends, merges, spends, grants. Anything that spawns another agent is consequential, because the sub-agent's effects are real.",
+    "prohibited": "hard-blocked by policy whatever the mandate says. Deliberately almost empty here: an organization states its own prohibitions, and a vendor default that quietly forbids things is a vendor making policy."
+  },
+  "servers": {
+    "github": {
+      "scope": "github",
+      "tools": {
+        "get_file_contents": "read",
+        "get_me": "read",
+        "get_issue": "read",
+        "get_issue_comments": "read",
+        "get_pull_request": "read",
+        "get_pull_request_files": "read",
+        "get_pull_request_diff": "read",
+        "list_branches": "read",
+        "list_commits": "read",
+        "list_issues": "read",
+        "list_pull_requests": "read",
+        "search_code": "read",
+        "search_issues": "read",
+        "search_repositories": "read",
+        "search_users": "read",
+        "add_issue_comment": "consequential",
+        "create_branch": "consequential",
+        "create_issue": "consequential",
+        "create_or_update_file": "consequential",
+        "create_pull_request": "consequential",
+        "create_pull_request_review": "consequential",
+        "create_repository": "consequential",
+        "delete_file": "consequential",
+        "fork_repository": "consequential",
+        "merge_pull_request": "consequential",
+        "push_files": "consequential",
+        "update_issue": "consequential",
+        "update_pull_request_branch": "consequential",
+        "delete_repo": "prohibited"
+      }
+    },
+    "gitlab": {
+      "scope": "gitlab",
+      "tools": {
+        "get_file_contents": "read",
+        "get_issue": "read",
+        "get_merge_request": "read",
+        "list_issues": "read",
+        "list_projects": "read",
+        "search_repositories": "read",
+        "create_branch": "consequential",
+        "create_issue": "consequential",
+        "create_merge_request": "consequential",
+        "create_or_update_file": "consequential",
+        "push_files": "consequential"
+      }
+    },
+    "slack": {
+      "scope": "slack",
+      "tools": {
+        "slack_get_channel_history": "read",
+        "slack_get_thread_replies": "read",
+        "slack_get_user_profile": "read",
+        "slack_get_users": "read",
+        "slack_list_channels": "read",
+        "slack_add_reaction": "consequential",
+        "slack_post_message": "consequential",
+        "slack_reply_to_thread": "consequential"
+      }
+    },
+    "gmail": {
+      "scope": "gmail",
+      "tools": {
+        "get_message": "read",
+        "get_thread": "read",
+        "list_drafts": "read",
+        "list_labels": "read",
+        "search_threads": "read",
+        "apply_sensitive_message_label": "consequential",
+        "apply_sensitive_thread_label": "consequential",
+        "create_draft": "consequential",
+        "create_label": "consequential",
+        "delete_label": "consequential",
+        "label_message": "consequential",
+        "label_thread": "consequential",
+        "send_message": "consequential",
+        "unlabel_message": "consequential",
+        "unlabel_thread": "consequential",
+        "update_draft": "consequential",
+        "update_label": "consequential"
+      }
+    },
+    "google-drive": {
+      "scope": "gdrive",
+      "tools": {
+        "download_file_content": "read",
+        "get_file_metadata": "read",
+        "get_file_permissions": "read",
+        "list_recent_files": "read",
+        "read_file_content": "read",
+        "search_files": "read",
+        "copy_file": "consequential",
+        "create_file": "consequential"
+      }
+    },
+    "google-calendar": {
+      "scope": "gcal",
+      "tools": {
+        "get_event": "read",
+        "list_calendars": "read",
+        "list_events": "read",
+        "search_events": "read",
+        "suggest_time": "read",
+        "create_event": "consequential",
+        "delete_event": "consequential",
+        "respond_to_event": "consequential",
+        "update_event": "consequential"
+      }
+    },
+    "filesystem": {
+      "scope": "fs",
+      "tools": {
+        "directory_tree": "read",
+        "get_file_info": "read",
+        "list_allowed_directories": "read",
+        "list_directory": "read",
+        "read_file": "read",
+        "read_multiple_files": "read",
+        "read_text_file": "read",
+        "search_files": "read",
+        "create_directory": "consequential",
+        "edit_file": "consequential",
+        "move_file": "consequential",
+        "write_file": "consequential"
+      }
+    },
+    "postgres": {
+      "scope": "postgres",
+      "tools": {
+        "list_schemas": "read",
+        "list_tables": "read",
+        "describe_table": "read",
+        "query": "read",
+        "execute": "consequential"
+      }
+    },
+    "sqlite": {
+      "scope": "sqlite",
+      "tools": {
+        "describe_table": "read",
+        "list_tables": "read",
+        "read_query": "read",
+        "append_insight": "consequential",
+        "create_table": "consequential",
+        "write_query": "consequential"
+      }
+    },
+    "stripe": {
+      "scope": "stripe",
+      "tools": {
+        "get_stripe_account_info": "read",
+        "search_stripe_documentation": "read",
+        "stripe_api_details": "read",
+        "stripe_api_read": "read",
+        "stripe_api_search": "read",
+        "create_refund": "consequential",
+        "stripe_api_write": "consequential"
+      }
+    },
+    "sentry": {
+      "scope": "sentry",
+      "tools": {
+        "get_issue": "read",
+        "get_issue_events": "read",
+        "list_issues": "read",
+        "search_issues": "read",
+        "add_issue_comment": "consequential",
+        "update_issue": "consequential"
+      }
+    },
+    "jira": {
+      "scope": "jira",
+      "tools": {
+        "get_issue": "read",
+        "search_issues": "read",
+        "list_projects": "read",
+        "add_comment": "consequential",
+        "create_issue": "consequential",
+        "transition_issue": "consequential",
+        "update_issue": "consequential"
+      }
+    },
+    "linear": {
+      "scope": "linear",
+      "tools": {
+        "get_issue": "read",
+        "list_issues": "read",
+        "list_projects": "read",
+        "list_teams": "read",
+        "create_comment": "consequential",
+        "create_issue": "consequential",
+        "update_issue": "consequential"
+      }
+    },
+    "notion": {
+      "scope": "notion",
+      "tools": {
+        "get_page": "read",
+        "get_database": "read",
+        "query_database": "read",
+        "search": "read",
+        "append_block_children": "consequential",
+        "create_page": "consequential",
+        "update_page": "consequential"
+      }
+    },
+    "memory": {
+      "scope": "memory",
+      "tools": {
+        "open_nodes": "read",
+        "read_graph": "read",
+        "search_nodes": "read",
+        "add_observations": "consequential",
+        "create_entities": "consequential",
+        "create_relations": "consequential",
+        "delete_entities": "consequential",
+        "delete_observations": "consequential",
+        "delete_relations": "consequential"
+      }
+    },
+    "fetch": {
+      "scope": "fetch",
+      "tools": {
+        "fetch": "read"
+      }
+    },
+    "brave-search": {
+      "scope": "brave",
+      "tools": {
+        "brave_local_search": "read",
+        "brave_web_search": "read"
+      }
+    },
+    "puppeteer": {
+      "scope": "browser",
+      "tools": {
+        "puppeteer_screenshot": "read",
+        "puppeteer_evaluate": "consequential",
+        "puppeteer_click": "consequential",
+        "puppeteer_fill": "consequential",
+        "puppeteer_navigate": "consequential",
+        "puppeteer_select": "consequential"
+      }
+    },
+    "harbormaster": {
+      "scope": "harbormaster",
+      "tools": {
+        "await_clarification_request": "read",
+        "await_delegated_task": "read",
+        "await_inbox": "read",
+        "get_delegated_task": "read",
+        "get_pending_clarifications": "read",
+        "list_hosts": "read",
+        "list_projects": "read",
+        "project_graph": "read",
+        "project_status": "read",
+        "recall_pending_results": "read",
+        "recall_qa": "read",
+        "answer_clarification": "consequential",
+        "ask_project": "consequential",
+        "delegate_task": "consequential",
+        "fan_out_ask": "consequential",
+        "record_delegation_result": "consequential",
+        "request_clarification": "consequential"
+      }
+    }
+  }
+}
