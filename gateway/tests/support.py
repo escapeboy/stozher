@@ -116,7 +116,16 @@ def baseline_policy(
 class Kernel:
     """A live kernel process plus the operator keys that bootstrapped it."""
 
-    def __init__(self, root: Path, gateway_seed: bytes, gateway_subject: str) -> None:
+    def __init__(
+        self,
+        root: Path,
+        gateway_seed: bytes,
+        gateway_subject: str,
+        notifications: list[dict[str, Any]] | None = None,
+    ) -> None:
+        #: Approver-ping channels, in the kernel's own configuration shape. Secrets are named by
+        #: environment variable, never carried here (ADR-0002, `notify` module).
+        self.notifications = notifications or []
         self.root = root
         self.token = secrets.token_urlsafe(24)
         self.port = free_port()
@@ -152,6 +161,8 @@ class Kernel:
             "callers": [
                 {"subject": "agent:gateway", "token-sha256": sha256_hex(self.token.encode())}
             ],
+            "notifications": self.notifications,
+            "console-base-url": self.url,
         }
         path = self.root / "kernel-config.json"
         path.write_text(json.dumps(config))

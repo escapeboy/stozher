@@ -93,6 +93,24 @@ class KernelClient:
     def ingest(self, envelope: dict[str, Any], payloads: list[dict[str, Any]]) -> KernelResponse:
         return self._request("POST", "/v1/ingest", {"envelope": envelope, "payloads": payloads})
 
+    def park_gate_request(self, request: dict[str, Any]) -> KernelResponse:
+        """Put a parked request into the kernel's pending queue (§06 §4.3).
+
+        This is the route ADR-0008 §A asked for and `spec/06 §1.1` already implied: the action
+        request is submitted over the authenticated channel, not signed and not an envelope. It
+        appends nothing and it authorizes nothing — it is how a human comes to *see* the park.
+        """
+        return self._request("POST", "/v1/gate/requests", request)
+
+    def gate_request(self, request_hash: str) -> KernelResponse:
+        """The parked request and, once a human has answered, the signed decision.
+
+        The decision comes back verbatim and is trusted by nothing here: it goes through all of
+        §06 §2 in :mod:`stozher_gateway.gate` before any call is forwarded. Fetching an approval and
+        believing it would be the ambient approval this whole design exists to make impossible.
+        """
+        return self._request("GET", f"/v1/gate/requests/{request_hash}")
+
     def envelopes(self, **filters: str) -> KernelResponse:
         query = "&".join(f"{name}={value}" for name, value in filters.items())
         return self._request("GET", f"/v1/envelopes{'?' + query if query else ''}")
