@@ -72,6 +72,46 @@ BEGIN
     SELECT RAISE(ABORT, 'a registered manifest version is retained forever');
 END;
 
+-- The pending queue is append-only too. A parked request that could be edited after an approver
+-- read it is a request the approver did not actually approve, and a decision that could be rewritten
+-- is not a decision — so both tables get the same treatment as the chain (§06 §4.3, §06 §5).
+CREATE TRIGGER IF NOT EXISTS gate_requests_no_update
+BEFORE UPDATE ON gate_requests
+BEGIN
+    SELECT RAISE(ABORT, 'a parked request is immutable: an edited request is not the one approved');
+END;
+
+CREATE TRIGGER IF NOT EXISTS gate_requests_no_delete
+BEFORE DELETE ON gate_requests
+BEGIN
+    SELECT RAISE(ABORT, 'the pending queue is append-only');
+END;
+
+CREATE TRIGGER IF NOT EXISTS gate_decisions_no_update
+BEFORE UPDATE ON gate_decisions
+BEGIN
+    SELECT RAISE(ABORT, 'a recorded decision is immutable: a human said this, once');
+END;
+
+CREATE TRIGGER IF NOT EXISTS gate_decisions_no_delete
+BEFORE DELETE ON gate_decisions
+BEGIN
+    SELECT RAISE(ABORT, 'a recorded decision is retained forever');
+END;
+
+-- "Failure to notify must not silently drop a park" means the attempt log cannot be edited either.
+CREATE TRIGGER IF NOT EXISTS gate_notifications_no_update
+BEFORE UPDATE ON gate_notifications
+BEGIN
+    SELECT RAISE(ABORT, 'notification attempts are append-only');
+END;
+
+CREATE TRIGGER IF NOT EXISTS gate_notifications_no_delete
+BEFORE DELETE ON gate_notifications
+BEGIN
+    SELECT RAISE(ABORT, 'notification attempts are append-only');
+END;
+
 -- An approval may be consumed once (§06 §3); forgetting that it was used is how it gets reused.
 CREATE TRIGGER IF NOT EXISTS gate_request_hashes_no_update
 BEFORE UPDATE ON gate_request_hashes

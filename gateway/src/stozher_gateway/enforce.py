@@ -25,6 +25,7 @@ from .classify import Classification, Classifier
 from .config import GatewayConfig
 from .emitter import Emitter, WindowKey
 from .gate import ActionRequest, GateRefusedError, action_request, verify_authorization
+from .kernel_client import KernelClient, KernelUnreachableError
 from .mandate import MandateRefusedError, MandateRequest, verify_mandate_chain
 from .policy import Policy
 from .refusal import RefusalError, refusal
@@ -79,11 +80,19 @@ class Enforcer:
         policy_of: Callable[[], tuple[Policy, bool]],
         clock: clock_module.Clock | None = None,
         revocations_of: Callable[[Policy], tuple[list[dict[str, Any]], bool]] | None = None,
+        kernel: KernelClient | None = None,
     ) -> None:
         self._config = config
         self._store = store
         self._classifier = classifier
         self._emitter = emitter
+        #: The kernel-native pending queue (§06 §4.3). Without it a park is visible only to this
+        #: process, which is the gap ADR-0008 §A named — so its absence is a warning, never silent.
+        self._kernel = kernel
+        if kernel is None:
+            logger.warning(
+                "no kernel queue is wired: a parked request will not reach the console"
+            )
         #: Returns the policy in force and whether it is fresh. Raising means no verified policy
         #: exists, which is a refusal to act rather than a permissive default (§05 §2.3).
         self._policy_of = policy_of
@@ -367,6 +376,10 @@ class Enforcer:
         approvers = self._config.org.approver_keys(approver_subjects) or [
             root.key for root in self._config.org.roots
         ]
+        # An answer a human gave in the console lands in the kernel, not here, so the queue is
+        # consulted before the local rows: otherwise a call would park a second time against a
+        # request that has already been decided.
+        self._collect_decisions(fields)
         parked = self._store.decided_for(fields)
         if parked is not None and parked.decision is not None:
             return self._consume(session, call, classification, parked, approvers, policy)
@@ -377,6 +390,8 @@ class Enforcer:
             not_after=clock_module.shift(self._clock.now(), _REQUEST_LIFETIME_SECONDS),
         )
         request_hash = object_hash(request)
+        # Local first: §10 §7 forbids keeping the only copy of a record in memory, and a component
+        # must go on enforcing while the kernel is unreachable (maxim 5).
         self._store.park(
             request_hash,
             request,
@@ -387,6 +402,7 @@ class Enforcer:
             first_call,
             self._clock.now(),
         )
+        queued = self._queue_with_kernel(request)
         raise refusal(
             "parked",
             "gate-parked",
@@ -395,8 +411,60 @@ class Enforcer:
             classification=classification.classification,
             classification_tier=classification.tier,
             request_hash=request_hash,
-            hint=f"pending request {request_hash}",
+            # A `parked` refusal is a legitimate terminal response, and the approval binds a *later
+            # identical* request — the same call, not a similar one (ADR-0007 §5). The gateway does
+            # not block: a sync wait inside a sync MCP handler would stall the whole server
+            # (`docs/gateway-integration-constraints.md` §2).
+            hint=(
+                f"pending request {request_hash}"
+                if queued
+                else f"pending request {request_hash} (held locally; the kernel was unreachable)"
+            ),
         )
+
+    def _queue_with_kernel(self, request: dict[str, Any]) -> bool:
+        """Put the park where a human can see it (§06 §4.3). Returns whether it got there.
+
+        A kernel that cannot be reached does not turn a park into a proceed — the refusal above is
+        raised either way. What it costs is visibility, and that cost is stated in the refusal's
+        hint and logged, rather than leaving an operator to wonder why nothing appeared in the
+        console.
+        """
+        if self._kernel is None:
+            return False
+        try:
+            answer = self._kernel.park_gate_request(request)
+        except KernelUnreachableError:
+            logger.exception("the parked request could not be queued with the kernel")
+            return False
+        if answer.status not in (200, 201):
+            logger.error(
+                "the kernel refused a parked request: %s %s", answer.status, answer.reason_code
+            )
+            return False
+        return True
+
+    def _collect_decisions(self, fields: dict[str, Any]) -> None:
+        """Pull answers the kernel holds for this call's still-undecided local parks.
+
+        The decision is copied in as *transport*, exactly as the S2 CLI wrote it: `_consume` runs
+        all of §06 §2 over it before anything is forwarded. A row here permits nothing, which is why
+        fetching one from the kernel is safe even though the kernel is not the authority — the
+        approver's signature is.
+        """
+        if self._kernel is None:
+            return
+        for parked in self._store.pending():
+            if not all(parked.request.get(name) == value for name, value in fields.items()):
+                continue
+            try:
+                answer = self._kernel.gate_request(parked.request_hash)
+            except KernelUnreachableError:
+                logger.warning("the kernel could not be asked about %s", parked.request_hash)
+                return
+            decision = answer.body.get("decision")
+            if isinstance(decision, dict):
+                self._store.record_decision(parked.request_hash, decision, None, None)
 
     def _consume(
         self,

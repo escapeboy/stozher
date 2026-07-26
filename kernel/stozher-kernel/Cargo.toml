@@ -19,6 +19,7 @@ getrandom = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 askama = { version = "0.14.0", default-features = false, features = ["std", "derive", "config"] }
+ureq = { version = "3.3.0", default-features = false, features = ["rustls"] }
 
 [dev-dependencies]
 stozher-testkit = { path = "../stozher-testkit" }

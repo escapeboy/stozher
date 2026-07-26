@@ -181,6 +181,11 @@ class Gateway:
             self.policy_provider.current,
             self._clock,
             self.revocations.current,
+            # S4: the park and the human's answer travel through the kernel's own queue rather than
+            # only the gateway's SQLite (ADR-0007, "what is real vs stubbed"). The local row stays —
+            # a component must keep enforcing while the kernel is unreachable (maxim 5) — but it is
+            # now a cache of a fact the kernel holds, not the only place the fact exists.
+            self.kernel,
         )
         self.session: Session | None = None
         self._downstream: dict[str, Downstream] = {}

@@ -16,6 +16,7 @@ use stozher_core::signed::KeyId;
 use stozher_core::{crypto, jcs, signed};
 use stozher_kernel::clock::{Clock, FixedClock, SharedClock};
 use stozher_kernel::keys::{ROLE_KERNEL_CHECKPOINT, Seed};
+use stozher_kernel::notify::{Channel, Notifier};
 use stozher_kernel::{Config, Ingest, Kernel, Outcome, Store};
 
 /// The instant the world is built at. Fixed so every expectation is reproducible.
@@ -96,13 +97,24 @@ pub async fn world() -> World {
     world
 }
 
+/// Build and bootstrap a world whose approver ping goes to `channels`.
+///
+/// The *adapter* under test is the real one — [`Notifier`], the real dispatch path, the real
+/// `gate_notifications` records. Only the wire is a double, because a gate that needed a Slack
+/// workspace to run would be a gate nobody runs.
+pub async fn world_with_channels(channels: Vec<Box<dyn Channel>>) -> World {
+    let mut world = world_bare_at(None, Notifier::new(channels)).await;
+    world.bootstrap().await;
+    world
+}
+
 /// Build and bootstrap a world backed by a real database file.
 ///
 /// Tests that need to prove append-only enforcement use this: they open the same file with an
 /// ordinary database client and try to rewrite history, which is the only way to show the guarantee
 /// lives in the engine rather than in this crate's good manners.
 pub async fn world_at(database: &std::path::Path) -> World {
-    let mut world = world_bare_at(Some(database)).await;
+    let mut world = world_bare_at(Some(database), Notifier::default()).await;
     world.bootstrap().await;
     world
 }
@@ -110,10 +122,10 @@ pub async fn world_at(database: &std::path::Path) -> World {
 /// Build a world with keys and roots configured but **no policy published** — the state a kernel is
 /// in before the ceremony, in which it must refuse every ordinary envelope.
 pub async fn world_bare() -> World {
-    world_bare_at(None).await
+    world_bare_at(None, Notifier::default()).await
 }
 
-async fn world_bare_at(database: Option<&std::path::Path>) -> World {
+async fn world_bare_at(database: Option<&std::path::Path>, notifier: Notifier) -> World {
     let clock = Arc::new(FixedClock::new(NOW).expect("a fixed clock at NOW"));
     let root = TestKey::new(0x11, "human:ivan");
     let second_root = TestKey::new(0x12, "human:mira");
@@ -151,11 +163,12 @@ async fn world_bare_at(database: Option<&std::path::Path>) -> World {
         .expect("entropy")
         .derive(ROLE_KERNEL_CHECKPOINT, 0)
         .expect("derivation");
-    let kernel = Arc::new(
+    let mut assembled =
         Kernel::assemble(config, store, kernel_key, Arc::clone(&clock) as SharedClock)
             .await
-            .expect("assembling the kernel"),
-    );
+            .expect("assembling the kernel");
+    assembled.notifier = notifier;
+    let kernel = Arc::new(assembled);
 
     World {
         kernel,

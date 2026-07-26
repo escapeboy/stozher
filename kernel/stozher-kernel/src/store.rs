@@ -8,10 +8,13 @@
 //! # What makes this append-only
 //!
 //! Not a convention and not a code review rule: `envelopes`, `rejections`, `checkpoints`,
-//! `policies`, `manifests` and `gate_request_hashes` carry `BEFORE UPDATE` / `BEFORE DELETE`
-//! triggers that abort the statement (`append_only.sqlite.sql`). There is no application flag those
-//! triggers consult and no method on [`Store`] that issues an UPDATE or DELETE against them, so an
-//! attempt to rewrite history fails in the engine rather than in a reviewer's attention.
+//! `policies`, `manifests`, `gate_request_hashes`, `gate_requests`, `gate_decisions` and
+//! `gate_notifications` carry `BEFORE UPDATE` / `BEFORE DELETE` triggers that abort the statement
+//! (`append_only.sqlite.sql`). There is no application flag those triggers consult and no method on
+//! [`Store`] that issues an UPDATE or DELETE against them, so an attempt to rewrite history fails in
+//! the engine rather than in a reviewer's attention. A parked request an operator could edit after
+//! an approver read it would not be the request they approved, which is why the queue is in that
+//! list rather than treated as mutable working state.
 //!
 //! Payload decay is the one deletion the system performs, and it touches `payloads` only — a table
 //! with no chain-bearing column. Deleting from it changes no signed byte, so chain verification is
@@ -110,6 +113,25 @@ pub struct Projections {
     pub retire_root: Option<String>,
     /// A checkpoint attested by this envelope.
     pub checkpoint: Option<CheckpointRow>,
+    /// A gate decision recorded by this envelope (§06 §5).
+    pub gate_decision: Option<GateDecisionRow>,
+}
+
+/// A decision folded out of a `gate-decision` envelope (§06 §5).
+#[derive(Debug, Clone)]
+pub struct GateDecisionRow {
+    /// The request it answers.
+    pub request_hash: String,
+    /// `approve` or `deny`.
+    pub verdict: String,
+    /// Why, for a denial. Denial reasons are the training data of policy tier 3 (§05 §8).
+    pub reason: Option<String>,
+    /// The approver's key.
+    pub decided_by: String,
+    /// When the human decided.
+    pub decided_at: String,
+    /// The signed decision object, verbatim — this is what travels in a later envelope.
+    pub decision: Value,
 }
 
 /// A checkpoint's attested range (§04 §4).
@@ -695,6 +717,199 @@ impl Store {
         .await
         .map_err(db)?;
         Ok(row.is_some())
+    }
+
+    // -- the pending queue (§06 §4.3) -------------------------------------------------------
+    //
+    // These write to `gate_requests` and `gate_notifications` and to nothing else. Neither table
+    // has a chain-bearing column and neither is reachable from `append`, so recording a park cannot
+    // put anything into `envelopes` — which is what keeps "the kernel records the parked request"
+    // from becoming a second way in. The decision half is a projection written by `append` itself.
+
+    /// Record a parked request. Returns `false` when the request was already queued.
+    ///
+    /// Idempotent by `request_hash`, because a component that retries a submission after a lost
+    /// response is doing the right thing and must not be answered with a refusal.
+    ///
+    /// # Errors
+    ///
+    /// [`codes::STORE_UNAVAILABLE`], or a canonicalization failure.
+    pub async fn queue_gate_request(
+        &self,
+        request: &crate::gatequeue::GateRequest,
+        submitted_by: &str,
+        received_at: &str,
+    ) -> Result<bool> {
+        let inserted = sqlx::query(
+            "INSERT INTO gate_requests (request_hash, request_json, submitted_by, received_at, \
+             subject, subject_key, component, mandate_ref, policy_version, classification, action, \
+             target, args_hash, requested_at, not_after) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
+        )
+        .bind(&request.request_hash)
+        .bind(stozher_core::jcs::canonicalize(&request.request)?)
+        .bind(submitted_by)
+        .bind(received_at)
+        .bind(&request.subject)
+        .bind(&request.subject_key)
+        .bind(&request.component)
+        .bind(&request.mandate_ref)
+        .bind(&request.policy_version)
+        .bind(&request.classification)
+        .bind(&request.action)
+        .bind(&request.target)
+        .bind(&request.args_hash)
+        .bind(&request.requested_at)
+        .bind(&request.not_after)
+        .execute(&self.pool)
+        .await;
+        match inserted {
+            Ok(_) => Ok(true),
+            Err(e) if is_unique_violation(&e) => Ok(false),
+            Err(e) => Err(db(e)),
+        }
+    }
+
+    /// A queued request by hash, as the object an approver signs over.
+    ///
+    /// # Errors
+    ///
+    /// [`codes::STORE_UNAVAILABLE`], or `jcs-malformed-json` on stored corruption.
+    pub async fn gate_request(&self, request_hash: &str) -> Result<Option<(Value, String)>> {
+        let row = sqlx::query(
+            "SELECT request_json, submitted_by FROM gate_requests WHERE request_hash = ?1",
+        )
+        .bind(request_hash)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(db)?;
+        row.map(|r| {
+            Ok((
+                stozher_core::jcs::parse(&r.get::<String, _>("request_json"))?,
+                r.get::<String, _>("submitted_by"),
+            ))
+        })
+        .transpose()
+    }
+
+    /// The signed decision answering a request, when a human has answered it.
+    ///
+    /// This is what a component polls for. It returns the decision object **verbatim**, because the
+    /// component must run all of §06 §2 over it itself before acting — the kernel handing back a
+    /// verdict the component trusted on sight would be exactly the ambient approval §06 §2 forbids.
+    ///
+    /// # Errors
+    ///
+    /// [`codes::STORE_UNAVAILABLE`], or `jcs-malformed-json` on stored corruption.
+    pub async fn gate_decision(&self, request_hash: &str) -> Result<Option<Value>> {
+        let row = sqlx::query("SELECT decision_json FROM gate_decisions WHERE request_hash = ?1")
+            .bind(request_hash)
+            .fetch_optional(&self.pool)
+            .await
+            .map_err(db)?;
+        row.map(|r| stozher_core::jcs::parse(&r.get::<String, _>("decision_json")))
+            .transpose()
+    }
+
+    /// The queue as the console and `GET /v1/gate/requests` render it.
+    ///
+    /// `answered` selects between "still waiting on a human" and "already decided". Notification
+    /// state is joined in because a request nobody was told about is a different fact from one an
+    /// approver has seen and not answered, and a queue that renders them identically is lying by
+    /// omission.
+    ///
+    /// # Errors
+    ///
+    /// [`codes::STORE_UNAVAILABLE`], or `jcs-malformed-json` on stored corruption.
+    pub async fn gate_queue(&self, answered: bool, at: &str, limit: i64) -> Result<Vec<Value>> {
+        let sql = format!(
+            "SELECT q.request_hash, q.request_json, q.submitted_by, q.received_at, q.subject, \
+             q.subject_key, q.component, q.mandate_ref, q.policy_version, q.classification, \
+             q.action, q.target, q.args_hash, q.requested_at, q.not_after, \
+             d.verdict, d.reason, d.decided_by, d.decided_at, d.envelope_id, \
+             (SELECT COUNT(*) FROM gate_notifications n WHERE n.request_hash = q.request_hash \
+              AND n.outcome = 'delivered') AS delivered, \
+             (SELECT COUNT(*) FROM gate_notifications n WHERE n.request_hash = q.request_hash \
+              AND n.outcome = 'failed') AS failed, \
+             (SELECT n.detail FROM gate_notifications n WHERE n.request_hash = q.request_hash \
+              AND n.outcome = 'failed' ORDER BY n.attempted_at DESC LIMIT 1) AS last_failure \
+             FROM gate_requests q LEFT JOIN gate_decisions d ON d.request_hash = q.request_hash \
+             WHERE d.request_hash IS {} NULL ORDER BY q.requested_at DESC LIMIT {}",
+            if answered { "NOT" } else { "" },
+            limit.clamp(1, 10_000)
+        );
+        // Audited for injection as `SqlSafeStr` requires: the two interpolations are a literal
+        // chosen from a boolean and a clamped integer. Every value reaches the statement by `bind`.
+        let rows = sqlx::query(sqlx::AssertSqlSafe(sql))
+            .fetch_all(&self.pool)
+            .await
+            .map_err(db)?;
+        rows.iter()
+            .map(|r| {
+                let not_after = r.get::<String, _>("not_after");
+                Ok(serde_json::json!({
+                    "request-hash": r.get::<String, _>("request_hash"),
+                    "request": stozher_core::jcs::parse(&r.get::<String, _>("request_json"))?,
+                    "submitted-by": r.get::<String, _>("submitted_by"),
+                    "received-at": r.get::<String, _>("received_at"),
+                    "subject": r.get::<String, _>("subject"),
+                    "subject-key": r.get::<String, _>("subject_key"),
+                    "component": r.get::<String, _>("component"),
+                    "mandate-ref": r.get::<String, _>("mandate_ref"),
+                    "policy-version": r.get::<String, _>("policy_version"),
+                    "classification": r.get::<String, _>("classification"),
+                    "action": r.get::<String, _>("action"),
+                    "target": r.get::<String, _>("target"),
+                    "args-hash": r.get::<String, _>("args_hash"),
+                    "requested-at": r.get::<String, _>("requested_at"),
+                    // A request whose window has closed is a *block*, never an allow (§06 §4.6), so
+                    // the queue states it rather than leaving a stale row looking answerable.
+                    "expired": not_after.as_str() <= at,
+                    "not-after": not_after,
+                    "verdict": r.get::<Option<String>, _>("verdict"),
+                    "reason": r.get::<Option<String>, _>("reason"),
+                    "decided-by": r.get::<Option<String>, _>("decided_by"),
+                    "decided-at": r.get::<Option<String>, _>("decided_at"),
+                    "decision-envelope-id": r.get::<Option<String>, _>("envelope_id"),
+                    "notified": as_u64(r, "delivered"),
+                    "notify-failures": as_u64(r, "failed"),
+                    "last-notify-failure": r.get::<Option<String>, _>("last_failure"),
+                }))
+            })
+            .collect()
+    }
+
+    /// Record what each channel did with one approver ping.
+    ///
+    /// # Errors
+    ///
+    /// [`codes::STORE_UNAVAILABLE`].
+    pub async fn record_notifications(
+        &self,
+        request_hash: &str,
+        attempts: &[crate::notify::Attempt],
+        at: &str,
+    ) -> Result<()> {
+        for attempt in attempts {
+            sqlx::query(
+                "INSERT INTO gate_notifications (request_hash, channel, attempted_at, outcome, \
+                 detail) VALUES (?1, ?2, ?3, ?4, ?5) \
+                 ON CONFLICT (request_hash, channel, attempted_at) DO NOTHING",
+            )
+            .bind(request_hash)
+            .bind(&attempt.channel)
+            .bind(at)
+            .bind(if attempt.delivered {
+                "delivered"
+            } else {
+                "failed"
+            })
+            .bind(attempt.detail.as_deref())
+            .execute(&self.pool)
+            .await
+            .map_err(db)?;
+        }
+        Ok(())
     }
 
     /// The policy in force: the most recently published version.
@@ -1377,6 +1592,39 @@ impl Store {
             .execute(&mut **tx)
             .await
             .map_err(db)?;
+        }
+        if let Some(decision) = &projections.gate_decision {
+            // One request, one answer. The PRIMARY KEY is the enforcement: a second, contradicting
+            // decision over the same request cannot be written, so "a human said no and someone
+            // then recorded a yes" is not representable (§06 §5).
+            let inserted = sqlx::query(
+                "INSERT INTO gate_decisions (request_hash, verdict, reason, decided_by, \
+                 decided_at, decision_json, envelope_id, recorded_at) \
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            )
+            .bind(&decision.request_hash)
+            .bind(&decision.verdict)
+            .bind(decision.reason.as_deref())
+            .bind(&decision.decided_by)
+            .bind(&decision.decided_at)
+            .bind(stozher_core::jcs::canonicalize(&decision.decision)?)
+            .bind(&plan.id)
+            .bind(&plan.received_at)
+            .execute(&mut **tx)
+            .await;
+            if let Err(e) = inserted {
+                return Err(if is_unique_violation(&e) {
+                    Error::new(
+                        codes::GATE_DECISION_ALREADY_RECORDED,
+                        format!(
+                            "request {} has already been answered by a named human",
+                            decision.request_hash
+                        ),
+                    )
+                } else {
+                    db(e)
+                });
+            }
         }
         if let Some(checkpoint) = &projections.checkpoint {
             let previous = sqlx::query(

@@ -9,15 +9,11 @@ receives. Real Ed25519 signatures throughout. Every console assertion below is m
 **bytes the kernel rendered**, fetched over HTTP with a real credential — not against the return
 value of a Rust function.
 
-**What is not covered here, stated rather than implied.**
-
-* The *transport* of a human's approval is still the gateway's local SQLite (S4 builds the
-  kernel-native queue) — as in the S2 gate. The decision object is real and is verified through
-  all of §06 §2.
-* Therefore the console's pending page cannot show a gate-*parked* request: the park is held by
-  the component that parked it, and no envelope kind carries one to the kernel. The park itself is
-  real and is asserted at the MCP boundary; the page renders and states the boundary. See the S3
-  report's spec-conflict note on `spec/06 §4.3`.
+**Scope, stated rather than implied.** This file is the S3 gate and stays that: the audit explorer,
+the chain verification, the mandate walk to a named human, and preventive revocation. It approves
+through the S2/S3 path — the `stozher-gateway approve` CLI writing a signed decision into the
+gateway's own store — because that path must keep working. The kernel-native queue, the console
+signing route and the approver ping are S4's, and are exercised by `test_s4_native_gates.py`.
 """
 
 from __future__ import annotations
@@ -373,14 +369,17 @@ async def test_the_demo(world: dict[str, Any]) -> None:
     assert "standing" in detail, "the standing mandate is the link that reaches the root"
     assert "approve by" in detail, "the approval that let the call proceed is on the page"
 
-    # -- 4. the pending list renders, and names what it cannot see ------------------------------
+    # -- 4. the pending list renders ------------------------------------------------------------
 
     status, pending = console(world, "/console/pending")
     assert status == 200, pending
     assert "Pending approvals" in pending
-    # Display only at S3: no control on the page can submit anything.
-    assert "<form" not in pending.lower()
-    assert "ADR-0007" in pending, "the S4 boundary is stated on the page, not left implicit"
+    # S3 asserted the opposite of the next line: there was no control on this page, because the
+    # kernel could not see a park and nothing could be signed from here. S4 closed that (ADR-0008
+    # §A) and the S4 gate — `test_s4_native_gates.py` — is where the queue and the signing path are
+    # actually exercised. What this file still proves is that adding them did not disturb the S3
+    # demo: the audit explorer, the chain verification and the mandate walk above are unchanged.
+    assert "Parked — waiting on a human" in pending
 
     # -- 5. the mandate registry surfaces the standing rule and its expiry ----------------------
 

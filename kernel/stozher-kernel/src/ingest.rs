@@ -43,8 +43,8 @@ use crate::keys::SigningKey;
 use crate::manifest::Manifest;
 use crate::policy::{ClassifyInput, Decision, Policy, class_weight};
 use crate::store::{
-    AppendPlan, Appended, CheckpointRow, GateUse, PayloadRow, Projections, RejectionInput,
-    RejectionRecord, STREAM_KIND_EFFECT, STREAM_KIND_SIGNAL, Store,
+    AppendPlan, Appended, CheckpointRow, GateDecisionRow, GateUse, PayloadRow, Projections,
+    RejectionInput, RejectionRecord, STREAM_KIND_EFFECT, STREAM_KIND_SIGNAL, Store,
 };
 
 /// Envelope kinds that carry authority and therefore a mandate (§02 §2).
@@ -392,7 +392,7 @@ impl Ingest {
                 }
                 "revocation" => self.validate_revocation(env, &roots, &mut plan).await?,
                 "gate-decision" => {
-                    self.validate_gate_decision(env, &roots, &policy, &emitted_at)
+                    self.validate_gate_decision(env, &roots, &policy, &emitted_at, &mut plan)
                         .await?
                 }
                 "checkpoint" => self.validate_checkpoint(env, &mut plan).await?,
@@ -1155,6 +1155,7 @@ impl Ingest {
         roots: &[KeyId],
         policy: &Policy,
         at: &str,
+        plan: &mut AppendPlan,
     ) -> Result<()> {
         let decision_of = env["decision-of"]
             .as_str()
@@ -1204,7 +1205,45 @@ impl Ingest {
                 format!("{signer} is not an approver in this deployment"),
             ));
         }
+        // When the request is one the kernel queued (§06 §4.3), the decision is bound to it here:
+        // request-hash over the stored bytes, self-approval, the closed vocabulary and both expiry
+        // windows. A decision over a request this kernel never saw is still a legitimate record —
+        // a component enforcing locally may have parked it — so the absence of a row is not a
+        // refusal, only the absence of the extra binding.
+        if let Some((request, _)) = self.store.gate_request(decision_of).await? {
+            let requested_at = request["requested-at"].as_str().unwrap_or(at).to_owned();
+            let queued = crate::gatequeue::validate(&request, &requested_at)?;
+            let checked = crate::gatequeue::check_decision(decision, &queued)?;
+            // §06 §5: the approver subject must not be the requesting subject either — a human who
+            // holds two keys is still one human, and "escalation terminates at a named human"
+            // (maxim 3) is about the person, not the keypair.
+            if self.subject_of(&checked.decided_by, at).await? == Some(queued.subject.clone()) {
+                return Err(Error::new(
+                    "gate-self-approval",
+                    format!("{} decided its own subject's request", queued.subject),
+                ));
+            }
+            plan.projections.gate_decision = Some(GateDecisionRow {
+                request_hash: checked.request_hash,
+                verdict: checked.verdict,
+                reason: checked.reason,
+                decided_by: checked.decided_by.as_str().to_owned(),
+                decided_at: checked.decided_at,
+                decision: checked.decision,
+            });
+        }
         Ok(())
+    }
+
+    /// The named subject a key acts as, if the deployment knows one: an enrolled root, or a human
+    /// holding a mandate. Used only to refuse self-approval by a second key of the same human.
+    async fn subject_of(&self, key: &KeyId, at: &str) -> Result<Option<String>> {
+        for (root_key, subject) in self.store.roots_at(at).await? {
+            if &root_key == key {
+                return Ok(Some(subject));
+            }
+        }
+        Ok(None)
     }
 
     async fn validate_checkpoint(&self, env: &Value, plan: &mut AppendPlan) -> Result<()> {
@@ -1301,6 +1340,44 @@ impl Ingest {
             observed_at: observed_at.to_owned(),
         });
         Ok(())
+    }
+
+    /// The keys permitted to approve an action of this class in this deployment (§06 §5).
+    ///
+    /// Public because the console's decision route has to answer "may this key say yes to *this*"
+    /// before recording anything, and it must answer it with the **same** resolution ingest will
+    /// apply to the effect afterwards. A console with its own notion of who may approve is a second
+    /// policy, and the second one is always the one that is wrong.
+    ///
+    /// # Errors
+    ///
+    /// [`codes::STORE_UNAVAILABLE`], or any policy parse failure.
+    pub async fn approvers_for(
+        &self,
+        classification: &str,
+        action: &str,
+        at: &str,
+    ) -> Result<Vec<KeyId>> {
+        let roots: Vec<KeyId> = self
+            .store
+            .roots_at(at)
+            .await?
+            .into_iter()
+            .map(|(key, _)| key)
+            .collect();
+        // Policy cannot lower the bar on the mechanism that enforces policy (§05 §5.2, §08 §3.1,
+        // §03 §6): these four are approved by an enrolled root whatever `gate-rules` says.
+        if ROOT_APPROVED_ACTIONS.contains(&action) {
+            return Ok(roots);
+        }
+        let Some(document) = self.store.current_policy().await? else {
+            return Ok(roots);
+        };
+        let policy = Policy::parse(&document, &self.config.policy_key)?;
+        match policy.decision_for(classification) {
+            Decision::Gate { approvers } => self.approver_keys(&approvers, at, action).await,
+            Decision::Allow | Decision::Deny => Ok(roots),
+        }
     }
 
     /// Resolve approver *subjects* to the keys permitted to sign (§06 §5).

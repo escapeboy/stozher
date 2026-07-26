@@ -133,6 +133,77 @@ CREATE TABLE IF NOT EXISTS gate_request_hashes (
     PRIMARY KEY (request_hash)
 );
 
+-- The kernel-native pending queue — spec/06 §4.3, ADR-0008 §A.
+--
+-- An action request (§06 §1.1) is a *question*, not an effect that happened, so it is deliberately
+-- not an envelope: §02 §2's `kind` vocabulary is closed and its stated rationale — "everything that
+-- changes what the system will permit is itself an audited, chained, signed event" — does not cover
+-- a request, which changes nothing. It is also why a park must not take a chain position: a request
+-- that later times out would occupy one for something that never happened, and a park the kernel
+-- refused would wedge the emitter's effect stream (ADR-0007 §6).
+--
+-- Nothing is lost from the audit. The *decision* is an envelope (§06 §5, `gate_decisions` below is
+-- its projection), and the effect that eventually consumes the approval embeds this request verbatim
+-- in `authorization.request`. The row's integrity comes from `request_hash` being covered by the
+-- approver's signature (§06 §1.1), not from this table.
+--
+-- A row here grants nothing. The approval binds `subject_key`, so a caller that submits a request
+-- naming a subject whose key it does not hold has only asked a question it cannot act on.
+CREATE TABLE IF NOT EXISTS gate_requests (
+    request_hash   TEXT NOT NULL,
+    request_json   TEXT NOT NULL,
+    submitted_by   TEXT NOT NULL,
+    received_at    TEXT NOT NULL,
+    subject        TEXT NOT NULL,
+    subject_key    TEXT NOT NULL,
+    component      TEXT NOT NULL,
+    mandate_ref    TEXT NOT NULL,
+    policy_version TEXT NOT NULL,
+    classification TEXT NOT NULL,
+    action         TEXT NOT NULL,
+    target         TEXT NOT NULL,
+    args_hash      TEXT NOT NULL,
+    requested_at   TEXT NOT NULL,
+    not_after      TEXT NOT NULL,
+    PRIMARY KEY (request_hash)
+);
+
+CREATE INDEX IF NOT EXISTS gate_requests_by_expiry  ON gate_requests (not_after);
+CREATE INDEX IF NOT EXISTS gate_requests_by_subject ON gate_requests (subject, requested_at);
+
+-- The decision projection. A fold of the `gate-decision` envelopes on the kernel's core stream
+-- (§06 §5), never an independent source of truth: `envelope_id` names the chained record it was
+-- folded from, and the whole table is rebuildable from `envelopes` alone (§02 §8).
+--
+-- The PRIMARY KEY is the enforcement for "one request, one answer": a second, contradicting decision
+-- for the same request cannot be recorded.
+CREATE TABLE IF NOT EXISTS gate_decisions (
+    request_hash  TEXT NOT NULL,
+    verdict       TEXT NOT NULL CHECK (verdict IN ('approve', 'deny')),
+    reason        TEXT,
+    decided_by    TEXT NOT NULL,
+    decided_at    TEXT NOT NULL,
+    decision_json TEXT NOT NULL,
+    envelope_id   TEXT NOT NULL,
+    recorded_at   TEXT NOT NULL,
+    PRIMARY KEY (request_hash)
+);
+
+-- Every approver ping the notification adapter attempted, delivered or not (§06 §4.3, ADR-0002).
+-- One row per attempt per channel: a failure to notify is a record, never a dropped park. The
+-- console reads this to distinguish "an approver was told" from "nobody was told" — the same
+-- [unknown]-vs-[clean] distinction the rest of the product holds to.
+CREATE TABLE IF NOT EXISTS gate_notifications (
+    request_hash TEXT NOT NULL,
+    channel      TEXT NOT NULL,
+    attempted_at TEXT NOT NULL,
+    outcome      TEXT NOT NULL CHECK (outcome IN ('delivered', 'failed')),
+    detail       TEXT,
+    PRIMARY KEY (request_hash, channel, attempted_at)
+);
+
+CREATE INDEX IF NOT EXISTS gate_notifications_by_outcome ON gate_notifications (outcome);
+
 -- Every policy version the kernel has ever published, forever (§05 §2.2).
 CREATE TABLE IF NOT EXISTS policies (
     policy_version TEXT   NOT NULL,

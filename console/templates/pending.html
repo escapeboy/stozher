@@ -1,20 +1,93 @@
 {% extends "base.html" %}
 {% block content %}
 <h1>Pending approvals</h1>
-<p class="lede">Display only at S3. Approve and deny are signatures, not buttons — the signing path
-is S4, and until it exists this page deliberately offers no control that could be mistaken for
-one.</p>
+<p class="lede">Every action waiting on a named human's signature. Approving here does not create a
+signature — it records one you made with a key this kernel has never held.</p>
 
 <div class="note">
-<b>What this page can and cannot see.</b> A gate-parked request is held by the component that
-parked it until the kernel-native pending queue exists (<code>spec/06 §4.3</code>, ADR-0007 §1,
-scheduled S4). The kernel therefore does not yet hold the park itself. What it does hold — and what
-is listed below — is every action that <em>did not reach the world</em> and is waiting on a human:
-outcome <code>blocked</code>. A <code>denied</code> record is a human's answer already given and is
-shown separately for context.
+<b>How an answer is produced.</b> Stozher holds no approver private key and has no route that
+produces an approver's signature, so it cannot manufacture an approval. Sign the request hash with
+your own owner-only seed file:
+<pre>stozher-kernel decide --request &lt;request-hash&gt; --key ~/.stozher/ivan.seed \
+                      --subject human:ivan --approve</pre>
+then paste the object it prints into the form below. The decision travels into the audit as a
+<code>gate-decision</code> envelope on the kernel's core stream (<code>spec/06 §5</code>) and into
+the effect that consumes it as <code>authorization</code> (<code>spec/06 §1.3</code>).
 </div>
 
-<h2>Waiting on a human — <code>blocked</code></h2>
+{% if channels == "0" %}
+<div class="note"><b class="violation">No notification channel is configured.</b> Nothing pings an
+approver when something parks — this page is the only place a park becomes visible. Configure a
+<code>notifications</code> channel (slack, smtp or webhook) or accept that the queue is polled by a
+human. Stated rather than left to look like silence.</div>
+{% endif %}
+
+<h2>Parked — waiting on a human</h2>
+{% if parked.is_empty() %}
+<p class="empty">Nothing is parked.</p>
+{% else %}
+{% for r in parked %}
+<table>
+<tr><th>request</th><td class="hash">{{ r.request_hash }}</td>
+    <th>class</th><td class="{{ r.class }}">{{ r.class }}</td></tr>
+<tr><th>subject</th><td>{{ r.subject }}</td>
+    <th>submitted by</th><td>{{ r.submitted_by }}</td></tr>
+<tr><th>action</th><td>{{ r.action }}</td>
+    <th>target</th><td>{{ r.target }}</td></tr>
+<tr><th>component</th><td>{{ r.component }}</td>
+    <th>args-hash</th><td class="hash">{{ r.args_hash }}</td></tr>
+<tr><th>mandate</th><td class="hash">{{ r.mandate_short }}</td>
+    <th>policy</th><td>{{ r.policy_version }}</td></tr>
+<tr><th>asked</th><td class="num">{{ r.requested_at }}</td>
+    <th>expires</th><td class="num">{% if r.expired %}<span class="violation">{{ r.not_after }} — expired; a timed-out gate is a block, never an allow</span>{% else %}{{ r.not_after }}{% endif %}</td></tr>
+<tr><th>approver ping</th><td colspan="3">
+{% if r.notified != "0" %}delivered on {{ r.notified }} channel(s){% else %}<span class="violation">not delivered</span>{% endif %}{% if r.notify_failures != "0" %} · <span class="violation">{{ r.notify_failures }} failure(s)</span>: {{ r.notify_failure }}{% endif %}
+</td></tr>
+</table>
+
+<p>The exact object a signature covers:</p>
+<pre>{{ r.request_json }}</pre>
+
+<form method="post" action="/console/pending/{{ r.request_hash }}/decide">
+<input type="hidden" name="csrf" value="{{ r.csrf }}">
+<label for="decision-{{ r.short }}">signed <code>gate-decision</code> object</label><br>
+<textarea id="decision-{{ r.short }}" name="decision" rows="6" cols="110"
+          placeholder='{"v":"stozher/0.1","kind":"gate-decision","request-hash":"{{ r.request_hash }}", ... ,"sig":{...}}'></textarea><br>
+<button type="submit">record this decision</button>
+</form>
+{% endfor %}
+{% endif %}
+
+<h2>Answered by a named human</h2>
+{% if answered.is_empty() %}
+<p class="empty">No parked request has been answered yet.</p>
+{% else %}
+<table>
+<tr><th>decided</th><th>verdict</th><th>subject</th><th>class</th><th>action</th><th>target</th><th>decided by</th><th>reason</th><th>record</th></tr>
+{% for r in answered %}
+<tr>
+<td class="num">{{ r.decided_at }}</td>
+<td class="{% if r.verdict == "deny" %}violation{% else %}ok{% endif %}">{{ r.verdict }}</td>
+<td>{{ r.subject }}</td>
+<td class="{{ r.class }}">{{ r.class }}</td>
+<td>{{ r.action }}</td>
+<td>{{ r.target }}</td>
+<td class="hash">{{ r.decided_by }}</td>
+<td>{{ r.reason }}</td>
+<td class="hash"><a href="/console/envelopes/{{ r.decision_envelope }}">{{ r.decision_short }}</a></td>
+</tr>
+{% endfor %}
+</table>
+<p class="lede">A denial is as much a record as an approval, and the reason is part of it — it is
+what the calling agent is owed (<code>spec/06 §4.1</code>) and what policy tier 3 would learn from
+(<code>docs/design/policy-model.md</code>).</p>
+{% endif %}
+
+<h2>Did not reach the world — effect envelopes with <code>blocked</code></h2>
+<div class="note">These are recorded effects, not queue entries: a component evaluated policy
+locally, refused, and said so. They are shown here because they are also waiting on a human, and
+separately from the queue above because nothing here can be signed — the action already terminated.
+</div>
 {% if rows.is_empty() %}
 <p class="empty">Nothing is blocked.</p>
 {% else %}
@@ -35,7 +108,7 @@ shown separately for context.
 </table>
 {% endif %}
 
-<h2>Already decided — <code>denied</code> by a named human</h2>
+<h2>Already decided — <code>denied</code> effect envelopes</h2>
 {% if denied.is_empty() %}
 <p class="empty">No signed denial is on record.</p>
 {% else %}

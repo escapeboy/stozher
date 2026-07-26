@@ -1,14 +1,34 @@
-//! The read-only console — `docs/design/console.md`, served from this binary.
+//! The console — `docs/design/console.md`, served from this binary.
 //!
-//! # Read-only is a property of the route table, not a promise
+//! # One mutating route, and it does not mutate anything
 //!
-//! Every route below is registered with [`axum::routing::get`]. There is no `post`, `put`, `patch`
-//! or `delete` anywhere in this module, and no handler here calls anything that writes: the console
-//! reaches the store through [`crate::store::Store`]'s read methods only, and
-//! [`crate::store::Store::append`] is crate-private and reachable exclusively from
-//! [`crate::ingest::Ingest::submit`]. An "approve" here would therefore have to be a signature
-//! travelling through `POST /v1/ingest` like everything else — which is what S4 builds. `spec/06 §2`
-//! names an administrative append as a conformance failure, and the S1 suite attempts one.
+//! Every route below is registered with [`axum::routing::get`] except exactly one:
+//! `POST /console/pending/{request-hash}/decide`. That route records a human's answer to a parked
+//! request — the only mutating capability the console has in v1 — and it holds the property S3
+//! predicted it would have to:
+//!
+//! > *"An 'approve' here would have to be a signature travelling through `POST /v1/ingest` like
+//! > everything else."*
+//!
+//! It is. The route accepts an **already-signed** `gate-decision` object (§06 §1.2), checks it, and
+//! submits a `gate-decision` envelope through [`crate::ingest::Ingest::submit`], which is still the
+//! only path to [`crate::store::Store::append`]. There is no verdict parameter the kernel turns
+//! into a signature, and no boolean anywhere on the path.
+//!
+//! # Where the approver's private key lives: nowhere in Stozher
+//!
+//! This is the most consequential decision in S4 and it is deliberate. The kernel holds **no**
+//! approver key material, has no route that produces an approver's signature, and therefore cannot
+//! manufacture an approval — not for an operator with a shell on the box, not for a compromised
+//! kernel process, not for its own maintenance code. The party that enforces the gate is
+//! structurally unable to satisfy it.
+//!
+//! The cost is real and is not hidden: the console cannot offer a one-click approve to a human who
+//! has only a browser. The approver signs with `stozher-kernel decide`, which reads their own
+//! owner-only seed file in their own process, and submits the resulting object. Browser-side
+//! signing (WebCrypto Ed25519) plus a console session scheme would remove the friction without
+//! moving the key onto the server — and ADR-0008 already places the console session scheme at S5,
+//! which is where that pair belongs.
 //!
 //! # Authentication is the kernel's, not a second scheme
 //!
@@ -31,7 +51,7 @@ use axum::Router;
 use axum::extract::{Path, Query, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::{Html, IntoResponse, Response};
-use axum::routing::get;
+use axum::routing::{get, post};
 use serde_json::Value;
 
 use crate::http::{Caller, caller};
@@ -53,6 +73,8 @@ pub fn router(kernel: Arc<Kernel>) -> Router {
         .route("/console/audit/export", get(export))
         .route("/console/attempts", get(attempts))
         .route("/console/pending", get(pending))
+        // The one mutating route in v1. It records a signature; it does not create one.
+        .route("/console/pending/{request_hash}/decide", post(decide))
         .route("/console/mandates", get(mandates))
         .route("/console/streams", get(streams))
         .route("/console/streams/{stream}/verify", get(verify))
@@ -193,6 +215,64 @@ pub struct RejectionRow {
     pub claimed_kind: String,
 }
 
+/// One parked request in the kernel-native pending queue (§06 §4.3).
+pub struct PendingRow {
+    /// `object-hash` of the request — what a signature covers.
+    pub request_hash: String,
+    /// Short form, for a table cell.
+    pub short: String,
+    /// The subject that asked.
+    pub subject: String,
+    /// The key that will sign the effect, and that any approval binds.
+    pub subject_key: String,
+    /// The authenticated caller that submitted the request, which need not be the subject it names.
+    pub submitted_by: String,
+    /// Emitting component.
+    pub component: String,
+    /// Weight class.
+    pub class: String,
+    /// Action type.
+    pub action: String,
+    /// Thing acted upon.
+    pub target: String,
+    /// `object-hash` of the call's arguments — what the approval pins, not what it displays.
+    pub args_hash: String,
+    /// The mandate the effect will cite.
+    pub mandate_ref: String,
+    /// Short form of the mandate.
+    pub mandate_short: String,
+    /// The policy version that classified it.
+    pub policy_version: String,
+    /// When the component asked.
+    pub requested_at: String,
+    /// When the request stops being answerable.
+    pub not_after: String,
+    /// Whether that moment has passed. A timed-out gate is a block, never an allow (§06 §4.6).
+    pub expired: bool,
+    /// How many channels delivered an approver ping.
+    pub notified: String,
+    /// How many failed.
+    pub notify_failures: String,
+    /// Why the last one failed, if one did.
+    pub notify_failure: String,
+    /// The exact request object, rendered so an approver reads what they would be signing over.
+    pub request_json: String,
+    /// This caller's CSRF token for this request.
+    pub csrf: String,
+    /// `approve` or `deny`, once a human has answered.
+    pub verdict: String,
+    /// Their stated reason, for a denial.
+    pub reason: String,
+    /// The key that signed the answer.
+    pub decided_by: String,
+    /// When.
+    pub decided_at: String,
+    /// The chained envelope the answer was recorded as (§06 §5).
+    pub decision_envelope: String,
+    /// Short form of that envelope id.
+    pub decision_short: String,
+}
+
 /// One link of a mandate walk.
 pub struct ChainLink {
     /// How many delegated hops from the leaf.
@@ -291,6 +371,9 @@ struct AttemptsPage {
 #[template(path = "pending.html")]
 struct PendingPage {
     title: &'static str,
+    channels: String,
+    parked: Vec<PendingRow>,
+    answered: Vec<PendingRow>,
     rows: Vec<Row>,
     denied: Vec<Row>,
 }
@@ -531,11 +614,29 @@ async fn attempts(State(kernel): State<Arc<Kernel>>, headers: HeaderMap) -> Resp
     })
 }
 
+/// The daily driver (`docs/design/console.md` §1): everything waiting on a named human.
+///
+/// Three sections, and the distinction between them is the point. **Parked** requests are the
+/// kernel-native queue (§06 §4.3) — questions nobody has answered. **Answered** requests carry a
+/// human's signature, including the denials, with the reason they gave. **Blocked** effect envelopes
+/// are the older surface: actions that did not reach the world and whose emitting component holds
+/// the park itself. A page that merged them would tell an approver that something needs them when
+/// it is already decided, or the reverse.
 async fn pending(State(kernel): State<Arc<Kernel>>, headers: HeaderMap) -> Response {
-    if let Caller::Refused(response) = caller(&kernel, &headers) {
-        return response;
-    }
+    let subject = match caller(&kernel, &headers) {
+        Caller::Subject(subject) => subject,
+        Caller::Refused(response) => return response,
+    };
     let store = kernel.ingest.store();
+    let now = kernel.ingest.clock().now();
+    let parked = match store.gate_queue(false, &now, 1_000).await {
+        Ok(rows) => rows,
+        Err(e) => return unavailable(&e),
+    };
+    let answered = match store.gate_queue(true, &now, 1_000).await {
+        Ok(rows) => rows,
+        Err(e) => return unavailable(&e),
+    };
     let blocked = match store
         .query(&EnvelopeQuery {
             outcome: Some("blocked"),
@@ -560,9 +661,313 @@ async fn pending(State(kernel): State<Arc<Kernel>>, headers: HeaderMap) -> Respo
     };
     render(&PendingPage {
         title: "Pending approvals",
+        channels: kernel.notifier.channel_count().to_string(),
+        parked: parked
+            .iter()
+            .map(|r| pending_row(r, &kernel, &subject))
+            .collect(),
+        answered: answered
+            .iter()
+            .map(|r| pending_row(r, &kernel, &subject))
+            .collect(),
         rows: blocked.iter().map(row).collect(),
         denied: denied.iter().map(row).collect(),
     })
+}
+
+/// Record a named human's answer to a parked request — the console's only mutating capability.
+///
+/// # What this route does and does not do
+///
+/// It **does not decide anything**. It receives a `gate-decision` object that a human already signed
+/// with a key this kernel has never held, checks it against §06 §1.2 and against the request it
+/// claims to answer, and then submits a `gate-decision` envelope through the ordinary ingest
+/// pipeline so the answer is chained and checkpointed like every other fact (§06 §5).
+///
+/// The envelope's own signature is the **kernel's**, and it attests only receipt and chain position
+/// — exactly what the kernel's signature on a rejection record attests. The *authority* is the inner
+/// object, and [`crate::ingest`] re-verifies that independently, so a kernel-signed envelope wrapping
+/// a forged decision is refused by the same code path that would refuse it from anyone else.
+async fn decide(
+    State(kernel): State<Arc<Kernel>>,
+    headers: HeaderMap,
+    Path(request_hash): Path<String>,
+    body: axum::body::Bytes,
+) -> Response {
+    let subject = match caller(&kernel, &headers) {
+        Caller::Subject(subject) => subject,
+        Caller::Refused(response) => return response,
+    };
+    let form = headers
+        .get(axum::http::header::CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .is_some_and(|value| value.starts_with("application/x-www-form-urlencoded"));
+    let (csrf, decision) = match submitted_decision(&body, form) {
+        Ok(parts) => parts,
+        Err(e) => return decision_refusal(form, StatusCode::BAD_REQUEST, e.code(), e.detail()),
+    };
+
+    // CSRF before anything is read from the store, so a forged cross-site post cannot even probe
+    // which request hashes exist.
+    if !kernel.csrf_ok(&subject, &request_hash, &csrf) {
+        return decision_refusal(
+            form,
+            StatusCode::FORBIDDEN,
+            "console-csrf-invalid",
+            "this form was not issued to this caller by this kernel for this request",
+        );
+    }
+
+    let store = kernel.ingest.store();
+    let request = match store.gate_request(&request_hash).await {
+        Ok(Some((request, _))) => request,
+        Ok(None) => {
+            return decision_refusal(
+                form,
+                StatusCode::NOT_FOUND,
+                "not-found",
+                "no such parked request",
+            );
+        }
+        Err(e) => return unavailable(&e),
+    };
+    let now = kernel.ingest.clock().now();
+    let requested_at = request["requested-at"].as_str().unwrap_or(&now).to_owned();
+    let queued = match crate::gatequeue::validate(&request, &requested_at) {
+        Ok(queued) => queued,
+        Err(e) => return unavailable(&e),
+    };
+    let checked = match crate::gatequeue::check_decision(&decision, &queued) {
+        Ok(checked) => checked,
+        Err(e) => {
+            return decision_refusal(form, StatusCode::UNPROCESSABLE_ENTITY, e.code(), e.detail());
+        }
+    };
+
+    // §06 §5, the approver set — resolved by ingest, so the console cannot hold a second opinion.
+    let approvers = match kernel
+        .ingest
+        .approvers_for(&queued.classification, &queued.action, &checked.decided_at)
+        .await
+    {
+        Ok(approvers) => approvers,
+        Err(e) => return unavailable(&e),
+    };
+    if !approvers.contains(&checked.decided_by) {
+        return decision_refusal(
+            form,
+            StatusCode::FORBIDDEN,
+            "gate-approver-not-permitted",
+            &format!("{} may not answer this request", checked.decided_by),
+        );
+    }
+    // §06 §5 again, over the *subject*: a human holding a second key is still the same human, and
+    // self-approval is prohibited for the person, not the keypair.
+    let roots = match store.roots_at(&checked.decided_at).await {
+        Ok(roots) => roots,
+        Err(e) => return unavailable(&e),
+    };
+    if roots
+        .iter()
+        .any(|(key, named)| key == &checked.decided_by && named == &queued.subject)
+    {
+        return decision_refusal(
+            form,
+            StatusCode::FORBIDDEN,
+            "gate-self-approval",
+            "a subject may not answer its own request",
+        );
+    }
+
+    match submit_decision(&kernel, &request_hash, &checked.decision).await {
+        Ok(envelope_id) => {
+            if form {
+                // A browser gets a redirect so a refresh cannot repost the decision. The signature
+                // is single-use at ingest anyway; this is politeness, not the defence.
+                return (
+                    StatusCode::SEE_OTHER,
+                    [(axum::http::header::LOCATION, "/console/pending")],
+                )
+                    .into_response();
+            }
+            json_response(
+                StatusCode::CREATED,
+                &serde_json::json!({
+                    "stozher": stozher_core::VERSION,
+                    "result": "recorded",
+                    "request-hash": request_hash,
+                    "decision": checked.verdict,
+                    "decided-by": checked.decided_by.as_str(),
+                    "envelope-id": envelope_id
+                }),
+            )
+        }
+        Err((code, _)) if code == crate::codes::STORE_UNAVAILABLE => unavailable(
+            &stozher_core::error::Error::new(crate::codes::STORE_UNAVAILABLE, "recording refused"),
+        ),
+        Err((code, detail)) => {
+            decision_refusal(form, StatusCode::UNPROCESSABLE_ENTITY, &code, &detail)
+        }
+    }
+}
+
+/// Build, sign and submit the `gate-decision` envelope (§06 §5).
+///
+/// The kernel's core stream is written by more than this route — genesis, root changes, policy
+/// publication — so the chain position is taken under contention and retried a bounded number of
+/// times. A retry re-signs, because `seq` and `prev-hash` are inside the signed bytes.
+async fn submit_decision(
+    kernel: &Kernel,
+    request_hash: &str,
+    decision: &Value,
+) -> std::result::Result<String, (String, String)> {
+    const ATTEMPTS: usize = 8;
+    let unavailable = |e: stozher_core::error::Error| (e.code().to_owned(), e.detail().to_owned());
+    let stream = kernel.config.kernel_core_stream.clone();
+    let mut last = None;
+    for _ in 0..ATTEMPTS {
+        let head = kernel
+            .ingest
+            .store()
+            .stream_head(&stream)
+            .await
+            .map_err(unavailable)?;
+        let (seq, prev) = match head {
+            Some((head_seq, head_id)) => (head_seq + 1, Some(head_id)),
+            None => (0, None),
+        };
+        let key = kernel.ingest.kernel_key();
+        let envelope = key
+            .sign(&serde_json::json!({
+                "v": stozher_core::VERSION,
+                "kind": "gate-decision",
+                "emitted-at": kernel.ingest.clock().now(),
+                "stream": stream,
+                "seq": seq,
+                "prev-hash": prev,
+                "identity": {
+                    "subject": "agent:kernel",
+                    "key": key.id().as_str(),
+                    "component": "kernel"
+                },
+                "decision-of": request_hash,
+                "decision": decision
+            }))
+            .map_err(unavailable)?;
+        let request = serde_json::json!({ "envelope": envelope, "payloads": [] });
+        let raw = stozher_core::jcs::canonicalize(&request).map_err(unavailable)?;
+        match kernel
+            .ingest
+            .submit(raw.as_bytes(), Some("agent:kernel"))
+            .await
+        {
+            crate::Outcome::Accepted(appended) => return Ok(appended.id),
+            crate::Outcome::Rejected { reason, detail, .. }
+                if reason == "chain-seq-duplicate" || reason == "chain-prev-hash-mismatch" =>
+            {
+                last = Some((reason, detail));
+            }
+            crate::Outcome::Rejected { reason, detail, .. } => return Err((reason, detail)),
+            crate::Outcome::Unavailable(detail) => {
+                return Err((crate::codes::STORE_UNAVAILABLE.to_owned(), detail));
+            }
+        }
+    }
+    Err(last.unwrap_or_else(|| {
+        (
+            crate::codes::STORE_UNAVAILABLE.to_owned(),
+            "the kernel's core stream is too contended to record the decision".to_owned(),
+        )
+    }))
+}
+
+/// Pull `(csrf, decision)` out of a JSON or form-encoded submission.
+fn submitted_decision(body: &[u8], form: bool) -> stozher_core::error::Result<(String, Value)> {
+    use stozher_core::error::Error;
+
+    let text = std::str::from_utf8(body)
+        .map_err(|e| Error::new("jcs-malformed-json", format!("body is not UTF-8: {e}")))?;
+    let (csrf, decision) = if form {
+        let mut csrf = String::new();
+        let mut decision = String::new();
+        for pair in text.split('&') {
+            let (name, value) = pair.split_once('=').unwrap_or((pair, ""));
+            match name {
+                "csrf" => csrf = form_decode(value),
+                "decision" => decision = form_decode(value),
+                _ => {}
+            }
+        }
+        (csrf, stozher_core::jcs::parse(&decision)?)
+    } else {
+        let body = stozher_core::jcs::parse(text)?;
+        (
+            body["csrf"].as_str().unwrap_or_default().to_owned(),
+            body.get("decision")
+                .cloned()
+                .ok_or_else(|| Error::new("schema-missing-member", "decision"))?,
+        )
+    };
+    if csrf.is_empty() {
+        return Err(Error::new("schema-missing-member", "csrf"));
+    }
+    Ok((csrf, decision))
+}
+
+/// `application/x-www-form-urlencoded` value decoding.
+fn form_decode(value: &str) -> String {
+    let octets = value.as_bytes();
+    let mut out = Vec::with_capacity(octets.len());
+    let mut index = 0;
+    while index < octets.len() {
+        match octets[index] {
+            b'+' => {
+                out.push(b' ');
+                index += 1;
+            }
+            b'%' if index + 2 < octets.len() => {
+                match u8::from_str_radix(&value[index + 1..index + 3], 16) {
+                    Ok(byte) => {
+                        out.push(byte);
+                        index += 3;
+                    }
+                    Err(_) => {
+                        out.push(b'%');
+                        index += 1;
+                    }
+                }
+            }
+            byte => {
+                out.push(byte);
+                index += 1;
+            }
+        }
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
+fn decision_refusal(form: bool, status: StatusCode, code: &str, reason: &str) -> Response {
+    if form {
+        return notice(
+            status,
+            "The decision was refused",
+            &format!("{code}: {reason}"),
+        );
+    }
+    json_response(
+        status,
+        &serde_json::json!({
+            "stozher": stozher_core::VERSION,
+            "result": "rejected",
+            "reason-code": code,
+            "reason": reason,
+            "retryable": false
+        }),
+    )
+}
+
+fn json_response(status: StatusCode, value: &Value) -> Response {
+    (status, axum::Json(value.clone())).into_response()
 }
 
 async fn mandates(State(kernel): State<Arc<Kernel>>, headers: HeaderMap) -> Response {
@@ -824,11 +1229,16 @@ impl Counts {
                 .await
                 .map(|records| records.len())
         };
+        let now = kernel.ingest.clock().now();
         Ok(Self {
             envelopes: usize::try_from(store.envelope_count().await?).unwrap_or(usize::MAX),
             attempts: count(Some("attempted"), false).await?,
             violations: count(None, true).await?,
-            pending: count(Some("blocked"), false).await?,
+            // What actually needs a human: unanswered parked requests plus effects that did not
+            // reach the world and are waiting. Counting only the second undercounted the queue by
+            // exactly the amount ADR-0008 §A said the kernel could not see.
+            pending: store.gate_queue(false, &now, 10_000).await?.len()
+                + count(Some("blocked"), false).await?,
             rejections: store.rejections(None, 10_000).await?.len(),
         })
     }
@@ -861,6 +1271,50 @@ fn row(record: &Value) -> Row {
             None => "—".to_owned(),
         },
         decided_by: text(&envelope["authorization"]["decision"]["sig"]["key"]),
+    }
+}
+
+fn pending_row(record: &Value, kernel: &Kernel, caller_subject: &str) -> PendingRow {
+    let request_hash = text(&record["request-hash"]);
+    let mandate_ref = text(&record["mandate-ref"]);
+    let decision_envelope = record["decision-envelope-id"]
+        .as_str()
+        .unwrap_or("")
+        .to_owned();
+    PendingRow {
+        short: short(&request_hash),
+        // The request is shown in full, canonicalized, because an approver signs over its hash and
+        // is owed the bytes that hash covers — a summary would be a different object.
+        request_json: stozher_core::jcs::canonicalize(&record["request"])
+            .unwrap_or_else(|_| "—".to_owned()),
+        csrf: kernel.csrf_token(caller_subject, &request_hash),
+        request_hash,
+        subject: text(&record["subject"]),
+        subject_key: text(&record["subject-key"]),
+        submitted_by: text(&record["submitted-by"]),
+        component: text(&record["component"]),
+        class: text(&record["classification"]),
+        action: text(&record["action"]),
+        target: text(&record["target"]),
+        args_hash: short(&text(&record["args-hash"])),
+        mandate_short: short(&mandate_ref),
+        mandate_ref,
+        policy_version: text(&record["policy-version"]),
+        requested_at: text(&record["requested-at"]),
+        not_after: text(&record["not-after"]),
+        expired: record["expired"].as_bool().unwrap_or(false),
+        notified: text(&record["notified"]),
+        notify_failures: text(&record["notify-failures"]),
+        notify_failure: record["last-notify-failure"]
+            .as_str()
+            .unwrap_or("")
+            .to_owned(),
+        verdict: record["verdict"].as_str().unwrap_or("").to_owned(),
+        reason: text(&record["reason"]),
+        decided_by: text(&record["decided-by"]),
+        decided_at: text(&record["decided-at"]),
+        decision_short: short(&decision_envelope),
+        decision_envelope,
     }
 }
 
