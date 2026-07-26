@@ -118,6 +118,50 @@ pub async fn emit_all(
     Ok(results)
 }
 
+/// Run [`emit_all`] forever, once per `policy.checkpoint-interval` (§04 §4.6).
+///
+/// "The kernel MUST emit a checkpoint per stream at least every `policy.checkpoint-interval`" — so
+/// this is a loop the service owns, not an operator's cron entry. The interval is re-read from the
+/// policy each tick, so publishing a policy that checkpoints more often takes effect without a
+/// restart. Failures are logged and the loop continues: a stream that cannot be checkpointed now
+/// must not stop every other stream from being checkpointed.
+pub async fn run_interval(ingest: Ingest, checkpoint_stream: String) {
+    loop {
+        let seconds = match ingest.store().current_policy().await {
+            Ok(Some(document)) => crate::policy::Policy::parse(&document, ingest.policy_key())
+                .map_or(3_600, |policy| policy.checkpoint_interval_seconds()),
+            // With no policy in force there is nothing to checkpoint yet, and nothing has been
+            // appended that could need it. Wait a short while and look again.
+            Ok(None) => 60,
+            Err(e) => {
+                tracing::error!(error = %e, "cannot read the policy for the checkpoint interval");
+                60
+            }
+        };
+        tokio::time::sleep(std::time::Duration::from_secs(
+            u64::try_from(seconds).unwrap_or(3_600).max(1),
+        ))
+        .await;
+
+        match emit_all(&ingest, &checkpoint_stream).await {
+            Ok(results) => {
+                for (stream, outcome) in results {
+                    match outcome {
+                        Ok(Some(seq)) => {
+                            tracing::info!(stream = %stream, seq, "checkpointed");
+                        }
+                        Ok(None) => {}
+                        Err(reason) => {
+                            tracing::error!(stream = %stream, %reason, "checkpoint failed");
+                        }
+                    }
+                }
+            }
+            Err(e) => tracing::error!(error = %e, "the checkpoint run could not list streams"),
+        }
+    }
+}
+
 /// Payload decay, with the checkpoint that must precede it (§04 §4.6, §5.4).
 ///
 /// "Deletion MUST be preceded by a checkpoint of every affected stream", so the pre-deletion head is

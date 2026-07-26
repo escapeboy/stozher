@@ -163,6 +163,12 @@ impl Ingest {
         &self.kernel_key
     }
 
+    /// The organization's policy key, which every policy document is verified against.
+    #[must_use]
+    pub fn policy_key(&self) -> &KeyId {
+        &self.config.policy_key
+    }
+
     /// Submit an ingest request: `{ "envelope": …, "payloads": [ … ] }`.
     ///
     /// A refusal is recorded in the kernel's rejection stream before this returns, with the reason

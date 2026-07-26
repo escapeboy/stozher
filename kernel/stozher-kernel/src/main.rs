@@ -185,15 +185,24 @@ async fn serve(kernel: Arc<Kernel>, bind: &str) -> ExitCode {
         checkpoint_key = %kernel.ingest.kernel_key().id(),
         "stozher-kernel listening"
     );
+    // §04 §4.6: the kernel emits a checkpoint per stream at least every `checkpoint-interval`, so a
+    // rebuilt chain always contradicts a published head. The service owns the loop; it is not left
+    // to an operator to remember.
+    let checkpointer = tokio::spawn(checkpoint::run_interval(
+        kernel.ingest.clone(),
+        kernel.config.checkpoint_stream.clone(),
+    ));
+
     let app = http::router(Arc::clone(&kernel));
     let shutdown = async {
         let _ = tokio::signal::ctrl_c().await;
         tracing::info!("shutting down");
     };
-    match axum::serve(listener, app)
+    let outcome = axum::serve(listener, app)
         .with_graceful_shutdown(shutdown)
-        .await
-    {
+        .await;
+    checkpointer.abort();
+    match outcome {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
             eprintln!("server failed: {e}");
