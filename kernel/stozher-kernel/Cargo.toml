@@ -1,0 +1,14 @@
+[package]
+name = "stozher-kernel"
+description = "Stozher kernel binary: event store, ingest, policy distribution, gates (built in S1)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+stozher-core = { path = "../stozher-core" }
+
+[lints]
+workspace = true
