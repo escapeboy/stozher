@@ -794,17 +794,40 @@ impl World {
         green_conformance: bool,
     ) -> (Value, Vec<Value>) {
         let hash = jcs::object_hash(manifest).expect("manifest hash");
-        if green_conformance {
+        let target = format!("manifest:{hash}");
+        let already_green = self
+            .ingest()
+            .store()
+            .conformance_run_is_green(&hash)
+            .await
+            .expect("reading conformance state");
+        if green_conformance && !already_green {
+            // The run carries a root's approval like the registration it unlocks: it is the claim
+            // the root's registration signature ultimately rests on (§08 §3.3). That approval is
+            // single-use, so a fixture registering the same manifest twice reuses the run it already
+            // has rather than trying to spend the same signature again.
+            let run_authorization = self.authorize(&Ask {
+                requester: &self.agent,
+                component: "gateway",
+                mandate_ref: &self.standing_mandate,
+                policy_version: &self.policy_version,
+                classification: "benign",
+                action: "kernel.conformance_run",
+                target: &target,
+                args_hash: &hash,
+            });
             let run = self
                 .effect(
                     "kernel.conformance_run",
                     "benign",
-                    json!({ "execution": { "target": format!("manifest:{hash}"), "args-hash": hash } }),
+                    json!({
+                        "execution": { "target": target, "args-hash": hash },
+                        "authorization": run_authorization
+                    }),
                 )
                 .await;
             self.accept(&run, &[]).await;
         }
-        let target = format!("manifest:{hash}");
         let authorization = self.authorize(&Ask {
             requester: &self.agent,
             component: "gateway",

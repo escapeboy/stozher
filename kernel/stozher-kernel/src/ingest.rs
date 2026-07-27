@@ -30,6 +30,7 @@ use std::sync::Arc;
 
 use serde_json::{Map, Value};
 use stozher_core::error::{Error, Result};
+use stozher_core::gate::Approver;
 use stozher_core::mandate::{
     GrantParams, MandateRequest, VerifyParams, verify_grant, verify_mandate_chain,
     verify_mandate_chain_unscoped, verify_revocation,
@@ -54,11 +55,18 @@ const EFFECT_KINDS: [&str; 3] = ["effect", "policy-change", "aggregate"];
 /// org's `gate-rules` say: policy publication (§05 §5.2), component registration (§08 §3.1) and
 /// changes to the root set itself (§03 §6). Policy cannot lower the bar on the mechanism that
 /// enforces policy.
-const ROOT_APPROVED_ACTIONS: [&str; 4] = [
+///
+/// `kernel.conformance_run` is here for the same reason rather than a different one. §08 §3.3 makes
+/// registration conditional on a green run, and the kernel verifies that condition by finding an
+/// applied envelope claiming one — so the root who approves the *registration* is approving on the
+/// strength of a claim whose only property was that it existed. Whoever could emit the run decided
+/// what the root was agreeing to. The claim now costs what the thing it unlocks costs.
+const ROOT_APPROVED_ACTIONS: [&str; 5] = [
     "kernel.publish_policy",
     "kernel.register_component",
     "kernel.enroll_root",
     "kernel.retire_root",
+    "kernel.conformance_run",
 ];
 
 /// The result of a submission.
@@ -538,13 +546,14 @@ impl Ingest {
                     .await?,
                 );
                 plan.effective_class = Some(declared_class.to_owned());
-                let ok = gate::verify_authorization(env, true, roots, &HashSet::new())?
+                let root_approvers = self.root_approvers(emitted_at).await?;
+                let ok = gate::verify_authorization(env, true, &root_approvers, &HashSet::new())?
                     .ok_or_else(|| {
-                        Error::new(
-                            "gate-authorization-missing",
-                            "the first policy must carry a root's approval signature",
-                        )
-                    })?;
+                    Error::new(
+                        "gate-authorization-missing",
+                        "the first policy must carry a root's approval signature",
+                    )
+                })?;
                 plan.gate_use = Some(GateUse {
                     request_hash: ok.request_hash,
                     decided_by: ok.decided_by.as_str().to_owned(),
@@ -688,7 +697,7 @@ impl Ingest {
             // Policy cannot lower the bar on the mechanism that enforces policy: publishing a
             // policy version, registering a component and changing the root set are approved by an
             // enrolled human root, whatever `gate-rules` says (§05 §5.2, §08 §3.1, §03 §6).
-            roots.to_vec()
+            self.root_approvers(emitted_at).await?
         } else {
             match &decision {
                 Decision::Gate { approvers } => {
@@ -697,6 +706,16 @@ impl Ingest {
                 Decision::Allow | Decision::Deny => Vec::new(),
             }
         };
+
+        // §06 §1.1 and §1.2 are shape rules — "All members are REQUIRED. Unknown members MUST be
+        // rejected" — and until now they ran only on `POST /v1/gate/requests` and the console's
+        // decide route. An `authorization` assembled by a component and carried straight here met
+        // neither, so the closed member set, the nonce's entropy and both timestamp formats were
+        // enforced only on the path an attacker has no reason to take. `envelope::validate` does not
+        // help: its sub-object spec stops at `{request, decision}` and does not descend.
+        if let Some(authorization) = env.get("authorization") {
+            crate::gatequeue::validate_embedded(authorization)?;
+        }
 
         let seen = match env["authorization"]["decision"]["request-hash"].as_str() {
             Some(hash) if self.store.gate_request_seen(hash).await? => {
@@ -1197,9 +1216,9 @@ impl Ingest {
         // An agent that can approve is a system with no gates (§06 §5).
         let permitted = match policy.decision_for("consequential") {
             Decision::Gate { approvers } => self.approver_keys(&approvers, at, "").await?,
-            Decision::Allow | Decision::Deny => roots.to_vec(),
+            Decision::Allow | Decision::Deny => self.root_approvers(at).await?,
         };
-        if !permitted.contains(&signer) && !roots.contains(&signer) {
+        if !permitted.iter().any(|a| a.key == signer) && !roots.contains(&signer) {
             return Err(Error::new(
                 "gate-approver-not-permitted",
                 format!("{signer} is not an approver in this deployment"),
@@ -1237,13 +1256,29 @@ impl Ingest {
 
     /// The named subject a key acts as, if the deployment knows one: an enrolled root, or a human
     /// holding a mandate. Used only to refuse self-approval by a second key of the same human.
+    ///
+    /// §06 §5 admits both approver kinds — "an enrolled human root, **or** a human holding a mandate
+    /// whose scope includes the action" — so resolving through the root set alone would leave the
+    /// second kind unresolvable, and an unresolvable subject is one the self-approval check cannot
+    /// refuse.
     async fn subject_of(&self, key: &KeyId, at: &str) -> Result<Option<String>> {
         for (root_key, subject) in self.store.roots_at(at).await? {
             if &root_key == key {
                 return Ok(Some(subject));
             }
         }
-        Ok(None)
+        self.store.mandated_subject_of(key.as_str(), at).await
+    }
+
+    /// The enrolled roots at `at`, as approvers whose subject the deployment can name (§06 §5).
+    async fn root_approvers(&self, at: &str) -> Result<Vec<Approver>> {
+        Ok(self
+            .store
+            .roots_at(at)
+            .await?
+            .into_iter()
+            .map(|(key, subject)| Approver::named(key, subject))
+            .collect())
     }
 
     async fn validate_checkpoint(&self, env: &Value, plan: &mut AppendPlan) -> Result<()> {
@@ -1357,14 +1392,8 @@ impl Ingest {
         classification: &str,
         action: &str,
         at: &str,
-    ) -> Result<Vec<KeyId>> {
-        let roots: Vec<KeyId> = self
-            .store
-            .roots_at(at)
-            .await?
-            .into_iter()
-            .map(|(key, _)| key)
-            .collect();
+    ) -> Result<Vec<Approver>> {
+        let roots = self.root_approvers(at).await?;
         // Policy cannot lower the bar on the mechanism that enforces policy (§05 §5.2, §08 §3.1,
         // §03 §6): these four are approved by an enrolled root whatever `gate-rules` says.
         if ROOT_APPROVED_ACTIONS.contains(&action) {
@@ -1385,16 +1414,19 @@ impl Ingest {
     /// An approver is an enrolled human root, or a human holding a mandate whose scope includes the
     /// action being approved. Never a group, a role or a rotation — a rotation may decide whom to
     /// notify, but the signature is always one person's.
+    /// Each key is returned with the subject it was resolved *from*, because that is what makes the
+    /// subject half of §06 §5's self-approval prohibition checkable at all (see
+    /// [`stozher_core::gate::Approver`]).
     async fn approver_keys(
         &self,
         subjects: &[String],
         at: &str,
         action: &str,
-    ) -> Result<Vec<KeyId>> {
-        let mut keys = Vec::new();
+    ) -> Result<Vec<Approver>> {
+        let mut keys: Vec<Approver> = Vec::new();
         for (key, subject) in self.store.roots_at(at).await? {
             if subjects.iter().any(|s| s == &subject) {
-                keys.push(key);
+                keys.push(Approver::named(key, subject));
             }
         }
         for subject in subjects {
@@ -1421,8 +1453,8 @@ impl Ingest {
                 }
                 if let Some(key) = mandate["grantee"]["key"].as_str() {
                     if let Ok(key) = KeyId::parse(key) {
-                        if !keys.contains(&key) {
-                            keys.push(key);
+                        if !keys.iter().any(|a| a.key == key) {
+                            keys.push(Approver::named(key, subject.clone()));
                         }
                     }
                 }

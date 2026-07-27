@@ -791,24 +791,19 @@ async fn decide(
         Ok(approvers) => approvers,
         Err(e) => return unavailable(&e),
     };
-    if !approvers.contains(&checked.decided_by) {
+    let Some(approver) = approvers.iter().find(|a| a.key == checked.decided_by) else {
         return decision_refusal(
             form,
             StatusCode::FORBIDDEN,
             "gate-approver-not-permitted",
             &format!("{} may not answer this request", checked.decided_by),
         );
-    }
-    // §06 §5 again, over the *subject*: a human holding a second key is still the same human, and
-    // self-approval is prohibited for the person, not the keypair.
-    let roots = match store.roots_at(&checked.decided_at).await {
-        Ok(roots) => roots,
-        Err(e) => return unavailable(&e),
     };
-    if roots
-        .iter()
-        .any(|(key, named)| key == &checked.decided_by && named == &queued.subject)
-    {
+    // §06 §5 again, over the *subject*: a human holding a second key is still the same human, and
+    // self-approval is prohibited for the person, not the keypair. The subject comes from the
+    // approver resolution itself, so both kinds §06 §5 names — an enrolled root and a human holding
+    // a mandate — are covered; reading the root set alone would see only the first.
+    if approver.subject.as_deref() == Some(queued.subject.as_str()) {
         return decision_refusal(
             form,
             StatusCode::FORBIDDEN,

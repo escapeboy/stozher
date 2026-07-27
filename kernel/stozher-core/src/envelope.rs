@@ -524,7 +524,13 @@ fn require_timestamp(value: &Value, what: &str) -> Result<()> {
     }
 }
 
-fn is_timestamp(s: &str) -> bool {
+/// Whether a string is an RFC 3339 UTC timestamp in §01 §2.3's fixed form.
+///
+/// The form is fixed-width, so lexicographic order over two of these is chronological order — which
+/// is what lets `gate.rs` compare approval windows with `<` and why anything that is *not* one of
+/// these must be refused before such a comparison, not after.
+#[must_use]
+pub fn is_timestamp(s: &str) -> bool {
     let b = s.as_bytes();
     if b.len() != 24 {
         return false;

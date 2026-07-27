@@ -345,12 +345,18 @@ fn replay_mandate(report: &mut Report, id: &str, doc: &Value, vector: &Value) {
 }
 
 fn replay_authorization(report: &mut Report, id: &str, vector: &Value) {
-    let approvers: Vec<KeyId> = vector["approvers"]
+    // A vector names approver *keys* and says nothing about the humans behind them, so the subject
+    // is genuinely unknown here rather than absent-by-oversight. `None` disables only the subject
+    // half of step (4) and leaves every vector meaning exactly what it meant before.
+    let approvers: Vec<gate::Approver> = vector["approvers"]
         .as_array()
         .map(|list| {
             list.iter()
                 .filter_map(Value::as_str)
-                .map(|s| KeyId::parse(s).expect("approver key id"))
+                .map(|s| gate::Approver {
+                    key: KeyId::parse(s).expect("approver key id"),
+                    subject: None,
+                })
                 .collect()
         })
         .unwrap_or_default();

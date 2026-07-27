@@ -240,6 +240,115 @@ pub fn validate(request: &Value, at: &str) -> Result<GateRequest> {
     })
 }
 
+/// The members of a gate decision (§06 §1.2). Closed, like the request's.
+const DECISION_MEMBERS: [&str; 9] = [
+    "v",
+    "kind",
+    "request-hash",
+    "decision",
+    "decided-at",
+    "not-after",
+    "single-use",
+    "reason",
+    "sig",
+];
+
+/// Check an `authorization` object carried *inside an envelope* against §06 §1.1 and §1.2.
+///
+/// [`validate`] and [`check_decision`] run when a human submits a request or answers one. This runs
+/// on the other path — the one a component takes — where the two objects arrive already assembled
+/// and, until this exists, met no shape rule at all: `envelope::validate`'s sub-object spec stops at
+/// `{request, decision}` and does not descend. The consequence was that §06 §1.1's "unknown members
+/// MUST be rejected" was enforced only on the route an attacker has no reason to use.
+///
+/// This is deliberately *only* the shape. Every semantic check — the hash, the signature,
+/// self-approval, both windows, the member-by-member binding — stays in
+/// [`stozher_core::gate::verify_authorization`], which is where §06 §2 says it lives.
+///
+/// # Errors
+///
+/// `schema-type-mismatch`, `schema-unknown-member`, `schema-missing-member`,
+/// `envelope-version-unsupported`, `envelope-unknown-kind`, `envelope-classification-unknown`,
+/// `key-id-malformed`, `encoding-not-lowercase-hex`, `encoding-bad-timestamp`, or
+/// `gate-request-expired`.
+pub fn validate_embedded(authorization: &Value) -> Result<()> {
+    let request = authorization
+        .get("request")
+        .ok_or_else(|| Error::new("schema-missing-member", "authorization.request"))?;
+    let decision = authorization
+        .get("decision")
+        .ok_or_else(|| Error::new("schema-missing-member", "authorization.decision"))?;
+
+    // §06 §1.3 makes `authorization` exactly two members; a third is a member no signature covers.
+    if let Some(map) = authorization.as_object() {
+        for key in map.keys() {
+            if !["request", "decision"].contains(&key.as_str()) {
+                return Err(Error::new(
+                    "schema-unknown-member",
+                    format!("authorization.{key}"),
+                ));
+            }
+        }
+    }
+
+    // `requested-at` rather than the envelope's clock: an effect may legitimately be emitted after
+    // its request's `not-after` — the *decision's* window is what bounds the effect (§06 §2 step 9)
+    // — so judging the request's liveness against the emission instant would refuse valid work. The
+    // ordering constraint `not-after > requested-at` is checked either way.
+    let requested_at = request
+        .get("requested-at")
+        .and_then(Value::as_str)
+        .ok_or_else(|| Error::new("schema-missing-member", "requested-at"))?
+        .to_owned();
+    validate(request, &requested_at)?;
+
+    let map = decision
+        .as_object()
+        .ok_or_else(|| Error::new("schema-type-mismatch", "a gate decision must be an object"))?;
+    for key in map.keys() {
+        if !DECISION_MEMBERS.contains(&key.as_str()) {
+            return Err(Error::new(
+                "schema-unknown-member",
+                format!("decision.{key}"),
+            ));
+        }
+    }
+    if map.get("v").and_then(Value::as_str) != Some(stozher_core::VERSION) {
+        return Err(Error::new(
+            "envelope-version-unsupported",
+            format!("a gate decision is {}", stozher_core::VERSION),
+        ));
+    }
+    if map.get("kind").and_then(Value::as_str) != Some("gate-decision") {
+        return Err(Error::new(
+            "envelope-unknown-kind",
+            "a decision object is kind \"gate-decision\"",
+        ));
+    }
+    for name in ["request-hash", "decision", "decided-at", "not-after"] {
+        let value = map
+            .get(name)
+            .ok_or_else(|| Error::new("schema-missing-member", format!("decision.{name}")))?;
+        if !value.is_string() {
+            return Err(Error::new(
+                "schema-type-mismatch",
+                format!("decision.{name} must be a string"),
+            ));
+        }
+    }
+    if !is_digest_hex(map["request-hash"].as_str().unwrap_or_default()) {
+        return Err(Error::new(
+            "encoding-not-lowercase-hex",
+            "decision.request-hash must be 64 lowercase hex digits",
+        ));
+    }
+    // The timestamps `gate.rs` steps (8) and (9) order with `<`. A value that is not one of these
+    // makes that comparison meaningless rather than false.
+    clock::parse_timestamp(map["decided-at"].as_str().unwrap_or_default())?;
+    clock::parse_timestamp(map["not-after"].as_str().unwrap_or_default())?;
+    Ok(())
+}
+
 /// A decision as the queue records it, already checked against §06 §1.2's shape.
 #[derive(Debug, Clone)]
 pub struct GateDecision {

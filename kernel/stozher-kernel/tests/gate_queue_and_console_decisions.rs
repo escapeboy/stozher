@@ -849,6 +849,61 @@ async fn an_approver_who_is_not_the_requesters_key_but_is_the_requesters_subject
 }
 
 #[tokio::test]
+async fn a_mandate_holding_human_who_is_the_requesters_subject_is_refused_by_the_console() {
+    // The same prohibition as the test above, against the *other* approver kind §06 §5 names: "a
+    // human holding a mandate whose scope includes the action being approved". Resolving an
+    // approver's subject through the root set alone cannot see that kind at all, so a person with
+    // two mandated keys — neither of them a root key — could answer their own request.
+    let world = world().await;
+    let requester = TestKey::new(0x27, &world.root.subject);
+    let approver = TestKey::new(0x28, &world.root.subject);
+    let mandate = grant_to(&world, &requester, "0000000000000000000000000000ac01").await;
+    grant_to(&world, &approver, "0000000000000000000000000000ac02").await;
+
+    let draft = world
+        .effect(
+            "github.create_issue",
+            "consequential",
+            json!({
+                "identity": { "subject": requester.subject, "key": requester.id.as_str() }
+            }),
+        )
+        .await;
+    let request = world.action_request(&Ask {
+        requester: &requester,
+        component: "gateway",
+        mandate_ref: &mandate,
+        policy_version: &world.policy_version,
+        classification: "consequential",
+        action: "github.create_issue",
+        target: draft["execution"]["target"].as_str().expect("target"),
+        args_hash: draft["execution"]["args-hash"].as_str().expect("args-hash"),
+    });
+    let request_hash = park(&world, &request).await;
+
+    let decision = world.decide(&request, "approve", None, &approver);
+    let answer = decide_in_console(&world, &request_hash, &decision).await;
+    assert_eq!(answer.status, StatusCode::FORBIDDEN, "{}", answer.body);
+    assert_eq!(
+        answer.json()["reason-code"].as_str(),
+        Some("gate-self-approval")
+    );
+}
+
+/// A standing mandate granted to a second key of a human subject, wide enough for `github.*`.
+async fn grant_to(world: &World, holder: &TestKey, nonce: &str) -> String {
+    world
+        .grant_standing(
+            nonce,
+            json!({
+                "grantee": { "subject": holder.subject, "key": holder.id.as_str() },
+                "not-after": "2026-09-01T00:00:00.000Z"
+            }),
+        )
+        .await
+}
+
+#[tokio::test]
 async fn an_approval_decided_after_the_request_expired_is_refused() {
     let world = world().await;
     let (_, request) = draft_and_request(&world, "github.create_issue").await;
