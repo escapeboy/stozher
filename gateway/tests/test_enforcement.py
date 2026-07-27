@@ -17,6 +17,7 @@ import pytest
 
 from stozher_gateway import clock as clock_module
 from stozher_gateway.canonical import object_hash
+from stozher_gateway.chain import ChainError
 from stozher_gateway.classify import Classifier, read_shaped
 from stozher_gateway.config import GatewayConfig
 from stozher_gateway.emitter import Emitter
@@ -256,6 +257,101 @@ def test_a_signed_denial_is_recorded_with_its_reason(harness: Harness) -> None:
     assert harness.forwarded == []
     denial = [e for e in harness.chain() if e.get("execution", {}).get("outcome") == "denied"]
     assert denial and denial[0]["authorization"]["decision"]["decision"] == "deny"
+
+
+# -- write-ahead: the record before the effect (§09 §4.1, §06 §6) --------------------------------
+
+
+def test_the_record_of_an_effect_is_persisted_before_the_effect_is_applied(
+    harness: Harness,
+) -> None:
+    """`emitter-must-persist-before-apply` (§09 §4 requirement 1).
+
+    The probe runs *inside* `forward()`, which is the only moment at which the question can be
+    asked: at that instant the downstream call is about to happen, so a durable record of it must
+    already exist. Asserting afterwards would pass on an implementation that emits last.
+    """
+    _park_and_decide(harness, "create_issue", {"title": "ship it"}, approver=ROOT)
+    at_apply_time: list[list[tuple[str, dict[str, Any], list[dict[str, Any]]]]] = []
+
+    def forward() -> str:
+        at_apply_time.append(harness.store.open_intents(harness.session.stream, DEVICE.id))
+        return "upstream result for create_issue"
+
+    harness.enforcer.call(
+        harness.session,
+        Call("github", "create_issue", {"title": "ship it"}, {"type": "object", "properties": {}}),
+        forward,
+    )
+    assert at_apply_time and at_apply_time[0], "the effect was applied before its record was durable"
+    _, body, _ = at_apply_time[0][0]
+    assert body["execution"]["action"] == "github.create_issue"
+    assert body["execution"]["args-hash"] == object_hash({"title": "ship it"})
+    # Completing the call closes the write-ahead record: it is a crash marker, not a second copy.
+    assert harness.store.open_intents(harness.session.stream, DEVICE.id) == []
+
+
+def test_a_crash_between_forwarding_and_chaining_still_leaves_a_record(harness: Harness) -> None:
+    """The failure §09 §4 names: the downstream ran, then the process died before the append.
+
+    `KeyboardInterrupt` is the simulation — a `BaseException` walks straight past the emit path the
+    way a signal walks past everything — and the assertion is that the audit is not silent about an
+    effect that reached the world.
+    """
+    _park_and_decide(harness, "create_issue", {"title": "ship it"}, approver=ROOT)
+
+    def forward_then_die() -> str:
+        harness.forwarded.append("create_issue")
+        raise KeyboardInterrupt("the process was killed after the downstream applied it")
+
+    with pytest.raises(KeyboardInterrupt):
+        harness.enforcer.call(
+            harness.session,
+            Call(
+                "github", "create_issue", {"title": "ship it"}, {"type": "object", "properties": {}}
+            ),
+            forward_then_die,
+        )
+    assert harness.forwarded == ["create_issue"], "the effect happened"
+    assert harness.chain() == [], "and nothing was chained for it, because the process died"
+
+    # Restart. The next session is what turns the surviving write-ahead record into audit.
+    assert harness.enforcer.recover_intents(harness.session) == 1
+    effects = [
+        envelope
+        for envelope in harness.chain()
+        if envelope.get("execution", {}).get("action") == "github.create_issue"
+    ]
+    assert len(effects) == 1
+    assert effects[0]["execution"]["outcome"] == "attempted"
+    assert harness.enforcer.recover_intents(harness.session) == 0, "recovery is not repeatable"
+
+
+def test_a_chain_write_failure_refuses_instead_of_returning_success(
+    harness: Harness, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """§06 §6: a code path that returns success without emitting is non-conformant."""
+    _park_and_decide(harness, "create_issue", {"title": "ship it"}, approver=ROOT)
+    append = harness.emitter.append
+
+    def refuse_the_applied_record(
+        key: SigningKey,
+        stream: str,
+        body: dict[str, Any],
+        payloads: list[dict[str, Any]] | None = None,
+    ) -> str:
+        if body.get("execution", {}).get("outcome") == "applied":
+            raise ChainError("schema-missing-member", "the local chain would not take it", 3)
+        return append(key, stream, body, payloads)
+
+    monkeypatch.setattr(harness.emitter, "append", refuse_the_applied_record)
+    with pytest.raises(RefusalError) as refused:
+        harness.call("create_issue", title="ship it")
+    assert refused.value.document["reason-code"] == "chain-write-failed"
+    assert refused.value.document["result"] == "blocked"
+    assert harness.forwarded == ["create_issue"], "the effect did happen; the caller is told so"
+    # The write-ahead record survives unresolved, so the audit still gets it at the next session.
+    assert len(harness.store.open_intents(harness.session.stream, DEVICE.id)) == 1
 
 
 def test_a_stale_policy_blocks_consequential_and_still_allows_reads(harness: Harness) -> None:
