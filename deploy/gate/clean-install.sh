@@ -59,6 +59,10 @@ command -v python3 >/dev/null || fail "python3 is required to drive an MCP clien
 # ---------------------------------------------------------------------------------------------
 step "0  wiping every trace of a previous install"
 if [ "$CLEAN" = "yes" ]; then
+  # `.env` first and only then `down`: compose interpolates the whole file on every invocation, and
+  # `user:` has no default (SEC-7), so a `down` run without STOZHER_UID errors out — and this one is
+  # `|| true`, which would leave the previous install's containers standing while claiming a wipe.
+  printf 'STOZHER_UID=%s\nSTOZHER_GID=%s\n' "$(id -u)" "$(id -g)" > .env
   docker compose down --remove-orphans --volumes >/dev/null 2>&1 || true
   rm -rf var secrets genesis backups config/kernel-config.json config/stozher-gateway.toml .env
   if [ "$REBUILD" = "yes" ]; then

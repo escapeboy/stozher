@@ -33,7 +33,12 @@ services:
     # The operator's own uid, written by `bin/stozher-bootstrap`. A bind-mounted seed at mode 0600
     # is readable by exactly one account, and the kernel refuses to start on anything more
     # permissive (§09 §8) — so the two sides of the mount have to agree on who that account is.
-    user: "${STOZHER_UID:-0}:${STOZHER_GID:-0}"
+    #
+    # No default. `:-0` would mean that any path reaching `up` with an incomplete `.env` — a hand
+    # edit, a CI runner, a restored backup — runs this container as root, quietly, beside a
+    # `cap_drop: ALL` and a `no-new-privileges` chosen to prevent exactly that. Not starting is the
+    # more honest failure, and the message says what to do about it.
+    user: "${STOZHER_UID:?set STOZHER_UID and STOZHER_GID in deploy/.env — run bin/stozher-bootstrap, or add STOZHER_UID=$(id -u) and STOZHER_GID=$(id -g) by hand}:${STOZHER_GID:?set STOZHER_GID in deploy/.env alongside STOZHER_UID}"
     # Loopback by default. `spec/09 §8` requires TLS for component↔kernel traffic; this image
     # terminates none, so exposing the port beyond the host is a decision an operator makes
     # deliberately, with a TLS terminator in front — never a default they inherit.
@@ -64,7 +69,7 @@ services:
       context: ..
       dockerfile: deploy/Dockerfile.gateway
     profiles: ["mcp"]
-    user: "${STOZHER_UID:-0}:${STOZHER_GID:-0}"
+    user: "${STOZHER_UID:?set STOZHER_UID and STOZHER_GID in deploy/.env — run bin/stozher-bootstrap, or add STOZHER_UID=$(id -u) and STOZHER_GID=$(id -g) by hand}:${STOZHER_GID:?set STOZHER_GID in deploy/.env alongside STOZHER_UID}"
     depends_on:
       kernel:
         condition: service_healthy
