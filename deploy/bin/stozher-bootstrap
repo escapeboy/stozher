@@ -1,0 +1,280 @@
+#!/usr/bin/env bash
+# The root key ceremony, start to finish.
+#
+# What this does and what it refuses to do
+# ----------------------------------------
+# Every private key is generated **here**, on the machine you are typing on, and the ones that
+# matter most never move. Three seeds come out of this, and they are not interchangeable:
+#
+#   secrets/operator/operator.seed  the human root key, the bootstrap subject key and the
+#                                   organization's policy key (SLIP-0010 roles 0', 1', 4').
+#                                   **This one never goes to a server.** A server that holds it is
+#                                   a server that can sign its own approvals, which is precisely
+#                                   the property `spec/06` exists to deny it.
+#   secrets/kernel/kernel.seed      the checkpoint key (role 3'), and nothing else. The kernel
+#                                   signs checkpoints with it. It is on the server because it must
+#                                   be; it can authorize nothing.
+#   secrets/gateway/gateway.seed    the gateway's device key (role 2'), one per (caller, device).
+#
+# All three are written at mode 0600 by the binary itself, which refuses to overwrite an existing
+# one: a replaced seed orphans every signature ever made under it.
+#
+# The ceremony itself is two fully-validated envelopes (ADR-0006 §2) submitted through the ordinary
+# `POST /v1/ingest`. There is no pre-installed policy row and no privileged append path. If the
+# kernel refuses one of them, the install stops here rather than continuing into a deployment whose
+# first two records are missing.
+#
+# BEFORE YOU RUN THIS, READ THIS
+# ------------------------------
+# **Enrol a second root.** `spec/03 §1` forbids self-grant, so a human acting directly cannot
+# satisfy `mandate-ref`: they act under a mandate *another* human granted. Changing the root set is
+# therefore a two-person operation, and a deployment with one enrolled root cannot change its root
+# set at all. This is deliberate — it is the right posture for the most privileged action in the
+# system — but it is a prerequisite, not a surprise. Pass:
+#
+#     --second-root human:mira --second-root-key ed25519:<their key>
+#
+# where their key is what `stozher-kernel identity --key <their seed> --role 0` printed on *their*
+# machine. Their seed never comes near yours.
+#
+# Usage:
+#   bin/stozher-bootstrap --root human:ivan [--second-root human:mira --second-root-key ed25519:..]
+#                         [--port 8787] [--policy-version 2026.07.1] [--force]
+
+set -euo pipefail
+
+DEPLOY="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$DEPLOY"
+
+IMAGE="stozher-kernel:0.1.0"
+NETWORK="stozher_default"
+ROOT_SUBJECT=""
+SECOND_ROOT=""
+SECOND_ROOT_KEY=""
+PORT="8787"
+POLICY_VERSION="2026.07.1"
+CALLER_NAME="claude-code"
+FORCE="no"
+
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --root) ROOT_SUBJECT="$2"; shift 2 ;;
+    --second-root) SECOND_ROOT="$2"; shift 2 ;;
+    --second-root-key) SECOND_ROOT_KEY="$2"; shift 2 ;;
+    --port) PORT="$2"; shift 2 ;;
+    --policy-version) POLICY_VERSION="$2"; shift 2 ;;
+    --caller) CALLER_NAME="$2"; shift 2 ;;
+    --force) FORCE="yes"; shift ;;
+    -h|--help) sed -n '2,40p' "$0"; exit 0 ;;
+    *) echo "unknown argument $1" >&2; exit 2 ;;
+  esac
+done
+
+if [ -z "$ROOT_SUBJECT" ]; then
+  echo "--root human:<name> is required: a root is a named human, never a team (maxim 3)" >&2
+  exit 2
+fi
+case "$ROOT_SUBJECT" in human:?*) ;; *) echo "--root must be of the form human:<name>" >&2; exit 2 ;; esac
+command -v docker >/dev/null || { echo "docker is required" >&2; exit 2; }
+
+if [ -e config/kernel-config.json ] && [ "$FORCE" != "yes" ]; then
+  # Re-running a ceremony over a live deployment would generate new keys for a store whose chain is
+  # signed by the old ones. Refuse rather than produce a kernel that cannot verify its own history.
+  echo "config/kernel-config.json exists — this deployment is already bootstrapped." >&2
+  echo "To start over, remove ./var, ./secrets and ./config first (that discards the audit trail)." >&2
+  exit 2
+fi
+
+UID_GID="$(id -u):$(id -g)"
+KERNEL_URL="http://kernel:8787"
+
+say() { printf '\n\033[1m== %s\033[0m\n' "$*"; }
+
+# The operator's half of the install runs in a throwaway container off the same image, mounting the
+# operator's own directory. The long-running `kernel` service mounts `secrets/kernel` and nothing
+# else — so the seed that derives the root key is structurally absent from the service, not merely
+# absent by convention.
+operator() { docker run --rm -u "$UID_GID" -v "$DEPLOY:/work" -w /work "$IMAGE" "$@"; }
+networked() {
+  docker run --rm -u "$UID_GID" --network "$NETWORK" -e STOZHER_KERNEL_TOKEN \
+    -v "$DEPLOY:/work" -w /work "$IMAGE" "$@"
+}
+
+# `.env` first, and with the uid in it before anything else runs: compose interpolates the whole
+# file on every invocation, so `user:` has to resolve even for a plain `build`.
+umask 077
+printf 'STOZHER_UID=%s\nSTOZHER_GID=%s\nSTOZHER_KERNEL_PORT=%s\n' "$(id -u)" "$(id -g)" "$PORT" > .env
+chmod 600 .env
+umask 022
+
+say "1/8  building the kernel image"
+docker compose build kernel
+
+say "2/8  generating keys on this machine"
+mkdir -p secrets/operator secrets/kernel secrets/gateway config var var/gateway var/notes genesis
+chmod 700 secrets secrets/operator secrets/kernel secrets/gateway
+[ -f secrets/operator/operator.seed ] || operator keygen --out secrets/operator/operator.seed >/dev/null
+[ -f secrets/kernel/kernel.seed ]     || operator keygen --out secrets/kernel/kernel.seed >/dev/null
+[ -f secrets/gateway/gateway.seed ]   || operator keygen --out secrets/gateway/gateway.seed >/dev/null
+operator identity --key secrets/operator/operator.seed
+
+say "3/8  the ceremony — two envelopes, signed offline"
+second=()
+if [ -n "$SECOND_ROOT" ] || [ -n "$SECOND_ROOT_KEY" ]; then
+  [ -n "$SECOND_ROOT" ] && [ -n "$SECOND_ROOT_KEY" ] || {
+    echo "--second-root and --second-root-key are given together" >&2; exit 2; }
+  second=(--second-root "$SECOND_ROOT" --second-root-key "$SECOND_ROOT_KEY")
+fi
+ceremony_output="$(operator genesis \
+  --key secrets/operator/operator.seed \
+  --root "$ROOT_SUBJECT" \
+  --policy-version "$POLICY_VERSION" \
+  --caller "agent:gateway" \
+  --console-url "http://127.0.0.1:${PORT}" \
+  --out genesis "${second[@]}")"
+printf '%s\n' "$ceremony_output"
+KERNEL_TOKEN="$(printf '%s\n' "$ceremony_output" | awk '$1=="caller-token" && $2=="agent:gateway" {print $3}')"
+[ -n "$KERNEL_TOKEN" ] || { echo "the ceremony produced no caller token" >&2; exit 1; }
+cp genesis/kernel-config.json config/kernel-config.json
+
+# The gateway authenticates its own caller with a second token (§10 §1.1). Generated here so that
+# no secret is ever a literal in a file that gets committed, copied or pasted. The digest is what
+# the gateway's configuration keeps; the token itself only ever reaches `.env`.
+caller_credential="$(operator token)"
+CALLER_TOKEN="$(printf '%s\n' "$caller_credential" | awk '$1=="token" {print $2}')"
+CALLER_TOKEN_SHA="$(printf '%s\n' "$caller_credential" | awk '$1=="token-sha256" {print $2}')"
+[ -n "$CALLER_TOKEN" ] && [ -n "$CALLER_TOKEN_SHA" ] || { echo "no caller token generated" >&2; exit 1; }
+
+say "4/8  writing .env"
+umask 077
+cat > .env <<ENV
+# Written by bin/stozher-bootstrap. Mode 0600, git-ignored, and the only file here holding secrets.
+STOZHER_UID=$(id -u)
+STOZHER_GID=$(id -g)
+STOZHER_KERNEL_PORT=${PORT}
+STOZHER_GATEWAY_CALLER=${CALLER_NAME}
+# The gateway presents this to the kernel (§05 §2.2). The kernel stores only its SHA-256.
+STOZHER_KERNEL_TOKEN=${KERNEL_TOKEN}
+# The MCP client presents this to the gateway. Same rule, one layer out.
+STOZHER_GATEWAY_CALLER_TOKEN=${CALLER_TOKEN}
+ENV
+chmod 600 .env
+umask 022
+echo "wrote .env (mode 0600)"
+
+say "5/8  starting the kernel"
+docker compose up -d kernel
+export STOZHER_KERNEL_TOKEN="$KERNEL_TOKEN"
+networked await-health --url "$KERNEL_URL" --timeout 90
+
+say "6/8  submitting genesis"
+echo "-- seq 0: the interactive root mandate"
+networked submit --url "$KERNEL_URL" --file genesis/01-root-mandate.json
+echo "-- seq 1: the first policy, approved by ${ROOT_SUBJECT}"
+networked submit --url "$KERNEL_URL" --file genesis/02-first-policy.json
+
+say "7/8  granting the gateway a mandate"
+# §10 §1.4: a session with no resolvable mandate is refused at connect time, and §03 §1 forbids the
+# gateway from granting itself one. This is the root doing it, in the root's own process.
+DEVICE_KEY="$(operator identity --key secrets/gateway/gateway.seed --role 2 --index 0)"
+CALLER_SUBJECT="agent:${CALLER_NAME}/$(hostname -s 2>/dev/null || echo local)"
+operator grant \
+  --key secrets/operator/operator.seed \
+  --root "$ROOT_SUBJECT" \
+  --grantee "$CALLER_SUBJECT" \
+  --grantee-key "$DEVICE_KEY" \
+  --days 30 \
+  --components gateway \
+  --actions '*' \
+  --out secrets/gateway/mandate.json
+
+POLICY_KEY="$(operator identity --key secrets/operator/operator.seed --role 4 --index 0)"
+ROOT_KEY="$(operator identity --key secrets/operator/operator.seed --role 0 --index 0)"
+{
+  cat <<TOML
+# Written by bin/stozher-bootstrap. The gateway owns this file and never reads harbormaster.toml
+# (ADR-0005): an [enforcement] section there would be a hard boot failure for anyone running
+# vanilla Harbormaster, which is strictly worse than not shipping the plugin at all.
+#
+# No secret appears below. Credentials are named by environment variable, never inlined.
+
+[gateway]
+enabled = true
+device = "$(hostname -s 2>/dev/null || echo local)"
+# Harbormaster's own tools are actions too (§10 §8). Off here so that the first session shows the
+# design partner *their* tools in the audit trail rather than ours; turn it on when that is what
+# you want to govern.
+govern_native_tools = false
+aggregate_max_events = 200
+
+[kernel]
+url = "http://kernel:8787"
+token_env = "STOZHER_KERNEL_TOKEN"
+timeout_seconds = 5.0
+policy_refresh_seconds = 30
+
+[identity]
+seed_file = "/var/lib/stozher/gateway/gateway.seed"
+
+[org]
+policy_key = "${POLICY_KEY}"
+
+[[org.roots]]
+subject = "${ROOT_SUBJECT}"
+key = "${ROOT_KEY}"
+TOML
+  if [ -n "$SECOND_ROOT" ]; then
+    cat <<TOML
+
+[[org.roots]]
+subject = "${SECOND_ROOT}"
+key = "${SECOND_ROOT_KEY}"
+TOML
+  fi
+  cat <<TOML
+
+[[callers]]
+name = "${CALLER_NAME}"
+subject = "${CALLER_SUBJECT}"
+key_index = 0
+token_sha256 = "${CALLER_TOKEN_SHA}"
+mandate_file = "/var/lib/stozher/gateway/mandate.json"
+mandate_kind = "standing"
+
+# The downstream server that ships in the image, so there is something to call in the first
+# fifteen minutes. Replace it with your own; the gateway fronts whatever you declare here.
+[[servers]]
+name = "notes"
+transport = "stdio"
+command = "python"
+args = ["/opt/stozher-demo/notes_server.py"]
+TOML
+} > config/stozher-gateway.toml
+echo "wrote config/stozher-gateway.toml"
+
+say "8/8  verifying the chain"
+docker compose exec -T kernel stozher-kernel verify --config /etc/stozher/kernel-config.json
+
+cat <<DONE
+
+  The deployment is up.
+
+  Console      http://127.0.0.1:${PORT}/console
+               It authenticates with the kernel's Bearer credential; see deploy/README.md for the
+               two ways to reach it from a browser.
+  Root         ${ROOT_SUBJECT}  ${ROOT_KEY}
+  Caller       ${CALLER_SUBJECT}
+
+  Point an MCP client at the gateway (Claude Code):
+
+    claude mcp add stozher -- docker compose -f ${DEPLOY}/docker-compose.yml run --rm -T gateway
+
+DONE
+if [ -z "$SECOND_ROOT" ]; then
+  cat >&2 <<'WARN'
+  WARNING: one enrolled root. Changing the root set needs a mandate another human granted
+  (spec 03 section 1 forbids self-grant), so with one root you cannot change the root set at all.
+  Enrol a second before you need one.
+
+WARN
+fi

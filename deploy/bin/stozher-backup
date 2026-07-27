@@ -1,0 +1,92 @@
+#!/usr/bin/env bash
+# Back up everything a deployment cannot be rebuilt without.
+#
+# Three things, and losing any one of them is a different kind of loss:
+#
+#   the store    the audit trail itself. Losing it loses the record.
+#   the keys     the operator seed derives the human root, the bootstrap subject and the policy key.
+#                Losing it means no further policy can be published and no root set can change —
+#                the deployment becomes read-only for ever. Every seed is copied at mode 0600, and
+#                the archive is written 0600, because a backup of a private key is a private key.
+#   the config   which roots are enrolled and which callers exist. Rebuildable by hand, painfully.
+#
+# The store is snapshotted with `VACUUM INTO` through the running kernel, so this needs no downtime
+# and no separate `sqlite3`. Copying the three SQLite files with `cp` while a writer is mid
+# transaction produces an archive that usually restores — which is the worst thing a backup can be.
+#
+# Usage: bin/stozher-backup [--out backups/] [--keys | --no-keys]
+#
+# `--no-keys` produces an archive that is not a secret, for a destination you do not fully trust.
+# It cannot restore a working deployment on its own; say so where you write it down.
+
+set -euo pipefail
+
+DEPLOY="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$DEPLOY"
+
+OUT="backups"
+KEYS="yes"
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --out) OUT="$2"; shift 2 ;;
+    --keys) KEYS="yes"; shift ;;
+    --no-keys) KEYS="no"; shift ;;
+    -h|--help) sed -n '2,20p' "$0"; exit 0 ;;
+    *) echo "unknown argument $1" >&2; exit 2 ;;
+  esac
+done
+
+[ -f config/kernel-config.json ] || { echo "no deployment here — run bin/stozher-bootstrap" >&2; exit 2; }
+
+STAMP="$(date -u +%Y%m%dT%H%M%SZ)"
+STAGE="$(mktemp -d "${TMPDIR:-/tmp}/stozher-backup.XXXXXX")"
+# The archive holds private keys. It is created under a restrictive umask and never widened.
+umask 077
+trap 'rm -rf "$STAGE"' EXIT
+mkdir -p "$OUT" "$STAGE/store" "$STAGE/config"
+
+echo "== snapshotting the store"
+rm -f "var/snapshot-${STAMP}.db"
+docker compose exec -T kernel stozher-kernel snapshot \
+  --config /etc/stozher/kernel-config.json \
+  --out "/var/lib/stozher/data/snapshot-${STAMP}.db"
+mv "var/snapshot-${STAMP}.db" "$STAGE/store/stozher.db"
+
+# The gateway's local chain is its outbox, not the authority — the kernel holds the accepted
+# records. It is copied because replaying an unsent envelope after a restore is better than
+# discovering the gap, and it is copied plainly because no gateway process is running between
+# sessions. A backup taken mid-session may miss that session's last envelope; the kernel's copy of
+# everything already accepted is unaffected either way.
+if [ -f var/gateway/gateway.db ]; then
+  cp -p var/gateway/gateway.db "$STAGE/store/gateway.db"
+fi
+
+echo "== copying configuration"
+cp -p config/kernel-config.json "$STAGE/config/"
+if [ -f config/stozher-gateway.toml ]; then cp -p config/stozher-gateway.toml "$STAGE/config/"; fi
+if [ -f .env ]; then cp -p .env "$STAGE/config/env"; fi
+
+if [ "$KEYS" = "yes" ]; then
+  echo "== copying key material (this archive IS a secret)"
+  cp -R secrets "$STAGE/secrets"
+  chmod -R go-rwx "$STAGE/secrets"
+else
+  echo "== skipping key material — this archive cannot restore a working deployment on its own"
+fi
+
+cat > "$STAGE/MANIFEST" <<MANIFEST
+stozher-backup 1
+taken-at        ${STAMP}
+includes-keys   ${KEYS}
+store           store/stozher.db (VACUUM INTO snapshot, consistent at the instant above)
+gateway-store   $(if [ -f "$STAGE/store/gateway.db" ]; then echo "store/gateway.db"; else echo "(none)"; fi)
+restore         bin/stozher-restore ${OUT}/stozher-${STAMP}.tar.gz
+verify          the restore script runs 'stozher-kernel verify' and fails if the chain does not
+MANIFEST
+
+ARCHIVE="${OUT}/stozher-${STAMP}.tar.gz"
+tar -czf "$ARCHIVE" -C "$STAGE" .
+chmod 600 "$ARCHIVE"
+echo
+echo "wrote $ARCHIVE (mode 0600, $(du -h "$ARCHIVE" | cut -f1))"
+if [ "$KEYS" = "yes" ]; then echo "This archive contains private keys. Treat it as one."; fi

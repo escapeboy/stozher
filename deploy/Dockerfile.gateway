@@ -1,0 +1,48 @@
+# The gateway image — Harbormaster with enforcement mode installed.
+#
+# The gateway is an MCP server spoken to over stdio, one process per connecting client, so this
+# image is not a daemon. `docker compose up` never starts it; the MCP client starts it, with
+# `docker compose run --rm -T gateway`, and the container lives exactly as long as the session does.
+# That is Harbormaster's own model (`docs/gateway-integration-constraints.md` §2), not an
+# accommodation to containers.
+#
+# Harbormaster comes from PyPI, unmodified. ADR-0005: the gateway ships as Harbormaster's optional
+# enforcement mode, adds no section to `harbormaster.toml`, and touches no file under
+# `src/harbormaster/`. Uninstall the distribution and Harbormaster still boots.
+
+FROM python:3.12-slim AS runtime
+
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PIP_NO_CACHE_DIR=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1
+
+WORKDIR /src
+COPY gateway/pyproject.toml gateway/README.md ./
+COPY gateway/src/ src/
+
+# Two installs, deliberately in this order: Harbormaster first, so that the plugin entry point
+# resolves against the Harbormaster that is actually present rather than one pip pulled in to
+# satisfy us. Pinned to the major line ADR-0005's reconnaissance was performed against.
+RUN pip install --no-cache-dir "harbormaster-mcp>=27.1,<28" \
+    && pip install --no-cache-dir ".[crypto]"
+
+# Activation uses only keys Harbormaster already ships (`[plugins] enabled/allow`), so this file
+# stays valid input to a vanilla Harbormaster. It goes where Harbormaster's own
+# `_config_search_paths()` looks first — `./.harbormaster.toml` in the working directory — because
+# there is no `HARBORMASTER_CONFIG` variable and inventing one would mean patching its surface.
+RUN mkdir -p /etc/stozher /var/lib/stozher/state \
+    && printf '[plugins]\nenabled = true\nallow = ["stozher-gateway"]\n' \
+       > /var/lib/stozher/.harbormaster.toml
+
+# A downstream MCP server to point at on day one. An enforcement layer with nothing behind it
+# proves nothing, and asking a design partner to wire their own server before they have seen a
+# single audited envelope inverts the order the demo needs.
+COPY deploy/demo/ /opt/stozher-demo/
+
+ENV STOZHER_GATEWAY_CONFIG=/etc/stozher/gateway.toml \
+    STOZHER_GATEWAY_DB=/var/lib/stozher/state/gateway.db
+
+WORKDIR /var/lib/stozher
+ENTRYPOINT ["python", "-m", "harbormaster"]
+CMD ["--transport", "stdio"]
