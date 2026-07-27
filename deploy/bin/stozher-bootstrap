@@ -47,7 +47,11 @@ DEPLOY="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$DEPLOY"
 
 IMAGE="stozher-kernel:0.1.0"
-NETWORK="stozher_default"
+# Resolved from the running container once the kernel is up, never assumed: the compose project can
+# be renamed with COMPOSE_PROJECT_NAME so that two installs on one host do not collide, and a
+# hardcoded `stozher_default` would silently attach the throwaway containers below to the *other*
+# install's network.
+NETWORK=""
 ROOT_SUBJECT=""
 SECOND_ROOT=""
 SECOND_ROOT_KEY=""
@@ -98,6 +102,13 @@ operator() { docker run --rm -u "$UID_GID" -v "$DEPLOY:/work" -w /work "$IMAGE" 
 networked() {
   docker run --rm -u "$UID_GID" --network "$NETWORK" -e STOZHER_KERNEL_TOKEN \
     -v "$DEPLOY:/work" -w /work "$IMAGE" "$@"
+}
+# The network this project's kernel is actually on, asked of docker rather than derived from a name.
+compose_network() {
+  local container
+  container="$(docker compose ps -q kernel)"
+  [ -n "$container" ] || { echo "the kernel container is not running" >&2; exit 1; }
+  docker inspect -f '{{range $name, $_ := .NetworkSettings.Networks}}{{$name}}{{end}}' "$container"
 }
 
 # `.env` first, and with the uid in it before anything else runs: compose interpolates the whole
@@ -164,6 +175,7 @@ echo "wrote .env (mode 0600)"
 
 say "5/8  starting the kernel"
 docker compose up -d kernel
+NETWORK="$(compose_network)"
 export STOZHER_KERNEL_TOKEN="$KERNEL_TOKEN"
 networked await-health --url "$KERNEL_URL" --timeout 90
 

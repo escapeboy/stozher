@@ -12,6 +12,13 @@
 #
 # No Redis, no separate database server, no reverse proxy, no metrics sidecar. SQLite is the store
 # (ADR-0003); Postgres is a documented future seam, not a service here.
+#
+# Neither service pins `container_name`. A fixed name is global to the docker daemon, so a second
+# install on the same host — a re-clone, a staging copy beside a real one — collides with the first
+# and the operator gets a container from the *other* checkout answering for this one's config. That
+# failure looks like an authentication bug (a token whose digest matches the config on disk still
+# refusing), which is a long way from its cause. Compose namespaces by project instead; to run two
+# installs side by side, set `COMPOSE_PROJECT_NAME` in each `.env` (it overrides the `name` below).
 
 name: stozher
 
@@ -22,7 +29,6 @@ services:
       # The repository root: the console's templates are compiled into the binary from `console/`.
       context: ..
       dockerfile: deploy/Dockerfile
-    container_name: stozher-kernel
     restart: unless-stopped
     # The operator's own uid, written by `bin/stozher-bootstrap`. A bind-mounted seed at mode 0600
     # is readable by exactly one account, and the kernel refuses to start on anything more
