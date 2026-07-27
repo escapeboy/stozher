@@ -25,7 +25,13 @@ def test_config_check_names_every_missing_prerequisite(
     tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.delenv("STOZHER_KERNEL_TOKEN", raising=False)
-    config = write_config(tmp_path, "[gateway]\nenabled = true\n")
+    # An address nothing can be listening on, named explicitly. The finding under test is "the
+    # kernel is unreachable", and leaving the URL at its default asserted that instead against
+    # `127.0.0.1:8787` — which is the port `deploy/docker-compose.yml` publishes, so this test
+    # failed for anyone who had actually installed the product they were working on.
+    config = write_config(
+        tmp_path, '[gateway]\nenabled = true\n\n[kernel]\nurl = "http://127.0.0.1:1"\n'
+    )
     assert cli(["--config", str(config), "config", "check"]) == 1
     findings = capsys.readouterr().out
     for expected in (

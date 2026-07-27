@@ -165,12 +165,25 @@ async fn one_approval_cannot_be_consumed_twice_however_the_requests_race() {
 
     // The replay set's PRIMARY KEY is the enforcement, so this holds no matter how the pre-checks
     // interleave: eight tasks submit eight *different* envelopes carrying the *same* approval.
+    //
+    // Each contender sits at `seq` 0 of a **stream of its own**. That is what makes the assertion
+    // below unconditional. An earlier version put all eight at one position, so a loser could be
+    // refused either for the replay or for the taken position, and under load all seven could lose
+    // on position first — leaving "at least one was refused for the replay" true only when the
+    // scheduler cooperated. It failed that way once on a baseline run (ADR-0009 §6).
+    //
+    // Removing the position contention does not weaken what this proves; it strengthens it. One
+    // approval and eight independent chains means the *only* thing that can refuse the other seven
+    // is the replay set, so the test now demands that every loser be refused for exactly that, and
+    // an implementation that leaked a second consumption has nowhere to hide behind a chain code.
+    // Contention for a single position is a different property and is proven on its own in
+    // `only_one_writer_can_take_a_chain_position`.
     let gated = world.gated_effect("github.create_issue", json!({})).await;
     let contenders: Vec<_> = (0..8usize)
         .map(|index| {
             revise(
                 &gated,
-                json!({ "correlation-ref": format!("replay/{index}") }),
+                json!({ "stream": format!("gw:replay-{index}:0001") }),
                 &world.agent,
             )
         })
@@ -198,18 +211,14 @@ async fn one_approval_cannot_be_consumed_twice_however_the_requests_race() {
         accepted, 1,
         "one signature is one action; {accepted} were applied, refusals were {reasons:?}"
     );
+    assert_eq!(reasons.len(), 7);
     for reason in &reasons {
-        assert!(
-            // They all wanted seq 0 as well, so either refusal is correct — and either way the
-            // approval was consumed exactly once.
-            reason == "gate-authorization-replayed" || reason == "chain-seq-duplicate",
-            "unexpected refusal {reason}"
+        assert_eq!(
+            reason, "gate-authorization-replayed",
+            "with no position to contend for, a loser can only be refused for the replay itself; \
+             refusals were {reasons:?}"
         );
     }
-    assert!(
-        reasons.iter().any(|r| r == "gate-authorization-replayed"),
-        "at least one loser must be refused for the replay itself, not only for the position"
-    );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]

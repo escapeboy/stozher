@@ -64,6 +64,37 @@ pub struct Config {
     pub notifications: Vec<ConfiguredChannel>,
     /// Where this deployment's console answers, for the link inside an approver ping.
     pub console_base_url: Option<String>,
+    /// The approver-flood bound of §09 §7.
+    pub gate_rate_limit: RateLimit,
+}
+
+/// How many gate requests one subject may park in one window (§09 §7).
+///
+/// > "Approval fatigue is an availability attack: an adversary that generates many gate-worthy
+/// > actions can train an approver to click through."
+///
+/// There is no way to switch this off. §09 §7 states it as a MUST, and a cap an operator can set to
+/// zero on a busy afternoon is a cap that is off in every deployment that ever had a busy
+/// afternoon. Raising it is a number in a file that a reviewer can see; removing it is not offered.
+#[derive(Debug, Clone, Copy)]
+pub struct RateLimit {
+    /// Requests one subject may park per window.
+    pub per_subject: u32,
+    /// The window, in seconds.
+    pub window_seconds: i64,
+}
+
+impl Default for RateLimit {
+    fn default() -> Self {
+        // Thirty parked requests from one subject in five minutes is already a queue no human reads
+        // carefully, which is the failure §09 §7 describes. Ordinary work does not come close: a
+        // gated action is one a human is about to be asked about, not one an agent performs in a
+        // loop.
+        Self {
+            per_subject: 30,
+            window_seconds: 300,
+        }
+    }
 }
 
 /// One configured notification channel. Credentials appear only as the **names** of environment
@@ -101,7 +132,7 @@ pub enum ConfiguredChannel {
     },
 }
 
-const MEMBERS: [&str; 12] = [
+const MEMBERS: [&str; 13] = [
     "bind",
     "database",
     "kernel-seed",
@@ -114,6 +145,7 @@ const MEMBERS: [&str; 12] = [
     "callers",
     "notifications",
     "console-base-url",
+    "gate-rate-limit",
 ];
 
 /// Members of a `notifications[]` entry, per channel. Closed, so a misspelled key is a startup
@@ -271,6 +303,7 @@ impl Config {
                 .get("console-base-url")
                 .and_then(Value::as_str)
                 .map(str::to_owned),
+            gate_rate_limit: parse_rate_limit(map.get("gate-rate-limit"))?,
         })
     }
 
@@ -335,6 +368,74 @@ impl Config {
             )
         })
     }
+}
+
+/// Parse `gate-rate-limit`, which is closed and bounded in both directions.
+///
+/// A cap of zero would refuse every request and turn the flood defence into an outage; a window of
+/// zero would make the cap unenforceable. Both are refused at startup rather than discovered when
+/// the first genuine gate never reaches an approver.
+fn parse_rate_limit(entry: Option<&Value>) -> Result<RateLimit> {
+    let Some(entry) = entry else {
+        return Ok(RateLimit::default());
+    };
+    let map = entry
+        .as_object()
+        .ok_or_else(|| Error::new("config-malformed", "gate-rate-limit must be an object"))?;
+    for key in map.keys() {
+        if !["per-subject", "window"].contains(&key.as_str()) {
+            return Err(Error::new(
+                "config-malformed",
+                format!("gate-rate-limit has no member {key:?}"),
+            ));
+        }
+    }
+    let default = RateLimit::default();
+    let per_subject = match map.get("per-subject") {
+        None => default.per_subject,
+        Some(value) => {
+            let count = value
+                .as_u64()
+                .and_then(|c| u32::try_from(c).ok())
+                .ok_or_else(|| {
+                    Error::new(
+                        "config-malformed",
+                        "gate-rate-limit.per-subject must be a positive integer",
+                    )
+                })?;
+            if count == 0 {
+                return Err(Error::new(
+                    "config-malformed",
+                    "gate-rate-limit.per-subject must be at least 1 — spec 09 section 7 requires a \
+                     cap, and a cap of zero refuses every gate rather than bounding a flood",
+                ));
+            }
+            count
+        }
+    };
+    let window_seconds = match map.get("window") {
+        None => default.window_seconds,
+        Some(value) => {
+            let duration = value.as_str().ok_or_else(|| {
+                Error::new(
+                    "config-malformed",
+                    "gate-rate-limit.window must be an ISO 8601 duration",
+                )
+            })?;
+            let seconds = crate::clock::parse_duration_seconds(duration)?;
+            if seconds <= 0 {
+                return Err(Error::new(
+                    "config-malformed",
+                    "gate-rate-limit.window must be a positive duration",
+                ));
+            }
+            seconds
+        }
+    };
+    Ok(RateLimit {
+        per_subject,
+        window_seconds,
+    })
 }
 
 /// Parse one `notifications[]` entry.

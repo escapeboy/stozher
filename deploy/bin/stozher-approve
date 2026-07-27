@@ -1,0 +1,64 @@
+#!/usr/bin/env bash
+# Answer a parked request: sign in one process, submit in another.
+#
+# The split is the point, not an accident of scripting. `stozher-kernel decide` reads the approver's
+# own owner-only seed, signs, and prints — it opens no socket and needs no kernel configuration.
+# `stozher-kernel answer` takes that object over an authenticated channel and hands it to the
+# console — it holds no key and cannot produce a signature. Signing has no network; the network has
+# no key. That separation is what makes "the kernel cannot manufacture an approval" (ADR-0009 §2) a
+# structural fact rather than a promise, and this script is careful not to be the place it stops
+# being true.
+#
+# The signed object never touches disk. It goes through a pipe, so there is no window in which an
+# approval is sitting in a file waiting for someone to notice it.
+#
+# Usage:
+#   bin/stozher-approve <request-hash> --root human:ivan [--minutes 15]
+#   bin/stozher-approve <request-hash> --root human:ivan --deny "why not"
+
+set -euo pipefail
+
+DEPLOY="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$DEPLOY"
+
+IMAGE="stozher-kernel:0.1.0"
+NETWORK="stozher_default"
+SEED="secrets/operator/operator.seed"
+REQUEST=""
+ROOT=""
+DENY=""
+MINUTES="15"
+
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --root) ROOT="$2"; shift 2 ;;
+    --deny) DENY="$2"; shift 2 ;;
+    --minutes) MINUTES="$2"; shift 2 ;;
+    --key) SEED="$2"; shift 2 ;;
+    -h|--help) sed -n '2,22p' "$0"; exit 0 ;;
+    -*) echo "unknown argument $1" >&2; exit 2 ;;
+    *) REQUEST="$1"; shift ;;
+  esac
+done
+
+[ -n "$REQUEST" ] || { echo "usage: bin/stozher-approve <request-hash> --root human:<name>" >&2; exit 2; }
+[ -n "$ROOT" ] || { echo "--root human:<name> is required — an approval is one named human's" >&2; exit 2; }
+[ -f "$SEED" ] || { echo "$SEED does not exist: this is not the approver's machine" >&2; exit 2; }
+[ -f .env ] || { echo ".env is missing — run bin/stozher-bootstrap first" >&2; exit 2; }
+
+# shellcheck disable=SC1091
+set -a; . ./.env; set +a
+UID_GID="$(id -u):$(id -g)"
+
+verdict=(--approve)
+[ -n "$DENY" ] && verdict=(--deny "$DENY")
+
+# The approver's own process. `--role 0 --index 0` is the human root key the ceremony enrolled;
+# `decide` defaults to role 1', which is an agent subject key and is not in any root set.
+signed="$(docker run --rm -i -u "$UID_GID" -v "$DEPLOY:/work" -w /work "$IMAGE" \
+  decide --request "$REQUEST" --key "$SEED" --role 0 --index 0 --minutes "$MINUTES" "${verdict[@]}")"
+
+# A different process, with no seed mounted, carrying an object it could not have produced.
+printf '%s' "$signed" | docker run --rm -i -u "$UID_GID" --network "$NETWORK" \
+  -e STOZHER_KERNEL_TOKEN="$STOZHER_KERNEL_TOKEN" "$IMAGE" \
+  answer --url http://kernel:8787 --request "$REQUEST"

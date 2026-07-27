@@ -1,0 +1,84 @@
+# Two services. ADR-0003 fixes that number, and it is a product constraint rather than a
+# minimalism preference: the pitch is a minimal auditable surface, and every additional moving part
+# is a line on a security questionnaire and a thing that can be down at 3am.
+#
+#   kernel   — the event store, ingest, policy distribution, the gate queue and the console, all
+#              from one static binary. This is what `docker compose up` starts.
+#   gateway  — Harbormaster with enforcement mode. An MCP server spoken over stdio, one process per
+#              connecting client, so it is deliberately **not** started by `up`: the MCP client
+#              starts it with `docker compose run --rm -T gateway` and it lives as long as the
+#              session does. `profiles` is what keeps `up` from starting a process that would have
+#              nobody on the other end of its stdin.
+#
+# No Redis, no separate database server, no reverse proxy, no metrics sidecar. SQLite is the store
+# (ADR-0003); Postgres is a documented future seam, not a service here.
+
+name: stozher
+
+services:
+  kernel:
+    image: stozher-kernel:0.1.0
+    build:
+      # The repository root: the console's templates are compiled into the binary from `console/`.
+      context: ..
+      dockerfile: deploy/Dockerfile
+    container_name: stozher-kernel
+    restart: unless-stopped
+    # The operator's own uid, written by `bin/stozher-bootstrap`. A bind-mounted seed at mode 0600
+    # is readable by exactly one account, and the kernel refuses to start on anything more
+    # permissive (§09 §8) — so the two sides of the mount have to agree on who that account is.
+    user: "${STOZHER_UID:-0}:${STOZHER_GID:-0}"
+    # Loopback by default. `spec/09 §8` requires TLS for component↔kernel traffic; this image
+    # terminates none, so exposing the port beyond the host is a decision an operator makes
+    # deliberately, with a TLS terminator in front — never a default they inherit.
+    ports:
+      - "127.0.0.1:${STOZHER_KERNEL_PORT:-8787}:8787"
+    volumes:
+      - ./var:/var/lib/stozher/data
+      - ./secrets/kernel:/var/lib/stozher/keys:ro
+      - ./config/kernel-config.json:/etc/stozher/kernel-config.json:ro
+    environment:
+      # Approver-ping credentials, when a channel is configured. Named, never inlined (ADR-0002).
+      STOZHER_SLACK_WEBHOOK: "${STOZHER_SLACK_WEBHOOK:-}"
+      STOZHER_WEBHOOK_URL: "${STOZHER_WEBHOOK_URL:-}"
+      STOZHER_WEBHOOK_TOKEN: "${STOZHER_WEBHOOK_TOKEN:-}"
+      STOZHER_SMTP_PASSWORD: "${STOZHER_SMTP_PASSWORD:-}"
+    # Defence in depth against the host-root case §09 §8 declines to defend against but insists on
+    # making non-silent: nothing here needs to escalate, so nothing here may.
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    read_only: false
+    stop_grace_period: 20s
+
+  gateway:
+    image: stozher-gateway:0.1.0
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.gateway
+    profiles: ["mcp"]
+    user: "${STOZHER_UID:-0}:${STOZHER_GID:-0}"
+    depends_on:
+      kernel:
+        condition: service_healthy
+    volumes:
+      - ./secrets/gateway:/var/lib/stozher/gateway:ro
+      - ./config/stozher-gateway.toml:/etc/stozher/gateway.toml:ro
+      # Bind mounts, not named volumes. The gateway's local chain is audit state: it belongs
+      # beside the store, in the directory `bin/stozher-backup` copies. A named volume would also
+      # take its ownership from the image, which is root — and this container runs as the operator.
+      - ./var/gateway:/var/lib/stozher/state
+      - ./var/notes:/var/lib/stozher/notes
+    environment:
+      # §10 §1.1: one caller per process, authenticated. A multi-caller configuration refuses to
+      # start rather than guess whose authority a call is under (ADR-0007).
+      STOZHER_GATEWAY_CALLER: "${STOZHER_GATEWAY_CALLER:-claude-code}"
+      STOZHER_GATEWAY_CALLER_TOKEN: "${STOZHER_GATEWAY_CALLER_TOKEN:-}"
+      STOZHER_GATEWAY_SEED: /var/lib/stozher/gateway/gateway.seed
+      STOZHER_KERNEL_TOKEN: "${STOZHER_KERNEL_TOKEN:-}"
+      STOZHER_DEMO_NOTES: /var/lib/stozher/notes
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL

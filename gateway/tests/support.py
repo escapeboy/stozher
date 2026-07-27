@@ -8,12 +8,14 @@ that were faked, the end-to-end test would prove that the gateway agrees with a 
 
 from __future__ import annotations
 
+import atexit
 import json
 import os
 import secrets
 import shutil
 import socket
 import subprocess
+import tempfile
 import time
 import urllib.error
 import urllib.request
@@ -37,19 +39,42 @@ def free_port() -> int:
         return int(probe.getsockname()[1])
 
 
+#: The copy this test session runs, taken once and reused. Set by `build_kernel`.
+_SESSION_BINARY: Path | None = None
+
+
 def build_kernel() -> Path:
-    """Build the kernel once. The gate runs against the real binary, not a stub."""
-    if KERNEL_BINARY.exists():
-        return KERNEL_BINARY
-    if shutil.which("cargo") is None:  # pragma: no cover - CI always has cargo
-        raise RuntimeError("cargo is needed to build the kernel for the integration gate")
-    subprocess.run(
-        ["cargo", "build", "--bin", "stozher-kernel"],
-        cwd=REPO / "kernel",
-        check=True,
-        capture_output=True,
-    )
-    return KERNEL_BINARY
+    """Build the kernel once, then run every test in this session against a **copy** of it.
+
+    The gate runs against the real binary, not a stub. But `cargo build` replaces
+    `target/debug/stozher-kernel` in place, and a concurrent build in the same working tree — a
+    watcher, a second shell, the Rust suite running beside this one — can therefore swap the file
+    out from under a kernel this suite is in the middle of starting. ADR-0009 §6 recorded that
+    exact suspicion for an intermittency observed twice in ~25 runs and never reproduced: the S2
+    module fixture erroring immediately after a heavy cargo run in the same shell.
+
+    Copying the binary aside removes the race whether or not that was the cause. It is cheap, it
+    is deterministic, and it makes the suite independent of anything else compiling at the time —
+    which is a property worth having on its own terms, not only as a fix for one flake.
+    """
+    global _SESSION_BINARY
+    if _SESSION_BINARY is not None and _SESSION_BINARY.exists():
+        return _SESSION_BINARY
+    if not KERNEL_BINARY.exists():
+        if shutil.which("cargo") is None:  # pragma: no cover - CI always has cargo
+            raise RuntimeError("cargo is needed to build the kernel for the integration gate")
+        subprocess.run(
+            ["cargo", "build", "--bin", "stozher-kernel"],
+            cwd=REPO / "kernel",
+            check=True,
+            capture_output=True,
+        )
+    session = Path(tempfile.gettempdir()) / f"stozher-kernel-{os.getpid()}"
+    shutil.copy2(KERNEL_BINARY, session)
+    session.chmod(0o755)
+    atexit.register(lambda: session.unlink(missing_ok=True))
+    _SESSION_BINARY = session
+    return session
 
 
 def baseline_policy(

@@ -305,12 +305,47 @@ async fn post_gate_request(
             return refusal(StatusCode::UNPROCESSABLE_ENTITY, e.code(), e.detail(), None);
         }
     };
-    let fresh = match kernel
-        .ingest
-        .store()
-        .queue_gate_request(&queued, &submitted_by, &now)
-        .await
-    {
+    // §09 §7: the approver-flood bound. Checked before the insert, and skipped for a request that
+    // is already queued — a component retrying after a lost response is behaving correctly and must
+    // not be counted twice for it. Refusing the *request* refuses nobody's action: the call it was
+    // for is still gated and still blocked. What a flooding subject loses is the ability to keep
+    // growing the queue a human has to read, which is the attack the section describes.
+    let store = kernel.ingest.store();
+    let already_queued = match store.gate_request(&queued.request_hash).await {
+        Ok(existing) => existing.is_some(),
+        Err(e) => return unavailable(&e),
+    };
+    if !already_queued {
+        let limit = kernel.config.gate_rate_limit;
+        let since = match crate::clock::shift(&now, -limit.window_seconds) {
+            Ok(since) => since,
+            Err(e) => return unavailable(&e),
+        };
+        let parked = match store.gate_requests_since(&queued.subject, &since).await {
+            Ok(parked) => parked,
+            Err(e) => return unavailable(&e),
+        };
+        if parked >= limit.per_subject {
+            tracing::warn!(
+                subject = %queued.subject,
+                parked,
+                window_seconds = limit.window_seconds,
+                "gate requests refused: the per-subject rate limit was reached"
+            );
+            return refusal(
+                StatusCode::TOO_MANY_REQUESTS,
+                crate::codes::GATE_RATE_LIMITED,
+                &format!(
+                    "{} has parked {parked} requests in the last {} seconds, at or above the \
+                     configured cap of {}. The console shows this as a spike.",
+                    queued.subject, limit.window_seconds, limit.per_subject
+                ),
+                None,
+            );
+        }
+    }
+
+    let fresh = match store.queue_gate_request(&queued, &submitted_by, &now).await {
         Ok(fresh) => fresh,
         Err(e) => return unavailable(&e),
     };

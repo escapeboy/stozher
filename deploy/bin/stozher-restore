@@ -1,0 +1,106 @@
+#!/usr/bin/env bash
+# Restore a deployment from an archive, and refuse to call it restored until the chain verifies.
+#
+# A restore that "completed" is not a restore. The only question that matters is whether the
+# recovered store still hash-chains from its first envelope to its head, with every signature
+# checking out — and that is a question with a yes/no answer, so this script asks it and exits
+# non-zero if the answer is no. `spec/04` makes the chain the thing that makes tampering
+# detectable; a restore path that did not run the check would be handing back an audit trail whose
+# only claim to integrity is that a tar file extracted without error.
+#
+# Existing state is never overwritten in place. The current store, config and secrets are moved
+# aside with a timestamp first, so a restore that turns out to have been the wrong archive is
+# itself reversible.
+#
+# Usage: bin/stozher-restore <archive.tar.gz> [--force]
+
+set -euo pipefail
+
+DEPLOY="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$DEPLOY"
+
+ARCHIVE=""
+FORCE="no"
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --force) FORCE="yes"; shift ;;
+    -h|--help) sed -n '2,17p' "$0"; exit 0 ;;
+    -*) echo "unknown argument $1" >&2; exit 2 ;;
+    *) ARCHIVE="$1"; shift ;;
+  esac
+done
+[ -n "$ARCHIVE" ] && [ -f "$ARCHIVE" ] || { echo "usage: bin/stozher-restore <archive.tar.gz>" >&2; exit 2; }
+
+STAGE="$(mktemp -d "${TMPDIR:-/tmp}/stozher-restore.XXXXXX")"
+umask 077
+trap 'rm -rf "$STAGE"' EXIT
+tar -xzf "$ARCHIVE" -C "$STAGE"
+[ -f "$STAGE/MANIFEST" ] || { echo "$ARCHIVE is not a stozher backup (no MANIFEST)" >&2; exit 2; }
+echo "== manifest"; cat "$STAGE/MANIFEST"
+
+if grep -q '^includes-keys   no' "$STAGE/MANIFEST" && [ ! -f secrets/kernel/kernel.seed ]; then
+  echo >&2
+  echo "This archive holds no key material and there are no keys here to reuse." >&2
+  echo "The store would restore and the kernel would refuse to start. Stopping." >&2
+  exit 2
+fi
+
+if [ -e var/stozher.db ] && [ "$FORCE" != "yes" ]; then
+  echo >&2
+  echo "var/stozher.db exists. Restoring over a live deployment replaces its audit trail." >&2
+  echo "Re-run with --force if that is what you mean; the current state is moved aside, not deleted." >&2
+  exit 2
+fi
+
+echo "== stopping the kernel"
+docker compose down --remove-orphans >/dev/null 2>&1 || true
+
+STAMP="$(date -u +%Y%m%dT%H%M%SZ)"
+# Never `rm`. A restore pointed at the wrong archive is a mistake an operator must be able to walk
+# back out of, so the previous state is renamed rather than replaced.
+aside() {
+  if [ -e "$1" ]; then
+    mv "$1" "${1}.superseded-${STAMP}"
+    echo "  moved $1 aside"
+  fi
+}
+aside var/stozher.db
+aside var/stozher.db-wal
+aside var/stozher.db-shm
+aside var/gateway/gateway.db
+aside config/kernel-config.json
+aside config/stozher-gateway.toml
+if [ -d "$STAGE/secrets" ]; then aside secrets; fi
+
+echo "== restoring"
+mkdir -p var var/gateway var/notes config
+cp -p "$STAGE/store/stozher.db" var/stozher.db
+if [ -f "$STAGE/store/gateway.db" ]; then cp -p "$STAGE/store/gateway.db" var/gateway/gateway.db; fi
+cp -p "$STAGE/config/kernel-config.json" config/
+if [ -f "$STAGE/config/stozher-gateway.toml" ]; then cp -p "$STAGE/config/stozher-gateway.toml" config/; fi
+if [ -f "$STAGE/config/env" ]; then cp -p "$STAGE/config/env" .env; chmod 600 .env; fi
+if [ -d "$STAGE/secrets" ]; then
+  cp -R "$STAGE/secrets" secrets
+  # The archive preserved the modes; assert them rather than trust them. The kernel refuses to
+  # start on a seed anyone but its owner can read (§09 §8), and discovering that at `up` is a
+  # worse place to discover it than here.
+  chmod 700 secrets secrets/* 2>/dev/null || true
+  find secrets -name '*.seed' -exec chmod 600 {} +
+fi
+
+echo "== starting the kernel"
+docker compose up -d kernel
+set -a; . ./.env; set +a
+docker run --rm -u "$(id -u):$(id -g)" --network stozher_default stozher-kernel:0.1.0 \
+  await-health --url http://kernel:8787 --timeout 90
+
+echo
+echo "== verifying the restored chain"
+# This is the whole point of the script. `verify` walks every stream, recomputes each envelope's
+# hash, checks each `prev-hash` link and each signature, and checks the checkpoints that anchor
+# them. It exits non-zero on any failure, and `set -e` makes that this script's exit status.
+docker compose exec -T kernel stozher-kernel verify --config /etc/stozher/kernel-config.json
+
+echo
+echo "Restored from $ARCHIVE, and the chain verifies."
+echo "Anything moved aside is still here, suffixed .superseded-${STAMP}."

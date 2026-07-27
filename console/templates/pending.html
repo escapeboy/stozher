@@ -9,11 +9,30 @@ signature — it records one you made with a key this kernel has never held.</p>
 produces an approver's signature, so it cannot manufacture an approval. Sign the request hash with
 your own owner-only seed file:
 <pre>stozher-kernel decide --request &lt;request-hash&gt; --key ~/.stozher/ivan.seed \
-                      --subject human:ivan --approve</pre>
-then paste the object it prints into the form below. The decision travels into the audit as a
-<code>gate-decision</code> envelope on the kernel's core stream (<code>spec/06 §5</code>) and into
-the effect that consumes it as <code>authorization</code> (<code>spec/06 §1.3</code>).
+                      --role 0 --index 0 --approve</pre>
+then paste the object it prints into the form below. <code>--role 0</code> is the human root key of
+<code>spec/01 §6</code>; the default, role <code>1'</code>, is an agent subject key and is in no root
+set. The decision travels into the audit as a <code>gate-decision</code> envelope on the kernel's
+core stream (<code>spec/06 §5</code>) and into the effect that consumes it as
+<code>authorization</code> (<code>spec/06 §1.3</code>).
 </div>
+
+{% if !spikes.is_empty() %}
+<div class="note"><b class="violation">Gate-request spike.</b> <code>spec/09 §7</code> calls
+approval fatigue an availability attack: a subject that generates many gate-worthy actions can
+train an approver to click through. These subjects have parked an unusual number of requests in the
+last {{ spike_window }} seconds. Read the queue below with that in mind, and do not answer a run of
+near-identical requests without asking why there is a run.
+<table>
+<tr><th>subject</th><th>parked in window</th><th>most recent</th><th>state</th></tr>
+{% for s in spikes %}
+<tr><td>{{ s.subject }}</td><td>{{ s.parked }}</td><td>{{ s.latest }}</td>
+    <td>{% if s.refused %}<b class="violation">at the cap of {{ spike_cap }} — further requests
+    from this subject are refused</b>{% else %}below the cap of {{ spike_cap }}{% endif %}</td></tr>
+{% endfor %}
+</table>
+</div>
+{% endif %}
 
 {% if channels == "0" %}
 <div class="note"><b class="violation">No notification channel is configured.</b> Nothing pings an

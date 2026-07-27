@@ -1,0 +1,44 @@
+# The build context is the repository root, because the kernel image needs both `kernel/` and
+# `console/` in the relative positions the workspace expects (`askama.toml`). Everything that is
+# not a build input is excluded — and key material and runtime state are excluded first, so that a
+# stray seed cannot reach an image layer even by accident.
+
+# --- never, under any circumstances ---
+**/secrets/
+**/keys/
+*.seed
+*.pem
+*.key
+.env
+.env.*
+!.env.example
+deploy/var/
+deploy/genesis/
+deploy/config/
+
+# --- build artefacts ---
+**/target/
+**/.venv/
+**/__pycache__/
+**/*.py[cod]
+**/node_modules/
+**/dist/
+**/build/
+**/*.egg-info/
+
+# --- caches and tooling ---
+.git/
+.github/
+**/.pytest_cache/
+**/.ruff_cache/
+**/.mypy_cache/
+**/.serena/
+**/.DS_Store
+*.log
+*.db
+*.db-wal
+*.db-shm
+
+# --- not build inputs ---
+docs/
+spec/vectors/

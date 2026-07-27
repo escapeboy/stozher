@@ -16,8 +16,14 @@ use stozher_core::crypto::{self, slip10};
 use stozher_core::error::{Error, Result};
 use stozher_core::signed::KeyId;
 
+/// SLIP-0010 role for a human root key (§01 §6).
+pub const ROLE_HUMAN_ROOT: u32 = 0;
+/// SLIP-0010 role for an agent subject key (§01 §6).
+pub const ROLE_AGENT_SUBJECT: u32 = 1;
 /// SLIP-0010 role for the kernel's checkpoint key (§01 §6).
 pub const ROLE_KERNEL_CHECKPOINT: u32 = 3;
+/// SLIP-0010 role for the organization's policy key (§01 §6).
+pub const ROLE_ORG_POLICY: u32 = 4;
 /// The registered derivation prefix. `1054` has no external significance; it is fixed so key
 /// recovery is interoperable between implementations.
 pub const DERIVATION_PREFIX: u32 = 1054;

@@ -376,6 +376,19 @@ struct PendingPage {
     answered: Vec<PendingRow>,
     rows: Vec<Row>,
     denied: Vec<Row>,
+    /// §09 §7: a spike is surfaced as a finding, not as a longer queue.
+    spikes: Vec<SpikeRow>,
+    spike_window: String,
+    spike_cap: String,
+}
+
+/// One subject parking gate requests fast enough to be worth naming.
+struct SpikeRow {
+    subject: String,
+    parked: String,
+    latest: String,
+    /// Whether this subject is at or over the cap, and therefore being refused right now.
+    refused: bool,
 }
 
 #[derive(Template)]
@@ -659,9 +672,34 @@ async fn pending(State(kernel): State<Arc<Kernel>>, headers: HeaderMap) -> Respo
         Ok(records) => records,
         Err(e) => return unavailable(&e),
     };
+    // §09 §7 requires a spike to be surfaced *as a finding*. Half the cap is the threshold worth
+    // naming: by the time a subject is being refused, an approver has already had a queue's worth
+    // of attention spent on it, and the point of the finding is to arrive before that.
+    let limit = kernel.config.gate_rate_limit;
+    let watch_from = match crate::clock::shift(&now, -limit.window_seconds) {
+        Ok(since) => since,
+        Err(e) => return unavailable(&e),
+    };
+    let threshold = (limit.per_subject / 2).max(1);
+    let spikes = match store.gate_request_spikes(&watch_from, threshold).await {
+        Ok(spikes) => spikes,
+        Err(e) => return unavailable(&e),
+    };
+
     render(&PendingPage {
         title: "Pending approvals",
         channels: kernel.notifier.channel_count().to_string(),
+        spike_window: limit.window_seconds.to_string(),
+        spike_cap: limit.per_subject.to_string(),
+        spikes: spikes
+            .iter()
+            .map(|s| SpikeRow {
+                subject: s["subject"].as_str().unwrap_or_default().to_owned(),
+                parked: s["parked"].to_string(),
+                latest: s["latest"].as_str().unwrap_or("-").to_owned(),
+                refused: s["parked"].as_u64().unwrap_or(0) >= u64::from(limit.per_subject),
+            })
+            .collect(),
         parked: parked
             .iter()
             .map(|r| pending_row(r, &kernel, &subject))

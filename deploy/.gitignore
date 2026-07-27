@@ -1,0 +1,11 @@
+# Everything a deployment produces. The repository root already ignores `secrets/` and `keys/` at
+# any depth and `*.seed` everywhere, so key material is excluded by construction rather than by this
+# file remembering to; these are the runtime artefacts that are specific to `deploy/`.
+
+/var/
+/genesis/
+/config/kernel-config.json
+/config/stozher-gateway.toml
+/.env
+/backups/
+*.superseded-*
