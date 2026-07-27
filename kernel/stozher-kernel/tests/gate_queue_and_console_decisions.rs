@@ -889,3 +889,112 @@ async fn the_queue_says_when_a_request_has_timed_out_rather_than_leaving_it_answ
         page.body
     );
 }
+
+// -- the approver-flood bound (spec 09 section 7) -------------------------------------------------
+
+/// Build a distinct action request per call, so each one is a genuinely new question.
+async fn request_number(world: &World, index: usize) -> Value {
+    let draft = world
+        .effect("github.create_issue", "consequential", json!({}))
+        .await;
+    world.action_request(&Ask {
+        requester: &world.agent,
+        component: "gateway",
+        mandate_ref: &world.standing_mandate,
+        policy_version: &world.policy_version,
+        classification: "consequential",
+        action: "github.create_issue",
+        target: &format!("repo:acme/flood-{index}"),
+        args_hash: draft["execution"]["args-hash"].as_str().expect("args-hash"),
+    })
+}
+
+#[tokio::test]
+async fn one_subject_cannot_grow_the_queue_without_bound() {
+    // §09 §7: "approval fatigue is an availability attack: an adversary that generates many
+    // gate-worthy actions can train an approver to click through … the kernel MUST rate-limit gate
+    // requests per subject per interval".
+    let world = world().await;
+    let cap = world.kernel.config.gate_rate_limit.per_subject as usize;
+
+    for index in 0..cap {
+        let request = request_number(&world, index).await;
+        let answer = post_json(&world, "/v1/gate/requests", &request).await;
+        assert_eq!(
+            answer.status,
+            StatusCode::CREATED,
+            "request {index} below the cap was refused: {}",
+            answer.body
+        );
+    }
+
+    let over = request_number(&world, cap).await;
+    let answer = post_json(&world, "/v1/gate/requests", &over).await;
+    assert_eq!(
+        answer.status,
+        StatusCode::TOO_MANY_REQUESTS,
+        "{}",
+        answer.body
+    );
+    assert_eq!(
+        answer.json()["reason-code"].as_str(),
+        Some("x-gate-rate-limited")
+    );
+
+    // Refusing the request refused nobody's action: nothing was applied, and the call the request
+    // was for is still gated and still blocked. What was refused is the queue growth.
+    let queued = get(&world, "/v1/gate/requests?answered=false").await;
+    assert_eq!(queued.status, StatusCode::OK, "{}", queued.body);
+
+    // And the window is a window: once it has passed, the same subject is answerable again. A cap
+    // that never released would be a subject-level denial of service wearing a rate limit's name.
+    world
+        .clock
+        .advance_seconds(world.kernel.config.gate_rate_limit.window_seconds + 1);
+    let later = request_number(&world, cap + 1).await;
+    let answer = post_json(&world, "/v1/gate/requests", &later).await;
+    assert_eq!(answer.status, StatusCode::CREATED, "{}", answer.body);
+}
+
+#[tokio::test]
+async fn a_retry_of_an_already_queued_request_is_never_counted_against_the_cap() {
+    // A component that retries after a lost response is doing the right thing. Counting the retry
+    // would turn correct behaviour into the thing that trips the flood defence.
+    let world = world().await;
+    let cap = world.kernel.config.gate_rate_limit.per_subject;
+    let request = request_number(&world, 0).await;
+    for _ in 0..=cap {
+        let answer = post_json(&world, "/v1/gate/requests", &request).await;
+        assert!(
+            answer.status == StatusCode::CREATED || answer.status == StatusCode::OK,
+            "an identical retry was refused: {} {}",
+            answer.status,
+            answer.body
+        );
+    }
+}
+
+#[tokio::test]
+async fn a_spike_is_surfaced_as_a_finding_and_not_as_a_longer_queue() {
+    // §09 §7's second clause. A queue that is merely longer is what an approver clicks through;
+    // a named finding is what makes them stop.
+    let world = world().await;
+    let threshold = (world.kernel.config.gate_rate_limit.per_subject / 2).max(1) as usize;
+
+    let quiet = get(&world, "/console/pending").await;
+    assert!(
+        !quiet.body.contains("Gate-request spike"),
+        "an ordinary queue must not be reported as a spike"
+    );
+
+    for index in 0..threshold {
+        park(&world, &request_number(&world, index).await).await;
+    }
+    let page = get(&world, "/console/pending").await;
+    assert!(page.body.contains("Gate-request spike"), "{}", page.body);
+    assert!(
+        page.body.contains(world.agent.subject.as_str()),
+        "the finding must name the subject: {}",
+        page.body
+    );
+}

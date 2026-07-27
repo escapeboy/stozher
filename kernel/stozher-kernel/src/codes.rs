@@ -62,6 +62,23 @@ pub const GATE_DECISION_ALREADY_RECORDED: &str = "x-gate-decision-already-record
 /// audit as if they were emitter misbehaviour. It maps to HTTP 503, and the submitter retries.
 pub const STORE_UNAVAILABLE: &str = "x-store-unavailable";
 
+/// Too many gate requests from one subject in one window (§09 §7).
+///
+/// §09 §7 requires the kernel to rate-limit gate requests per subject per interval and to surface a
+/// spike as a finding, but names no reason code for the refusal.
+///
+/// The cap lives in the kernel's own configuration rather than in policy, which §09 §7's
+/// "policy-configured" implies. That is a deliberate, recorded deviation: `spec/05 §1`'s member set
+/// is closed **and every member is required**, so a new policy member is a breaking wire change
+/// that invalidates every existing document and every vector at once. It is also the wrong home for
+/// it — a queue-depth bound authorizes nothing and changes nobody's rights; it is a resource bound
+/// on kernel-side state that no component pulls or evaluates.
+///
+/// Refusing a *request* is not refusing an *action*. The call the request was for is still
+/// gated, and still blocked; what the flooding subject loses is the ability to keep growing the
+/// queue an approver has to read.
+pub const GATE_RATE_LIMITED: &str = "x-gate-rate-limited";
+
 /// The caller presented no credential, or one that does not resolve (§05 §2.2, §10 §1.1).
 ///
 /// Also not a rejection: there is no authenticated subject to attribute one to.
@@ -69,7 +86,8 @@ pub const CALLER_UNAUTHENTICATED: &str = "x-caller-unauthenticated";
 
 /// The complete register. A test asserts on this so the list cannot grow without the growth being
 /// a visible, reviewed diff.
-pub const REGISTER: [&str; 10] = [
+pub const REGISTER: [&str; 11] = [
+    GATE_RATE_LIMITED,
     POLICY_OFFLINE_ALLOWS_GATED,
     POLICY_CHANGE_TARGET_MISMATCH,
     POLICY_CHANGE_DOCUMENT_UNBOUND,
