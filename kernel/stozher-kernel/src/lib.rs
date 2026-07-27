@@ -17,6 +17,8 @@
 //! | [`checkpoint`] | 04 §4–§5 — checkpoint emission, payload decay |
 //! | [`http`] | 05 §2.2, 04 §6 — ingest, policy pull, audit query, the revocation feed |
 //! | [`console`] | `docs/design/console.md` — the read-only console, `get` routes only |
+//! | [`genesis`] | 05 §5.2, ADR-0006 §2 — the two-envelope root key ceremony, built offline |
+//! | [`operator`] | the install path's HTTP side: carries signed documents, holds no key |
 //! | [`keys`] | 01 §6, 09 §8 — SLIP-0010 derivation, owner-only key files |
 //! | [`clock`] | 01 §2.3–§2.4 — the one timestamp form, duration arithmetic, injectable clock |
 //! | [`codes`] | the small set of refusals the specification requires but does not name |
@@ -47,11 +49,13 @@ pub mod codes;
 pub mod config;
 pub mod console;
 pub mod gatequeue;
+pub mod genesis;
 pub mod http;
 pub mod ingest;
 pub mod keys;
 pub mod manifest;
 pub mod notify;
+pub mod operator;
 pub mod policy;
 pub mod store;
 

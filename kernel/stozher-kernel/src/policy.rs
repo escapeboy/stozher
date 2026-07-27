@@ -645,6 +645,13 @@ pub fn baseline_conservative(version: &str, issued_at: &str, approver: &str) -> 
     by_action.insert("kernel.enroll_root", "consequential");
     by_action.insert("kernel.retire_root", "consequential");
     by_action.insert("kernel.erase_payload", "consequential");
+    by_action.insert("kernel.seed_catalog_entry", "consequential");
+    // The gateway's own bookkeeping. §10 §1.6 requires `gateway.session_open` to be `benign`, but
+    // `default-unknown` here is `consequential`, so a profile that stayed silent would gate the
+    // gateway's own session opens — and the gateway refuses to start rather than meet that at the
+    // first call (ADR-0007 §4). A shipped baseline that cannot run the shipped gateway is not a
+    // baseline, so the classification lives here rather than in every operator's first edit.
+    by_action.insert("gateway.session_open", "benign");
     serde_json::json!({
         "v": stozher_core::VERSION,
         "kind": "policy",

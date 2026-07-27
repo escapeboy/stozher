@@ -332,6 +332,47 @@ impl Store {
         &self.rejection_stream
     }
 
+    /// Write a consistent copy of the store to `out`, with the service still running.
+    ///
+    /// `VACUUM INTO` takes a read transaction over the source and writes a complete, already
+    /// compacted database — so the copy is a snapshot of one consistent instant, with no
+    /// half-written page and no separate WAL to reunite it with. Copying the three files with `cp`
+    /// while a writer is mid-transaction produces something that usually restores, which is the
+    /// worst property a backup can have.
+    ///
+    /// Nothing about this path can write to the store: the statement reads.
+    ///
+    /// # Errors
+    ///
+    /// [`codes::STORE_UNAVAILABLE`] if the source cannot be read or the destination written.
+    pub async fn snapshot_to(database: &Path, out: &Path) -> Result<()> {
+        if out.exists() {
+            // `VACUUM INTO` refuses an existing file, but its message is about SQLite rather than
+            // about the operator having pointed a backup at something that already matters.
+            return Err(Error::new(
+                codes::STORE_UNAVAILABLE,
+                format!("{} exists; a snapshot never overwrites", out.display()),
+            ));
+        }
+        let options = SqliteConnectOptions::new()
+            .filename(database)
+            .create_if_missing(false)
+            .read_only(true)
+            .busy_timeout(Duration::from_secs(30));
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect_with(options)
+            .await
+            .map_err(db)?;
+        let destination = out.to_string_lossy().replace('\'', "''");
+        sqlx::query(sqlx::AssertSqlSafe(format!("VACUUM INTO '{destination}'")))
+            .execute(&pool)
+            .await
+            .map_err(db)?;
+        pool.close().await;
+        Ok(())
+    }
+
     // -- reads ------------------------------------------------------------------------------
 
     /// Look an envelope up by `id()`.
@@ -768,6 +809,58 @@ impl Store {
             Err(e) if is_unique_violation(&e) => Ok(false),
             Err(e) => Err(db(e)),
         }
+    }
+
+    /// How many requests this subject has parked since `since`, and how many other subjects are
+    /// also over `threshold` in that window (§09 §7).
+    ///
+    /// Counting by `subject` rather than by the authenticated submitter is deliberate. The subject
+    /// is the identity whose approval an approver is being asked to give, and it is the axis
+    /// approval fatigue runs along: one credential driving twenty subjects is twenty separate
+    /// queues to a human reading them, and one subject behind twenty credentials is still one
+    /// person's attention being spent.
+    ///
+    /// # Errors
+    ///
+    /// [`codes::STORE_UNAVAILABLE`].
+    pub async fn gate_requests_since(&self, subject: &str, since: &str) -> Result<u32> {
+        let row = sqlx::query(
+            "SELECT COUNT(*) AS parked FROM gate_requests WHERE subject = ?1 AND received_at >= ?2",
+        )
+        .bind(subject)
+        .bind(since)
+        .fetch_one(&self.pool)
+        .await
+        .map_err(db)?;
+        Ok(u32::try_from(as_u64(&row, "parked")).unwrap_or(u32::MAX))
+    }
+
+    /// Subjects whose parked requests since `since` reach `threshold` — the spike §09 §7 requires
+    /// an interface to surface *as a finding*, rather than as a queue that is merely longer.
+    ///
+    /// # Errors
+    ///
+    /// [`codes::STORE_UNAVAILABLE`].
+    pub async fn gate_request_spikes(&self, since: &str, threshold: u32) -> Result<Vec<Value>> {
+        let rows = sqlx::query(
+            "SELECT subject, COUNT(*) AS parked, MAX(received_at) AS latest FROM gate_requests \
+             WHERE received_at >= ?1 GROUP BY subject HAVING COUNT(*) >= ?2 ORDER BY parked DESC",
+        )
+        .bind(since)
+        .bind(i64::from(threshold))
+        .fetch_all(&self.pool)
+        .await
+        .map_err(db)?;
+        Ok(rows
+            .iter()
+            .map(|r| {
+                serde_json::json!({
+                    "subject": r.get::<String, _>("subject"),
+                    "parked": as_u64(r, "parked"),
+                    "latest": r.get::<Option<String>, _>("latest")
+                })
+            })
+            .collect())
     }
 
     /// A queued request by hash, as the object an approver signs over.
