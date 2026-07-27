@@ -53,7 +53,7 @@ def _get(port: int, headers: dict[str, str], path: str = "/console") -> tuple[in
         connection.endheaders()
         response = connection.getresponse()
         response.read()
-        return response.status, {name: value for name, value in response.getheaders()}
+        return response.status, dict(response.getheaders())
     finally:
         connection.close()
 
