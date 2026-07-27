@@ -224,7 +224,7 @@ class Enforcer:
                 authorization=authorization,
                 started_at=started_at,
             )
-        except Exception as e:  # noqa: BLE001 - any local chain failure, not one of them
+        except Exception as e:  # noqa: BLE001 - a validation refusal or a failing disk, alike
             # §06 §6: a code path that returns success without emitting is non-conformant. The
             # effect did reach the world, so this refusal is not a rollback — it is the caller
             # being told that what it just did is not in the audit. The write-ahead record above
