@@ -3,7 +3,9 @@
 <h1>Audit explorer</h1>
 <p class="lede">Every filter here is one of the indexed dimensions of <code>spec/04 §6</code>. The
 export is newline-delimited canonical envelopes exactly as they were signed, so a regulator can
-re-verify the signatures and the chain without trusting this page.</p>
+re-verify the signatures and the chain without trusting this page. <b>The export carries every
+record these filters match</b> — <code>limit</code> below caps this page's table and nothing
+else.</p>
 
 <form class="filters" method="get" action="/console/audit">
 <label>subject<br><input name="subject" value="{{ f.subject }}"></label>
@@ -11,33 +13,65 @@ re-verify the signatures and the chain without trusting this page.</p>
 <label>mandate subtree<br><input name="mandate-subtree-of" value="{{ f.mandate_subtree_of }}"></label>
 <label>human root<br><input name="human-root" value="{{ f.human_root }}"></label>
 <br>
-<label>class<br><input name="classification" value="{{ f.classification }}"></label>
-<label>kind<br><input name="kind" value="{{ f.kind }}"></label>
+{# Three of these filters range over closed vocabularies — `spec/02 §2`'s kinds, `spec/05 §1`'s
+   classes and `spec/02 §5`'s outcomes. A free-text box over a closed set asks the reader to recall
+   spelling the kernel will never accept a near-miss of, and returns an empty page when they get it
+   wrong. The choices are the vocabulary itself. #}
+<label>class<br><select name="classification">
+<option value=""{% if f.classification == "" %} selected{% endif %}>any</option>
+{% for c in classes %}<option value="{{ c }}"{% if f.classification == *c %} selected{% endif %}>{{ c }}</option>{% endfor %}
+</select></label>
+<label>kind<br><select name="kind">
+<option value=""{% if f.kind == "" %} selected{% endif %}>any</option>
+{% for k in kinds %}<option value="{{ k }}"{% if f.kind == *k %} selected{% endif %}>{{ k }}</option>{% endfor %}
+</select></label>
 <label>action<br><input name="action" value="{{ f.action }}"></label>
 <label>component<br><input name="component" value="{{ f.component }}"></label>
 <br>
 <label>stream<br><input name="stream" value="{{ f.stream }}"></label>
-<label>outcome<br><input name="outcome" value="{{ f.outcome }}"></label>
+<label>outcome<br><select name="outcome">
+<option value=""{% if f.outcome == "" %} selected{% endif %}>any</option>
+{% for o in outcomes %}<option value="{{ o }}"{% if f.outcome == *o %} selected{% endif %}>{{ o }}</option>{% endfor %}
+</select></label>
 <label>durable object<br><input name="commitment-id" value="{{ f.commitment_id }}"></label>
 <label>correlation<br><input name="correlation-ref" value="{{ f.correlation_ref }}"></label>
 <br>
-<label>emitted from<br><input name="emitted-from" value="{{ f.emitted_from }}"></label>
-<label>emitted to<br><input name="emitted-to" value="{{ f.emitted_to }}"></label>
+<label>emitted from<br><input name="emitted-from" value="{{ f.emitted_from }}"
+       placeholder="2026-07-26T09:00:00.000Z" pattern="\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d\d\dZ"
+       title="RFC 3339 UTC with exactly three fractional digits (spec/01 §2.3)"></label>
+<label>emitted to<br><input name="emitted-to" value="{{ f.emitted_to }}"
+       placeholder="2026-07-26T17:00:00.000Z" pattern="\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d\d\dZ"
+       title="RFC 3339 UTC with exactly three fractional digits (spec/01 §2.3)"></label>
+<br>
+<span class="meta">Both timestamps are <code>YYYY-MM-DDThh:mm:ss.sssZ</code> — UTC, exactly three
+fractional digits (<code>spec/01 §2.3</code>).</span>
 <label>limit<br><input name="limit" value="{{ f.limit }}"></label>
 <label>violations only<br><input type="checkbox" name="violations-only" value="true"{% if f.violations_only %} checked{% endif %}></label>
 <br>
 <button type="submit">filter</button>
 </form>
 
-<p>{{ count }} record(s). <a href="/console/audit/export?{{ query }}">export for regulators (NDJSON)</a>
+<p><b>{{ matched }}</b> record(s) match these filters; <b>{{ shown }}</b> shown below.
+<a href="/console/audit/export?{{ query }}">export all {{ matched }} for regulators (NDJSON)</a>
 {% if f.stream != "" %} · <a href="/console/streams/{{ f.stream }}/verify">verify this stream's chain</a>{% endif %}
 </p>
+
+{% if truncated %}
+<div class="note"><b class="violation">This table is not the whole answer.</b> It shows
+{{ shown }} of {{ matched }} matching records because <code>limit</code> is set to
+<code>{{ f.limit }}</code>. Raise it to see more here. The export link above is unaffected — it
+carries all {{ matched }}, because an export a regulator cannot tell is complete is not
+evidence.</div>
+{% endif %}
 
 {% if rows.is_empty() %}
 <p class="empty">Nothing matches. An empty result is an answer, not a failure — but check the filters.</p>
 {% else %}
 <table>
-<tr><th>emitted</th><th>kind</th><th>subject</th><th>action</th><th>target</th><th>class</th><th>outcome</th><th>human root</th><th>envelope</th></tr>
+<thead>
+<tr><th scope="col">emitted</th><th scope="col">kind</th><th scope="col">subject</th><th scope="col">action</th><th scope="col">target</th><th scope="col">class</th><th scope="col">outcome</th><th scope="col">human root</th><th scope="col">envelope</th><th scope="col">policy</th></tr>
+</thead>
+<tbody>
 {% for r in rows %}
 <tr>
 <td class="num">{{ r.emitted_at }}</td>
@@ -48,9 +82,13 @@ re-verify the signatures and the chain without trusting this page.</p>
 <td class="{{ r.class }}">{{ r.class }}</td>
 <td>{{ r.outcome }}</td>
 <td>{{ r.human_root }}</td>
-<td class="hash"><a href="/console/envelopes/{{ r.id }}">{{ r.short }}</a>{% if r.violation != "" %} <span class="violation" title="{{ r.violation }}">violation</span>{% endif %}</td>
+<td class="hash"><a href="/console/envelopes/{{ r.id }}">{{ r.short }}</a></td>
+{# The violation used to live only in a `title=`, which is invisible to a keyboard, a screen reader
+   and every touch device. It is the most consequential cell on the row. #}
+<td>{% if r.violation != "" %}<span class="violation">{{ r.violation }}</span>{% else %}<span class="empty">—</span>{% endif %}</td>
 </tr>
 {% endfor %}
+</tbody>
 </table>
 {% endif %}
 {% endblock %}

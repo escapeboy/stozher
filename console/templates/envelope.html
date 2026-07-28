@@ -7,18 +7,18 @@
 </p>
 
 <table>
-<tr><th>id</th><td class="hash">{{ r.id }}</td></tr>
-<tr><th>prev-hash</th><td class="hash">{{ prev_hash }}</td></tr>
-<tr><th>emitted-at</th><td>{{ r.emitted_at }}</td></tr>
-<tr><th>subject</th><td>{{ r.subject }} <span class="tag">{{ subject_key }}</span></td></tr>
-<tr><th>component</th><td>{{ r.component }}</td></tr>
-<tr><th>action</th><td>{{ r.action }}</td></tr>
-<tr><th>target</th><td>{{ r.target }}</td></tr>
-<tr><th>outcome</th><td>{{ r.outcome }}</td></tr>
-<tr><th>class (effective)</th><td class="{{ r.class }}">{{ r.class }}</td></tr>
-<tr><th>class (proposed)</th><td>{{ proposed_class }}</td></tr>
-<tr><th>policy-version</th><td>{{ r.policy_version }}</td></tr>
-<tr><th>authorization</th><td>{{ authorization }}</td></tr>
+<tr><th scope="row">id</th><td class="hash">{{ r.id }}</td></tr>
+<tr><th scope="row">prev-hash</th><td class="hash">{{ prev_hash }}</td></tr>
+<tr><th scope="row">emitted-at</th><td>{{ r.emitted_at }}</td></tr>
+<tr><th scope="row">subject</th><td>{{ r.subject }} <span class="tag">{{ subject_key }}</span></td></tr>
+<tr><th scope="row">component</th><td>{{ r.component }}</td></tr>
+<tr><th scope="row">action</th><td>{{ r.action }}</td></tr>
+<tr><th scope="row">target</th><td>{{ r.target }}</td></tr>
+<tr><th scope="row">outcome</th><td>{{ r.outcome }}</td></tr>
+<tr><th scope="row">class (effective)</th><td class="{{ r.class }}">{{ r.class }}</td></tr>
+<tr><th scope="row">class (proposed)</th><td>{{ proposed_class }}</td></tr>
+<tr><th scope="row">policy-version</th><td>{{ r.policy_version }}</td></tr>
+<tr><th scope="row">authorization</th><td>{{ authorization }}</td></tr>
 </table>
 
 <h2 id="mandate">On whose authority</h2>
@@ -28,7 +28,10 @@
 <p class="empty">This envelope cites no mandate. Its kind does not carry one.</p>
 {% else %}
 <table>
-<tr><th>#</th><th>kind</th><th>grantor</th><th>grantee</th><th>not-before</th><th>not-after</th><th>mandate</th></tr>
+<thead>
+<tr><th scope="col">#</th><th scope="col">kind</th><th scope="col">grantor</th><th scope="col">grantee</th><th scope="col">not-before</th><th scope="col">not-after</th><th scope="col">mandate</th></tr>
+</thead>
+<tbody>
 {% for link in chain %}
 <tr>
 <td class="num">{{ link.depth }}</td>
@@ -40,6 +43,7 @@
 <td class="hash"><a href="/console/mandates#{{ link.id }}">{{ link.short }}</a></td>
 </tr>
 {% endfor %}
+</tbody>
 </table>
 <p>Human root: <b class="ok">{{ r.human_root }}</b></p>
 {% endif %}
@@ -49,11 +53,11 @@
 <p class="empty">This envelope carries no evidence commitment.</p>
 {% else %}
 <table>
-<tr><th>schema</th><td>{{ evidence_schema }}</td></tr>
-<tr><th>media-type</th><td>{{ evidence_media_type }}</td></tr>
-<tr><th>payload-hash</th><td class="hash">{{ evidence_hash }}</td></tr>
-<tr><th>retain-until</th><td>{{ evidence_retain_until }}</td></tr>
-<tr><th>payload</th><td>{{ payload_state }}</td></tr>
+<tr><th scope="row">schema</th><td>{{ evidence_schema }}</td></tr>
+<tr><th scope="row">media-type</th><td>{{ evidence_media_type }}</td></tr>
+<tr><th scope="row">payload-hash</th><td class="hash">{{ evidence_hash }}</td></tr>
+<tr><th scope="row">retain-until</th><td>{{ evidence_retain_until }}</td></tr>
+<tr><th scope="row">payload</th><td>{{ payload_state }}</td></tr>
 </table>
 {% if payload_preview != "" %}
 <pre>{{ payload_preview }}</pre>

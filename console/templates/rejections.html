@@ -14,7 +14,10 @@ kept.</p>
 <p class="empty">Nothing has been refused.</p>
 {% else %}
 <table>
-<tr><th>seq</th><th>received</th><th>reason</th><th>detail</th><th>submitted by</th><th>claimed stream</th><th>claimed seq</th><th>claimed kind</th></tr>
+<thead>
+<tr><th scope="col">seq</th><th scope="col">received</th><th scope="col">reason</th><th scope="col">detail</th><th scope="col">submitted by</th><th scope="col">claimed stream</th><th scope="col">claimed seq</th><th scope="col">claimed kind</th></tr>
+</thead>
+<tbody>
 {% for r in rows %}
 <tr>
 <td class="num">{{ r.seq }}</td>
@@ -27,6 +30,7 @@ kept.</p>
 <td>{{ r.claimed_kind }}</td>
 </tr>
 {% endfor %}
+</tbody>
 </table>
 {% endif %}
 {% endblock %}

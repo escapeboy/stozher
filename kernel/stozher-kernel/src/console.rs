@@ -54,8 +54,8 @@ use axum::response::{Html, IntoResponse, Response};
 use axum::routing::{get, post};
 use serde_json::Value;
 
-use crate::http::{Caller, caller};
-use crate::store::EnvelopeQuery;
+use crate::http::Caller;
+use crate::store::{EnvelopeQuery, Store};
 use crate::{Kernel, checkpoint};
 
 /// How far ahead of expiry a standing rule is worth surfacing.
@@ -64,6 +64,11 @@ const EXPIRING_SOON_SECONDS: i64 = 7 * 86_400;
 const PREVIEW_ROWS: i64 = 10;
 /// The largest evidence payload rendered inline. Bigger evidence is named, not shown.
 const PAYLOAD_PREVIEW_BYTES: usize = 8_192;
+/// Rows the regulator export pulls per round trip. Not a cap on the export — it pages until the
+/// filtered set is exhausted — only a bound on how much of it is in flight at once.
+const EXPORT_PAGE_ROWS: i64 = 10_000;
+/// How far a mandate walk follows `parent` looking for the human root, matching the envelope page.
+const MANDATE_CHAIN_LINKS: u32 = 16;
 
 /// Build the console router.
 pub fn router(kernel: Arc<Kernel>) -> Router {
@@ -167,6 +172,8 @@ pub struct MandateRow {
     pub grantee_subject: String,
     /// Expiry, which every mandate has.
     pub not_after: String,
+    /// How long until that moment, in human units, or how long since it passed.
+    pub expires_in: String,
     /// `revoked` | `expired` | `expiring` | `active`.
     pub state: String,
     /// CSS class matching `state`.
@@ -241,12 +248,17 @@ pub struct PendingRow {
     pub mandate_ref: String,
     /// Short form of the mandate.
     pub mandate_short: String,
+    /// The named human the mandate chain terminates at (§03 §5) — "on whose authority".
+    pub human_root: String,
     /// The policy version that classified it.
     pub policy_version: String,
     /// When the component asked.
     pub requested_at: String,
     /// When the request stops being answerable.
     pub not_after: String,
+    /// How long until that moment, in human units. An approver reading a queue is deciding what to
+    /// answer first, and "in 12m" answers that where a second ISO 8601 string does not.
+    pub expires_in: String,
     /// Whether that moment has passed. A timed-out gate is a block, never an allow (§06 §4.6).
     pub expired: bool,
     /// How many channels delivered an approver ping.
@@ -355,7 +367,16 @@ struct AuditPage {
     title: &'static str,
     f: Filters,
     query: String,
-    count: String,
+    /// Rows this page drew.
+    shown: String,
+    /// Rows the filters match, which is a different number and is stated as one.
+    matched: String,
+    /// Whether the two differ, so the page can say so rather than leave it to be noticed.
+    truncated: bool,
+    /// The closed vocabularies the three enumerated filters range over, offered rather than recalled.
+    classes: &'static [&'static str],
+    kinds: &'static [&'static str],
+    outcomes: &'static [&'static str],
     rows: Vec<Row>,
 }
 
@@ -380,6 +401,12 @@ struct PendingPage {
     spikes: Vec<SpikeRow>,
     spike_window: String,
     spike_cap: String,
+    /// The envelope a decision this caller just recorded became, if they arrived from the form.
+    recorded: String,
+    /// Short form of it, for the link text.
+    recorded_short: String,
+    /// The verdict that was recorded — `approve` or `deny`, and named rather than implied.
+    recorded_verdict: String,
 }
 
 /// One subject parking gate requests fast enough to be worth naming.
@@ -466,7 +493,7 @@ struct NoticePage {
 // -- handlers ---------------------------------------------------------------------------------
 
 async fn overview(State(kernel): State<Arc<Kernel>>, headers: HeaderMap) -> Response {
-    if let Caller::Refused(response) = caller(&kernel, &headers) {
+    if let Caller::Refused(response) = console_caller(&kernel, &headers) {
         return response;
     }
     let store = kernel.ingest.store();
@@ -531,18 +558,30 @@ async fn audit(
     headers: HeaderMap,
     Query(params): Query<HashMap<String, String>>,
 ) -> Response {
-    if let Caller::Refused(response) = caller(&kernel, &headers) {
+    if let Caller::Refused(response) = console_caller(&kernel, &headers) {
         return response;
     }
     let filters = Filters::from_params(&params);
-    let records = match kernel.ingest.store().query(&filters.query()).await {
+    let store = kernel.ingest.store();
+    let records = match store.query(&filters.query()).await {
         Ok(records) => records,
+        Err(e) => return unavailable(&e),
+    };
+    // Matched and shown are different numbers and the page says both. Rendering only the second as
+    // "N record(s)" made a filter that matched five thousand look like one that matched two hundred.
+    let matched = match store.query_count(&filters.query()).await {
+        Ok(matched) => matched,
         Err(e) => return unavailable(&e),
     };
     render(&AuditPage {
         title: "Audit explorer",
-        query: filters.to_query_string(),
-        count: records.len().to_string(),
+        query: filters.to_export_query_string(),
+        shown: records.len().to_string(),
+        matched: matched.to_string(),
+        truncated: matched > records.len() as u64,
+        classes: &stozher_core::envelope::CLASSES,
+        kinds: &stozher_core::envelope::KINDS,
+        outcomes: &stozher_core::envelope::OUTCOMES,
         rows: records.iter().map(row).collect(),
         f: filters,
     })
@@ -553,27 +592,53 @@ async fn audit(
 /// Not CSV. A spreadsheet cannot carry a signature, and an export a regulator cannot re-verify is
 /// an assertion rather than evidence. Each line is the stored `JCS(envelope)`, so `id()` and the
 /// Ed25519 signature reproduce from the file alone.
+///
+/// # The export is complete, and that is the whole point
+///
+/// It used to inherit the audit page's `limit` — 200 by default — and say nothing about it, while
+/// `Content-Disposition` presented the result as a finished file. For a product sold on provable
+/// auditability, an export that quietly drops evidence is the worst defect available: a regulator
+/// cannot tell a complete file from a truncated one, and neither can the operator who sent it.
+///
+/// So `limit` is not read here at all, not even when a caller supplies one by hand. The filtered set
+/// is paged out of the store in whole batches until it is exhausted. Nothing is added to the body to
+/// say so, because nothing needs to be: every line is an envelope, which is what the audit page
+/// promises a regulator, and a marker line would break the parser that promise is for.
 async fn export(
     State(kernel): State<Arc<Kernel>>,
     headers: HeaderMap,
     Query(params): Query<HashMap<String, String>>,
 ) -> Response {
-    if let Caller::Refused(response) = caller(&kernel, &headers) {
+    if let Caller::Refused(response) = console_caller(&kernel, &headers) {
         return response;
     }
     let filters = Filters::from_params(&params);
-    let records = match kernel.ingest.store().query(&filters.query()).await {
-        Ok(records) => records,
-        Err(e) => return unavailable(&e),
-    };
+    let store = kernel.ingest.store();
     let mut body = String::new();
-    for record in &records {
-        match stozher_core::jcs::canonicalize(record) {
-            Ok(line) => {
-                body.push_str(&line);
-                body.push('\n');
-            }
+    let mut exported: u64 = 0;
+    loop {
+        let mut page = filters.query();
+        page.limit = EXPORT_PAGE_ROWS;
+        page.offset = i64::try_from(exported).unwrap_or(i64::MAX);
+        let records = match store.query(&page).await {
+            Ok(records) => records,
             Err(e) => return unavailable(&e),
+        };
+        if records.is_empty() {
+            break;
+        }
+        for record in &records {
+            match stozher_core::jcs::canonicalize(record) {
+                Ok(line) => {
+                    body.push_str(&line);
+                    body.push('\n');
+                }
+                Err(e) => return unavailable(&e),
+            }
+        }
+        exported += records.len() as u64;
+        if i64::try_from(records.len()).unwrap_or(i64::MAX) < EXPORT_PAGE_ROWS {
+            break;
         }
     }
     (
@@ -581,11 +646,17 @@ async fn export(
         [
             (
                 axum::http::header::CONTENT_TYPE,
-                "application/x-ndjson; charset=utf-8",
+                "application/x-ndjson; charset=utf-8".to_owned(),
             ),
             (
                 axum::http::header::CONTENT_DISPOSITION,
-                "attachment; filename=\"stozher-audit-export.ndjson\"",
+                "attachment; filename=\"stozher-audit-export.ndjson\"".to_owned(),
+            ),
+            // Not the record of truth — the body is — but it lets a caller assert completeness
+            // without counting lines, and it costs nothing.
+            (
+                axum::http::HeaderName::from_static("x-stozher-export-records"),
+                exported.to_string(),
             ),
         ],
         body,
@@ -594,7 +665,7 @@ async fn export(
 }
 
 async fn attempts(State(kernel): State<Arc<Kernel>>, headers: HeaderMap) -> Response {
-    if let Caller::Refused(response) = caller(&kernel, &headers) {
+    if let Caller::Refused(response) = console_caller(&kernel, &headers) {
         return response;
     }
     let store = kernel.ingest.store();
@@ -635,8 +706,12 @@ async fn attempts(State(kernel): State<Arc<Kernel>>, headers: HeaderMap) -> Resp
 /// are the older surface: actions that did not reach the world and whose emitting component holds
 /// the park itself. A page that merged them would tell an approver that something needs them when
 /// it is already decided, or the reverse.
-async fn pending(State(kernel): State<Arc<Kernel>>, headers: HeaderMap) -> Response {
-    let subject = match caller(&kernel, &headers) {
+async fn pending(
+    State(kernel): State<Arc<Kernel>>,
+    headers: HeaderMap,
+    Query(params): Query<HashMap<String, String>>,
+) -> Response {
+    let subject = match console_caller(&kernel, &headers) {
         Caller::Subject(subject) => subject,
         Caller::Refused(response) => return response,
     };
@@ -686,8 +761,29 @@ async fn pending(State(kernel): State<Arc<Kernel>>, headers: HeaderMap) -> Respo
         Err(e) => return unavailable(&e),
     };
 
+    // The confirmation the decide route redirects back with. Both members are checked against their
+    // own vocabulary rather than rendered as given: a banner is the one part of this page a link
+    // could otherwise choose the wording of.
+    let recorded = params
+        .get("recorded")
+        .filter(|id| stozher_core::crypto::is_digest_hex(id))
+        .cloned()
+        .unwrap_or_default();
+    let recorded_verdict = params
+        .get("verdict")
+        .filter(|v| ["approve", "deny"].contains(&v.as_str()))
+        .cloned()
+        .unwrap_or_default();
+
     render(&PendingPage {
         title: "Pending approvals",
+        recorded_short: short(&recorded),
+        recorded: if recorded_verdict.is_empty() {
+            String::new()
+        } else {
+            recorded
+        },
+        recorded_verdict,
         channels: kernel.notifier.channel_count().to_string(),
         spike_window: limit.window_seconds.to_string(),
         spike_cap: limit.per_subject.to_string(),
@@ -700,14 +796,8 @@ async fn pending(State(kernel): State<Arc<Kernel>>, headers: HeaderMap) -> Respo
                 refused: s["parked"].as_u64().unwrap_or(0) >= u64::from(limit.per_subject),
             })
             .collect(),
-        parked: parked
-            .iter()
-            .map(|r| pending_row(r, &kernel, &subject))
-            .collect(),
-        answered: answered
-            .iter()
-            .map(|r| pending_row(r, &kernel, &subject))
-            .collect(),
+        parked: pending_rows(&parked, &kernel, &subject, &now).await,
+        answered: pending_rows(&answered, &kernel, &subject, &now).await,
         rows: blocked.iter().map(row).collect(),
         denied: denied.iter().map(row).collect(),
     })
@@ -732,7 +822,7 @@ async fn decide(
     Path(request_hash): Path<String>,
     body: axum::body::Bytes,
 ) -> Response {
-    let subject = match caller(&kernel, &headers) {
+    let subject = match console_caller(&kernel, &headers) {
         Caller::Subject(subject) => subject,
         Caller::Refused(response) => return response,
     };
@@ -816,10 +906,19 @@ async fn decide(
         Ok(envelope_id) => {
             if form {
                 // A browser gets a redirect so a refresh cannot repost the decision. The signature
-                // is single-use at ingest anyway; this is politeness, not the defence.
+                // is single-use at ingest anyway; this is politeness, not the defence. The verdict
+                // and the envelope it became travel in the location, so the page it lands on can
+                // say what was recorded — a bare 303 left the human to infer it from a queue that
+                // is one row shorter.
                 return (
                     StatusCode::SEE_OTHER,
-                    [(axum::http::header::LOCATION, "/console/pending")],
+                    [(
+                        axum::http::header::LOCATION,
+                        format!(
+                            "/console/pending?recorded={envelope_id}&verdict={}",
+                            percent_encode(&checked.verdict)
+                        ),
+                    )],
                 )
                     .into_response();
             }
@@ -1004,7 +1103,7 @@ fn json_response(status: StatusCode, value: &Value) -> Response {
 }
 
 async fn mandates(State(kernel): State<Arc<Kernel>>, headers: HeaderMap) -> Response {
-    if let Caller::Refused(response) = caller(&kernel, &headers) {
+    if let Caller::Refused(response) = console_caller(&kernel, &headers) {
         return response;
     }
     let store = kernel.ingest.store();
@@ -1038,7 +1137,7 @@ async fn mandates(State(kernel): State<Arc<Kernel>>, headers: HeaderMap) -> Resp
 }
 
 async fn streams(State(kernel): State<Arc<Kernel>>, headers: HeaderMap) -> Response {
-    if let Caller::Refused(response) = caller(&kernel, &headers) {
+    if let Caller::Refused(response) = console_caller(&kernel, &headers) {
         return response;
     }
     let now = kernel.ingest.clock().now();
@@ -1062,7 +1161,7 @@ async fn verify(
     headers: HeaderMap,
     Path(stream): Path<String>,
 ) -> Response {
-    if let Caller::Refused(response) = caller(&kernel, &headers) {
+    if let Caller::Refused(response) = console_caller(&kernel, &headers) {
         return response;
     }
     let mut page = VerifyPage {
@@ -1106,7 +1205,7 @@ async fn verify(
 }
 
 async fn rejections(State(kernel): State<Arc<Kernel>>, headers: HeaderMap) -> Response {
-    if let Caller::Refused(response) = caller(&kernel, &headers) {
+    if let Caller::Refused(response) = console_caller(&kernel, &headers) {
         return response;
     }
     let store = kernel.ingest.store();
@@ -1133,7 +1232,7 @@ async fn envelope(
     headers: HeaderMap,
     Path(id): Path<String>,
 ) -> Response {
-    if let Caller::Refused(response) = caller(&kernel, &headers) {
+    if let Caller::Refused(response) = console_caller(&kernel, &headers) {
         return response;
     }
     let store = kernel.ingest.store();
@@ -1303,17 +1402,36 @@ fn row(record: &Value) -> Row {
             Some(schema) => format!("{schema} · {}", short(&text(&evidence["payload-hash"]))),
             None => "—".to_owned(),
         },
-        decided_by: text(&envelope["authorization"]["decision"]["sig"]["key"]),
+        decided_by: short_key(&text(&envelope["authorization"]["decision"]["sig"]["key"])),
     }
 }
 
-fn pending_row(record: &Value, kernel: &Kernel, caller_subject: &str) -> PendingRow {
+async fn pending_rows(
+    records: &[Value],
+    kernel: &Kernel,
+    caller_subject: &str,
+    now: &str,
+) -> Vec<PendingRow> {
+    let mut rows = Vec::with_capacity(records.len());
+    for record in records {
+        rows.push(pending_row(record, kernel, caller_subject, now).await);
+    }
+    rows
+}
+
+async fn pending_row(
+    record: &Value,
+    kernel: &Kernel,
+    caller_subject: &str,
+    now: &str,
+) -> PendingRow {
     let request_hash = text(&record["request-hash"]);
     let mandate_ref = text(&record["mandate-ref"]);
     let decision_envelope = record["decision-envelope-id"]
         .as_str()
         .unwrap_or("")
         .to_owned();
+    let not_after = text(&record["not-after"]);
     PendingRow {
         short: short(&request_hash),
         // The request is shown in full, canonicalized, because an approver signs over its hash and
@@ -1331,10 +1449,12 @@ fn pending_row(record: &Value, kernel: &Kernel, caller_subject: &str) -> Pending
         target: text(&record["target"]),
         args_hash: short(&text(&record["args-hash"])),
         mandate_short: short(&mandate_ref),
+        human_root: human_root_of(kernel.ingest.store(), &mandate_ref).await,
         mandate_ref,
         policy_version: text(&record["policy-version"]),
         requested_at: text(&record["requested-at"]),
-        not_after: text(&record["not-after"]),
+        expires_in: age_seconds(now, &not_after).map_or_else(|| "—".to_owned(), humanize),
+        not_after,
         expired: record["expired"].as_bool().unwrap_or(false),
         notified: text(&record["notified"]),
         notify_failures: text(&record["notify-failures"]),
@@ -1344,11 +1464,39 @@ fn pending_row(record: &Value, kernel: &Kernel, caller_subject: &str) -> Pending
             .to_owned(),
         verdict: record["verdict"].as_str().unwrap_or("").to_owned(),
         reason: text(&record["reason"]),
-        decided_by: text(&record["decided-by"]),
+        decided_by: short_key(&text(&record["decided-by"])),
         decided_at: text(&record["decided-at"]),
         decision_short: short(&decision_envelope),
         decision_envelope,
     }
+}
+
+/// The named human a mandate chain terminates at (§03 §5) — the answer to "on whose authority".
+///
+/// A parked request has no envelope yet, so the chain the *blocked* table renders from a stored
+/// envelope has to be walked from the `mandate-ref` itself. An unresolvable chain renders as an em
+/// dash rather than as a plausible-looking name: this is the field an approver decides on.
+async fn human_root_of(store: &Store, mandate_ref: &str) -> String {
+    if mandate_ref.is_empty() || mandate_ref == "—" {
+        return "—".to_owned();
+    }
+    let Ok(ancestry) = store
+        .mandate_ancestry(mandate_ref, MANDATE_CHAIN_LINKS)
+        .await
+    else {
+        return "—".to_owned();
+    };
+    let mut cursor = mandate_ref.to_owned();
+    for _ in 0..=MANDATE_CHAIN_LINKS {
+        let Some(mandate) = ancestry.get(&cursor) else {
+            return "—".to_owned();
+        };
+        match mandate["parent"].as_str().filter(|p| !p.is_empty()) {
+            Some(parent) => cursor = parent.to_owned(),
+            None => return text(&mandate["grantor"]["subject"]),
+        }
+    }
+    "—".to_owned()
 }
 
 fn stream_row(record: &Value, now: &str, quiet_after: i64) -> StreamRow {
@@ -1390,6 +1538,16 @@ fn mandate_row(record: &Value, now: &str) -> MandateRow {
         kind: text(&record["mandate-kind"]),
         grantor_subject: text(&record["grantor"]["subject"]),
         grantee_subject: text(&record["grantee-subject"]),
+        expires_in: age_seconds(now, &not_after).map_or_else(
+            || "—".to_owned(),
+            |left| {
+                if left < 0 {
+                    format!("{} ago", humanize(-left))
+                } else {
+                    format!("in {}", humanize(left))
+                }
+            },
+        ),
         not_after,
         state: state.to_owned(),
         state_class: match state {
@@ -1412,7 +1570,7 @@ fn revocation_row(record: &Value) -> RevocationRow {
         revokes_short: short(&revokes),
         revokes,
         reason: text(&record["reason"]),
-        signer: text(&record["sig"]["key"]),
+        signer: short_key(&text(&record["sig"]["key"])),
     }
 }
 
@@ -1477,7 +1635,21 @@ impl Filters {
             human_root: set(&self.human_root),
             violations_only: self.violations_only,
             limit: self.limit.parse().unwrap_or(200),
+            offset: 0,
         }
+    }
+
+    /// The filter query string for the regulator export.
+    ///
+    /// `limit` is deliberately absent. It is the page's row cap and has nothing to do with what a
+    /// regulator asked for; carrying it into the export is what made the export silently drop
+    /// evidence while `Content-Disposition` presented the result as a finished file.
+    fn to_export_query_string(&self) -> String {
+        self.to_query_string()
+            .split('&')
+            .filter(|part| !part.starts_with("limit="))
+            .collect::<Vec<_>>()
+            .join("&")
     }
 
     fn to_query_string(&self) -> String {
@@ -1527,6 +1699,19 @@ fn short(hash: &str) -> String {
         0 => "—".to_owned(),
         len if len <= 12 => hash.to_owned(),
         _ => hash[..12].to_owned(),
+    }
+}
+
+/// A key identifier at the same width as every other identifier on these pages.
+///
+/// A full `ed25519:` key is 72 characters in a `white-space: nowrap` cell, which pushed the columns
+/// after it off the right edge of the page — including the denial *reason*, which is the one thing a
+/// reader of the answered queue most needs. The algorithm prefix stays because it is the part that
+/// is not a hash.
+fn short_key(key: &str) -> String {
+    match key.split_once(':') {
+        Some((algorithm, material)) => format!("{algorithm}:{}", short(material)),
+        None => short(key),
     }
 }
 
@@ -1612,6 +1797,46 @@ fn render<T: Template>(page: &T) -> Response {
             )
                 .into_response()
         }
+    }
+}
+
+/// Authenticate a console request, answering a refusal in the console's own voice.
+///
+/// The rule is [`crate::http::caller_subject`]'s and only that one — §05 §2.2 applies to these pages
+/// exactly as it applies to `/v1/*`, and a console-only login would be a second credential path to
+/// hold correct. What changes is the answer. A person who opens `/console` in a browser without a
+/// credential used to receive a raw JSON error body and no `WWW-Authenticate` header at all, which
+/// tells them nothing and gives the browser nothing to act on. The 404 page is the model.
+fn console_caller(kernel: &Kernel, headers: &HeaderMap) -> Caller {
+    match crate::http::caller_subject(kernel, headers) {
+        Ok(subject) => Caller::Subject(subject),
+        Err(detail) => Caller::Refused(unauthenticated(&detail)),
+    }
+}
+
+fn unauthenticated(detail: &str) -> Response {
+    let page = NoticePage {
+        title: "This console needs a credential".to_owned(),
+        detail: format!(
+            "{detail}. Every console page reads the audit trail, so every console page requires \
+             the same Bearer credential as the API (spec/05 §2.2) — one readable by anyone who \
+             could reach the port would be a different product. Send \
+             `Authorization: Bearer <token>`; the tokens a deployment accepts are the `callers` \
+             entries of its configuration."
+        ),
+    };
+    let headers = [(
+        axum::http::header::WWW_AUTHENTICATE,
+        "Bearer realm=\"stozher console\"",
+    )];
+    match page.render() {
+        Ok(body) => (StatusCode::UNAUTHORIZED, headers, Html(body)).into_response(),
+        Err(_) => (
+            StatusCode::UNAUTHORIZED,
+            headers,
+            Html("<h1>this console needs a credential</h1>"),
+        )
+            .into_response(),
     }
 }
 

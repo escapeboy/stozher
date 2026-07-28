@@ -16,10 +16,13 @@ shows what was permitted at the time, and rewriting history is not a feature.</p
 <p class="empty">No mandate has been granted. Nothing in this organization can act.</p>
 {% else %}
 <table>
-<tr><th>expires</th><th>state</th><th>kind</th><th>grantor</th><th>grantee</th><th>components</th><th>actions</th><th>classes</th><th>resources</th><th>parent</th><th>mandate</th></tr>
+<thead>
+<tr><th scope="col">expires</th><th scope="col">state</th><th scope="col">kind</th><th scope="col">grantor</th><th scope="col">grantee</th><th scope="col">components</th><th scope="col">actions</th><th scope="col">classes</th><th scope="col">resources</th><th scope="col">parent</th><th scope="col">mandate</th></tr>
+</thead>
+<tbody>
 {% for m in rows %}
 <tr id="{{ m.id }}">
-<td class="num">{{ m.not_after }}</td>
+<td class="num">{{ m.not_after }}<br><span class="meta">{{ m.expires_in }}</span></td>
 <td class="{{ m.state_class }}">{{ m.state }}</td>
 <td>{{ m.kind }}</td>
 <td>{{ m.grantor_subject }}</td>
@@ -29,9 +32,12 @@ shows what was permitted at the time, and rewriting history is not a feature.</p
 <td>{{ m.classes }}</td>
 <td>{{ m.resources }}</td>
 <td class="hash">{% if m.parent != "" %}<a href="#{{ m.parent }}">{{ m.parent_short }}</a>{% else %}<span class="empty">root</span>{% endif %}</td>
-<td class="hash"><a href="/console/audit?mandate-subtree-of={{ m.id }}" title="every effect under this mandate and everything delegated beneath it">{{ m.short }}</a></td>
+{# The explanation was a `title=` — invisible to a keyboard and to every touch device. #}
+<td class="hash"><a href="/console/audit?mandate-subtree-of={{ m.id }}">{{ m.short }}</a>
+<br><span class="meta">every effect beneath it</span></td>
 </tr>
 {% endfor %}
+</tbody>
 </table>
 {% endif %}
 
@@ -43,7 +49,10 @@ effect emitted at or after <code>T</code>, and so is everything delegated beneat
 <p class="empty">No mandate has been revoked.</p>
 {% else %}
 <table>
-<tr><th>revoked at</th><th>revokes</th><th>reason</th><th>signed by</th></tr>
+<thead>
+<tr><th scope="col">revoked at</th><th scope="col">revokes</th><th scope="col">reason</th><th scope="col">signed by</th></tr>
+</thead>
+<tbody>
 {% for r in revocations %}
 <tr>
 <td class="num">{{ r.revoked_at }}</td>
@@ -52,6 +61,7 @@ effect emitted at or after <code>T</code>, and so is everything delegated beneat
 <td class="hash">{{ r.signer }}</td>
 </tr>
 {% endfor %}
+</tbody>
 </table>
 {% endif %}
 {% endblock %}

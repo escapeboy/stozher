@@ -6,13 +6,15 @@ console is read-only: there is no route here that can append an envelope, publis
 approve anything — <code>Ingest::submit</code> is the only write path in the kernel
 (<code>spec/06 §2</code>).</p>
 
+{# Each count is the entry point to the page that explains it. A number an operator can see and
+   cannot follow is a dead end at the exact moment they have a reason to look. #}
 <table class="counts"><tr>
-<td><b>{{ envelopes }}</b>envelopes</td>
-<td><b class="{% if attempts != "0" %}prohibited{% endif %}">{{ attempts }}</b>prohibited attempts</td>
-<td><b class="{% if violations != "0" %}violation{% endif %}">{{ violations }}</b>policy violations</td>
-<td><b>{{ pending }}</b>awaiting a human</td>
-<td><b>{{ rejections }}</b>refused submissions</td>
-<td><b class="{% if quiet_count != "0" %}quiet{% endif %}">{{ quiet_count }}</b>quiet streams</td>
+<td><b>{{ envelopes }}</b><a href="/console/audit">envelopes</a></td>
+<td><b class="{% if attempts != "0" %}prohibited{% endif %}">{{ attempts }}</b><a href="/console/attempts">prohibited attempts</a></td>
+<td><b class="{% if violations != "0" %}violation{% endif %}">{{ violations }}</b><a href="/console/audit?violations-only=true">policy violations</a></td>
+<td><b>{{ pending }}</b><a href="/console/pending">awaiting a human</a></td>
+<td><b>{{ rejections }}</b><a href="/console/rejections">refused submissions</a></td>
+<td><b class="{% if quiet_count != "0" %}quiet{% endif %}">{{ quiet_count }}</b><a href="/console/streams">quiet streams</a></td>
 </tr></table>
 
 <h2>Attempted <span class="prohibited">prohibited</span> actions</h2>
@@ -22,7 +24,10 @@ authorized, recorded with full evidence because it was tried.</p>
 <p class="empty">No prohibited action has been attempted.</p>
 {% else %}
 <table>
-<tr><th>emitted</th><th>subject</th><th>action</th><th>target</th><th>class</th><th>outcome</th><th>envelope</th></tr>
+<thead>
+<tr><th scope="col">emitted</th><th scope="col">subject</th><th scope="col">action</th><th scope="col">target</th><th scope="col">class</th><th scope="col">outcome</th><th scope="col">envelope</th></tr>
+</thead>
+<tbody>
 {% for r in rows %}
 <tr>
 <td class="num">{{ r.emitted_at }}</td>
@@ -34,6 +39,7 @@ authorized, recorded with full evidence because it was tried.</p>
 <td class="hash"><a href="/console/envelopes/{{ r.id }}">{{ r.short }}</a></td>
 </tr>
 {% endfor %}
+</tbody>
 </table>
 {% endif %}
 
@@ -44,10 +50,13 @@ heartbeat of org autonomy: when it empties, the fleet stops acting.</p>
 <p class="empty">No mandate is on record.</p>
 {% else %}
 <table>
-<tr><th>expires</th><th>kind</th><th>grantor</th><th>grantee</th><th>state</th><th>mandate</th></tr>
+<thead>
+<tr><th scope="col">expires</th><th scope="col">kind</th><th scope="col">grantor</th><th scope="col">grantee</th><th scope="col">state</th><th scope="col">mandate</th></tr>
+</thead>
+<tbody>
 {% for m in expiring %}
 <tr>
-<td class="num">{{ m.not_after }}</td>
+<td class="num">{{ m.not_after }}<br><span class="meta">{{ m.expires_in }}</span></td>
 <td>{{ m.kind }}</td>
 <td>{{ m.grantor_subject }}</td>
 <td>{{ m.grantee_subject }}</td>
@@ -55,6 +64,7 @@ heartbeat of org autonomy: when it empties, the fleet stops acting.</p>
 <td class="hash"><a href="/console/mandates#{{ m.id }}">{{ m.short }}</a></td>
 </tr>
 {% endfor %}
+</tbody>
 </table>
 {% endif %}
 
@@ -66,16 +76,22 @@ interval ({{ quiet_after }}).</p>
 <p class="empty">Every stream has appended within the interval.</p>
 {% else %}
 <table>
-<tr><th>stream</th><th>kind</th><th>head seq</th><th>last appended</th><th>silent for</th></tr>
+<thead>
+<tr><th scope="col">stream</th><th scope="col">kind</th><th scope="col">head seq</th><th scope="col">last appended</th><th scope="col">silent for</th></tr>
+</thead>
+<tbody>
 {% for s in quiet %}
 <tr>
-<td><a href="/console/audit?stream={{ s.stream }}">{{ s.stream }}</a></td>
+<th scope="row"><a href="/console/audit?stream={{ s.stream }}">{{ s.stream }}</a></th>
 <td>{{ s.stream_kind }}</td>
 <td class="num">{{ s.head_seq }}</td>
 <td class="num">{{ s.last_appended_at }}</td>
-<td class="quiet">{{ s.silent_for }}</td>
+{# The finding was carried by colour alone, which nothing conveys to a screen reader and roughly
+   one reader in twelve cannot distinguish from the rest of the row. #}
+<td class="quiet">{{ s.silent_for }} — quiet</td>
 </tr>
 {% endfor %}
+</tbody>
 </table>
 {% endif %}
 {% endblock %}

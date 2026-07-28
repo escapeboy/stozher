@@ -14,6 +14,19 @@ use crate::signed::KeyId;
 pub const CLASSES: [&str; 4] = ["read", "benign", "consequential", "prohibited"];
 /// The five execution outcomes. Refusals are records, so they are outcomes, not absences.
 pub const OUTCOMES: [&str; 5] = ["applied", "failed", "denied", "blocked", "attempted"];
+/// The nine envelope kinds (§02 §2). Closed, and named here so a reader — a console filter, a
+/// report — can offer the vocabulary instead of asking someone to recall it.
+pub const KINDS: [&str; 9] = [
+    "effect",
+    "policy-change",
+    "aggregate",
+    "cognition",
+    "signal",
+    "mandate",
+    "revocation",
+    "gate-decision",
+    "checkpoint",
+];
 /// The wire version this implementation speaks.
 pub const VERSION: &str = "stozher/0.1";
 /// Largest integer a protocol object may carry (§01 §2.5).
@@ -608,6 +621,16 @@ fn check_numbers(value: &Value, path: &str) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_named_kind_vocabulary_is_the_one_validation_uses() {
+        // `KINDS` exists so a reader can be offered the vocabulary rather than made to recall it,
+        // which is only true while it is the same vocabulary `kind_spec` enforces.
+        for kind in KINDS {
+            assert!(kind_spec(kind).is_some(), "{kind} has no schema");
+        }
+        assert!(kind_spec("park-request").is_none());
+    }
 
     #[test]
     fn timestamp_format_is_exact() {

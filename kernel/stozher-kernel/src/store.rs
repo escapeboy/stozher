@@ -1226,10 +1226,68 @@ impl Store {
     ///
     /// [`codes::STORE_UNAVAILABLE`].
     pub async fn query(&self, filter: &EnvelopeQuery<'_>) -> Result<Vec<Value>> {
+        let (predicate, binds) = self.predicate(filter).await?;
         let mut sql = String::from(
             "SELECT id, stream, seq, canonical_json, received_at, human_root, effective_class, \
              policy_violation FROM envelopes",
         );
+        sql.push_str(&predicate);
+        sql.push_str(" ORDER BY emitted_at DESC, stream, seq DESC LIMIT ");
+        sql.push_str(&filter.limit.clamp(1, 10_000).to_string());
+        sql.push_str(" OFFSET ");
+        sql.push_str(&filter.offset.max(0).to_string());
+
+        // Audited for injection as `SqlSafeStr` requires: every fragment appended above is a
+        // literal, and every value reaches the statement through `bind`. The only interpolated
+        // non-literals are `?n` placeholder indices and two clamped integers.
+        let mut statement = sqlx::query(sqlx::AssertSqlSafe(sql));
+        for bind in &binds {
+            statement = statement.bind(bind);
+        }
+        let rows = statement.fetch_all(&self.pool).await.map_err(db)?;
+        rows.iter()
+            .map(|r| {
+                let stored = stored_from_row(r);
+                let envelope = stored.envelope()?;
+                Ok(serde_json::json!({
+                    "id": stored.id,
+                    "received-at": stored.received_at,
+                    "human-root": stored.human_root,
+                    "effective-class": stored.effective_class,
+                    "policy-violation": stored.policy_violation,
+                    "envelope": envelope,
+                }))
+            })
+            .collect()
+    }
+
+    /// How many envelopes the same filters match, ignoring `limit` and `offset`.
+    ///
+    /// The console shows this next to the number of rows it drew. "200 record(s)" for a filter that
+    /// matched five thousand is not a smaller truth, it is a different one, and an auditor has no
+    /// way to tell the two apart from the page.
+    ///
+    /// # Errors
+    ///
+    /// [`codes::STORE_UNAVAILABLE`].
+    pub async fn query_count(&self, filter: &EnvelopeQuery<'_>) -> Result<u64> {
+        let (predicate, binds) = self.predicate(filter).await?;
+        let mut sql = String::from("SELECT COUNT(*) AS matched FROM envelopes");
+        sql.push_str(&predicate);
+        let mut statement = sqlx::query(sqlx::AssertSqlSafe(sql));
+        for bind in &binds {
+            statement = statement.bind(bind);
+        }
+        let row = statement.fetch_one(&self.pool).await.map_err(db)?;
+        Ok(as_u64(&row, "matched"))
+    }
+
+    /// The `WHERE` clause the filters describe, and the values to bind to it.
+    ///
+    /// Shared by [`Self::query`] and [`Self::query_count`] so the two can never disagree about what
+    /// "matching" means — a count that came from a different predicate than the rows would be worse
+    /// than no count at all.
+    async fn predicate(&self, filter: &EnvelopeQuery<'_>) -> Result<(String, Vec<String>)> {
         let mut binds: Vec<String> = Vec::new();
         let mut clauses: Vec<String> = Vec::new();
 
@@ -1276,35 +1334,12 @@ impl Store {
             }
             clauses.push(format!("mandate_ref IN ({})", placeholders.join(", ")));
         }
+        let mut sql = String::new();
         if !clauses.is_empty() {
             sql.push_str(" WHERE ");
             sql.push_str(&clauses.join(" AND "));
         }
-        sql.push_str(" ORDER BY emitted_at DESC, stream, seq DESC LIMIT ");
-        sql.push_str(&filter.limit.clamp(1, 10_000).to_string());
-
-        // Audited for injection as `SqlSafeStr` requires: every fragment appended above is a
-        // literal, and every value reaches the statement through `bind`. The only interpolated
-        // non-literals are `?n` placeholder indices and a clamped integer row cap.
-        let mut statement = sqlx::query(sqlx::AssertSqlSafe(sql));
-        for bind in &binds {
-            statement = statement.bind(bind);
-        }
-        let rows = statement.fetch_all(&self.pool).await.map_err(db)?;
-        rows.iter()
-            .map(|r| {
-                let stored = stored_from_row(r);
-                let envelope = stored.envelope()?;
-                Ok(serde_json::json!({
-                    "id": stored.id,
-                    "received-at": stored.received_at,
-                    "human-root": stored.human_root,
-                    "effective-class": stored.effective_class,
-                    "policy-violation": stored.policy_violation,
-                    "envelope": envelope,
-                }))
-            })
-            .collect()
+        Ok((sql, binds))
     }
 
     // -- the single write path ------------------------------------------------------------
@@ -1995,6 +2030,9 @@ pub struct EnvelopeQuery<'a> {
     pub violations_only: bool,
     /// Row cap.
     pub limit: i64,
+    /// Rows to skip, so a caller that needs *all* matches can page through them rather than
+    /// silently receiving the first [`Store::query`]'s worth.
+    pub offset: i64,
 }
 
 fn stored_from_row(row: &sqlx::sqlite::SqliteRow) -> StoredEnvelope {
