@@ -465,7 +465,13 @@ fn check_mandate_chain(report: &mut Report, id: &str, doc: &Value, vector: &Valu
 }
 
 fn check_authorization(report: &mut Report, id: &str, vector: &Value) {
-    let approvers = key_ids(vector.get("approvers"));
+    // A vector names approver *keys* and nothing about the humans behind them, so the subject is
+    // unknown here rather than absent-by-oversight; `None` disables only the subject half of step
+    // (4) and leaves every vector meaning what it meant before.
+    let approvers: Vec<gate::Approver> = key_ids(vector.get("approvers"))
+        .into_iter()
+        .map(|key| gate::Approver { key, subject: None })
+        .collect();
     let seen: HashSet<String> = vector["seen-request-hashes"]
         .as_array()
         .map(|list| {

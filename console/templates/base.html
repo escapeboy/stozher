@@ -6,11 +6,24 @@
 <title>{{ title }} — Stozher console</title>
 <style>
 :root { color-scheme: light dark; --line: #c9c9c9; --dim: #666; --bad: #a11; --warn: #a60; --ok: #060; }
+/* `color-scheme: light dark` above opts every page into the browser's dark canvas, so the palette
+   has to exist for both. On that canvas the light tokens measure 2.5:1 to 3.3:1 — below WCAG AA's
+   4.5:1 — and these are the colours a chain verdict, a prohibited class, a policy violation and all
+   explanatory copy are carried in. Measured against #121212, Chrome's dark canvas:
+     was  --dim 3.26:1  --bad 2.50:1  --ok 2.59:1  --warn 4.11:1
+     now  --dim 7.88:1  --bad 8.21:1  --ok 11.13:1 --warn 10.62:1
+   --line is a separator rather than text, so it is held to 1.4.11's 3:1 instead. */
+@media (prefers-color-scheme: dark) {
+  :root { --line: #666; --dim: #a8a8a8; --bad: #ff8a80; --warn: #ffb454; --ok: #6ede8a; }
+}
+:root[data-theme="dark"] { --line: #666; --dim: #a8a8a8; --bad: #ff8a80; --warn: #ffb454; --ok: #6ede8a; }
+:root[data-theme="light"] { --line: #c9c9c9; --dim: #666; --bad: #a11; --warn: #a60; --ok: #060; }
 * { box-sizing: border-box; }
 body { margin: 0; font: 14px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; }
 header { border-bottom: 1px solid var(--line); padding: .6rem 1rem; }
 header b { margin-right: 1.5rem; }
 nav a { margin-right: 1rem; }
+nav a[aria-current="page"] { font-weight: 700; text-decoration: none; border-bottom: 2px solid currentColor; }
 main { padding: 1rem; }
 h1 { font-size: 1.15rem; margin: 0 0 .2rem; }
 h2 { font-size: 1rem; margin: 1.5rem 0 .4rem; }
@@ -31,21 +44,32 @@ form.filters input, form.filters select { font: inherit; width: 14rem; }
 .note { border-left: 3px solid var(--line); padding: .3rem .7rem; margin: .8rem 0; color: var(--dim); max-width: 62rem; }
 pre { border: 1px solid var(--line); padding: .6rem; overflow-x: auto; white-space: pre-wrap; word-break: break-all; }
 .empty { color: var(--dim); font-style: italic; }
+/* `width: 100%` is inherited from the `table` rule, which stretches four count cells across the
+   whole viewport with nothing between them. A counts panel is a label group, not a data table. */
+table.counts { width: auto; }
 .counts b { font-size: 1.4rem; display: block; }
 .counts td { border: 0; padding-right: 2rem; }
+details.tutorial > summary { cursor: pointer; color: var(--dim); padding: .3rem 0; }
+details.tutorial[open] > summary { margin-bottom: .4rem; }
+.jump a { margin-right: 1rem; }
+.jump { border-bottom: 1px solid var(--line); padding-bottom: .5rem; margin-bottom: 1rem; }
+.headline { font-size: 1.05rem; font-weight: 700; }
+.meta { color: var(--dim); }
 </style>
 </head>
 <body>
 <header>
 <b>Stozher console</b>
+{# The page title is the current-page marker. Every page sets one, and they are fixed strings in
+   `console.rs`, so this needs no per-page field and cannot drift out of sync with the routes. #}
 <nav>
-<a href="/console">overview</a>
-<a href="/console/audit">audit</a>
-<a href="/console/attempts">attempts</a>
-<a href="/console/pending">pending</a>
-<a href="/console/mandates">mandates</a>
-<a href="/console/streams">streams</a>
-<a href="/console/rejections">refused</a>
+<a href="/console"{% if title == "Overview" %} aria-current="page"{% endif %}>overview</a>
+<a href="/console/audit"{% if title == "Audit explorer" %} aria-current="page"{% endif %}>audit</a>
+<a href="/console/attempts"{% if title == "Attempts and violations" %} aria-current="page"{% endif %}>attempts</a>
+<a href="/console/pending"{% if title == "Pending approvals" %} aria-current="page"{% endif %}>pending</a>
+<a href="/console/mandates"{% if title == "Mandate registry" %} aria-current="page"{% endif %}>mandates</a>
+<a href="/console/streams"{% if title == "Streams" || title == "Chain verification" %} aria-current="page"{% endif %}>streams</a>
+<a href="/console/rejections"{% if title == "Refused submissions" %} aria-current="page"{% endif %}>refused</a>
 </nav>
 </header>
 <main>

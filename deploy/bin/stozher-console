@@ -24,6 +24,12 @@ What it will not do
 -------------------
 * It binds 127.0.0.1 only, and refuses to start otherwise. A header-injecting proxy reachable from
   the network is an unauthenticated console for everyone who can reach it.
+* It answers only for its own address. Binding loopback is not a boundary on its own: any page the
+  operator visits can re-resolve its own domain to 127.0.0.1 once the TTL expires, become
+  same-origin with this port, and *read* what it fetches — and what it would fetch is
+  `/console/audit`. The one header that still distinguishes that page from the operator's own tab
+  is `Host`, so a `Host` this proxy does not answer for is refused before the credential is spent,
+  as is an `Origin` or `Referer` from anywhere else.
 * It never writes the token anywhere and never logs it.
 * It forwards `GET` only. The one mutating console route takes a signed decision object, and that
   belongs in `bin/stozher-approve`, where the signing key and the network stay in separate
@@ -40,12 +46,22 @@ import http.server
 import os
 import sys
 import urllib.error
+import urllib.parse
 import urllib.request
 import webbrowser
 from pathlib import Path
 
 DEPLOY = Path(__file__).resolve().parent.parent
 HOP_BY_HOP = {"connection", "keep-alive", "transfer-encoding", "upgrade", "te", "trailer"}
+
+# The console is server-rendered HTML with one inline stylesheet, two `GET`/`POST` forms of its own
+# and no scripts at all (`console/templates/`), so it needs nothing from anywhere. Saying so is
+# defence in depth behind the `Host` check, not a replacement for it — a CSP does not stop a rebound
+# page from fetching this origin, it stops what it could do with a page it did load.
+CSP = (
+    "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; "
+    "frame-ancestors 'none'; base-uri 'none'"
+)
 
 
 def read_env() -> dict[str, str]:
@@ -61,17 +77,13 @@ def read_env() -> dict[str, str]:
     return values
 
 
-def main() -> int:
-    parser = argparse.ArgumentParser(description="browse the Stozher console")
-    parser.add_argument("--port", type=int, default=8788, help="local port to listen on")
-    parser.add_argument("--no-open", action="store_true", help="do not launch a browser")
-    args = parser.parse_args()
-
-    env = read_env()
-    token = env.get("STOZHER_KERNEL_TOKEN", "")
-    if not token:
-        sys.exit("STOZHER_KERNEL_TOKEN is not in .env — the console would refuse every request")
-    upstream = f"http://127.0.0.1:{env.get('STOZHER_KERNEL_PORT', '8787')}"
+def build_server(port: int, upstream: str, token: str) -> http.server.ThreadingHTTPServer:
+    """The proxy as an object, so its guards can be exercised without a browser or a kernel."""
+    # Exact strings, not a suffix or a substring test: `evil.example` and `127.0.0.1.evil.example`
+    # both fail this and both are what a rebinding page sends. The bare forms are here for an
+    # operator who ran this on port 80, where a browser omits the port entirely.
+    allowed_hosts = {f"127.0.0.1:{port}", f"localhost:{port}", "127.0.0.1", "localhost"}
+    allowed_origins = {f"http://127.0.0.1:{port}", f"http://localhost:{port}"}
 
     class Handler(http.server.BaseHTTPRequestHandler):
         # A 1.0 client would make the browser close the connection per request; the console is a
@@ -79,6 +91,8 @@ def main() -> int:
         protocol_version = "HTTP/1.1"
 
         def do_GET(self) -> None:  # noqa: N802 - BaseHTTPRequestHandler's spelling
+            if not self._is_the_operators_own_browser():
+                return
             target = self.path if self.path.startswith("/") else "/"
             request = urllib.request.Request(upstream + target, method="GET")
             request.add_header("Authorization", f"Bearer {token}")
@@ -92,11 +106,40 @@ def main() -> int:
                 body = f"the kernel is not answering at {upstream}: {e}".encode()
                 self._relay(502, [("Content-Type", "text/plain; charset=utf-8")], body)
 
+        def _is_the_operators_own_browser(self) -> bool:
+            """Refuse anything addressed to a name this proxy does not answer for.
+
+            This is the whole DNS-rebinding defence. The socket says loopback for the operator's
+            tab and for a rebound attacker page alike; `Host` is what still tells them apart, and
+            the credential must not be spent before it has been read.
+            """
+            host = self.headers.get("Host", "")
+            if host not in allowed_hosts:
+                self._refuse(f"this proxy does not answer for {host!r}")
+                return False
+            for name in ("Origin", "Referer"):
+                stated = self.headers.get(name)
+                if stated is None:
+                    continue
+                parts = urllib.parse.urlsplit(stated)
+                origin = f"{parts.scheme}://{parts.netloc}" if parts.scheme else stated
+                if origin not in allowed_origins:
+                    self._refuse(f"{name} names a different origin")
+                    return False
+            return True
+
+        def _refuse(self, detail: str) -> None:
+            self._relay(
+                403, [("Content-Type", "text/plain; charset=utf-8")], f"{detail}\n".encode()
+            )
+
         def _relay(self, status: int, headers: object, body: bytes) -> None:
             self.send_response(status)
             for name, value in headers:  # type: ignore[attr-defined]
                 if name.lower() not in HOP_BY_HOP and name.lower() != "content-length":
                     self.send_header(name, value)
+            self.send_header("X-Frame-Options", "DENY")
+            self.send_header("Content-Security-Policy", CSP)
             self.send_header("Content-Length", str(len(body)))
             self.end_headers()
             self.wfile.write(body)
@@ -106,8 +149,22 @@ def main() -> int:
             # but the default format string is noisy enough to bury the one line that matters.
             sys.stderr.write(f"  {fmt % given}\n")
 
-    address = ("127.0.0.1", args.port)
-    server = http.server.ThreadingHTTPServer(address, Handler)
+    return http.server.ThreadingHTTPServer(("127.0.0.1", port), Handler)
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description="browse the Stozher console")
+    parser.add_argument("--port", type=int, default=8788, help="local port to listen on")
+    parser.add_argument("--no-open", action="store_true", help="do not launch a browser")
+    args = parser.parse_args()
+
+    env = read_env()
+    token = env.get("STOZHER_KERNEL_TOKEN", "")
+    if not token:
+        sys.exit("STOZHER_KERNEL_TOKEN is not in .env — the console would refuse every request")
+    upstream = f"http://127.0.0.1:{env.get('STOZHER_KERNEL_PORT', '8787')}"
+
+    server = build_server(args.port, upstream, token)
     url = f"http://127.0.0.1:{args.port}/console"
     print(f"console at {url}")
     print("This process holds the kernel credential. Closing it closes the access.  Ctrl-C to stop.")

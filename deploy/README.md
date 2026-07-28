@@ -224,6 +224,14 @@ will not attach an `Authorization` header to an address-bar navigation, so `bin/
 injects it, on your machine, for as long as that process is in the foreground. It binds `127.0.0.1`
 only and forwards `GET` only. Closing the window closes the access.
 
+Binding loopback is not on its own a boundary, so it does one more thing: it answers only for its
+own address. Any page you visit in the same browser can re-point its own domain at `127.0.0.1` once
+the DNS TTL expires and then read whatever it fetches from this port — the audit trail included.
+The one header that still tells that page apart from your own tab is `Host`, so a request naming
+anything else gets `403` before the credential is spent, as does one whose `Origin` or `Referer` is
+a different origin. Reach it at `127.0.0.1` or `localhost`; a hostname of your own pointed at
+loopback will be refused, by design.
+
 A console **session scheme** was left open at S3 as an S5 decision (ADR-0008). The decision is
 recorded in this stage's ADR; the short version is that a cookie would buy browser access to a
 read-only view while adding a second credential path, and the friction actually worth removing —

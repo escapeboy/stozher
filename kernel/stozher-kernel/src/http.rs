@@ -87,6 +87,26 @@ pub(crate) enum Caller {
 /// can reach the port is a different product, and a console-only login would be a second credential
 /// path to keep correct.
 pub(crate) fn caller(kernel: &Kernel, headers: &HeaderMap) -> Caller {
+    match caller_subject(kernel, headers) {
+        Ok(subject) => Caller::Subject(subject),
+        Err(detail) => Caller::Refused(refusal(
+            StatusCode::UNAUTHORIZED,
+            codes::CALLER_UNAUTHENTICATED,
+            &detail,
+            None,
+        )),
+    }
+}
+
+/// The authentication decision itself, without the response.
+///
+/// Split out from [`caller`] so the console can answer a browser in its own voice
+/// ([`crate::console`]) without holding a second opinion about what counts as authenticated. The
+/// rule is here once; only the rendering differs.
+pub(crate) fn caller_subject(
+    kernel: &Kernel,
+    headers: &HeaderMap,
+) -> std::result::Result<String, String> {
     let token = headers
         .get(axum::http::header::AUTHORIZATION)
         .and_then(|value| value.to_str().ok())
@@ -94,22 +114,13 @@ pub(crate) fn caller(kernel: &Kernel, headers: &HeaderMap) -> Caller {
         .map(str::trim)
         .filter(|token| !token.is_empty());
     let Some(token) = token else {
-        return Caller::Refused(refusal(
-            StatusCode::UNAUTHORIZED,
-            codes::CALLER_UNAUTHENTICATED,
-            "a Bearer credential is required",
-            None,
-        ));
+        return Err("a Bearer credential is required".to_owned());
     };
-    match kernel.config.authenticate(token) {
-        Ok(subject) => Caller::Subject(subject.to_owned()),
-        Err(e) => Caller::Refused(refusal(
-            StatusCode::UNAUTHORIZED,
-            codes::CALLER_UNAUTHENTICATED,
-            e.detail(),
-            None,
-        )),
-    }
+    kernel
+        .config
+        .authenticate(token)
+        .map(str::to_owned)
+        .map_err(|e| e.detail().to_owned())
 }
 
 async fn post_ingest(
@@ -504,6 +515,7 @@ async fn get_envelopes(
         human_root: get("human-root"),
         violations_only: get("violations-only") == Some("true"),
         limit: get("limit").and_then(|l| l.parse().ok()).unwrap_or(100),
+        offset: get("offset").and_then(|o| o.parse().ok()).unwrap_or(0),
     };
     match kernel.ingest.store().query(&filter).await {
         Ok(records) => json(

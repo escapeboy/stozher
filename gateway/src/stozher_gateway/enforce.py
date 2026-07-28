@@ -11,11 +11,17 @@ The order is §10 §2's, and it is not negotiable:
 
 Steps 1-3 and 8 are O(ms) and never block on the kernel. Only a gated call waits, and only for its
 own approval.
+
+Between `gate` and `forward` sits one more write that §10 §2 does not name and `spec/09 §4` does:
+the record of the effect is persisted *before* the effect is applied, so a crash loses at most the
+record of something that did not happen. `forward → emit` is still the order of the envelope; what
+precedes it is the write-ahead row that makes the envelope recoverable if `emit` never runs.
 """
 
 from __future__ import annotations
 
 import logging
+import secrets
 from collections.abc import Callable
 from typing import Any, NamedTuple
 
@@ -169,6 +175,19 @@ class Enforcer:
             )
 
         started_at = self._clock.now()
+        # §09 §4 requirement 1 (`emitter-must-persist-before-apply`): the record is persisted before
+        # the effect is applied, so a crash loses at most the record of an effect that did not
+        # happen. A `read` folding into an aggregation window has no envelope of its own to write
+        # ahead of (§10 §5), and an fsync on that path is the firehose aggregation exists to avoid —
+        # so the write-ahead covers exactly the calls that produce a per-call envelope.
+        folded = classification.classification == "read" and authorization is None
+        intent = (
+            None
+            if folded
+            else self._write_ahead(
+                session, call, classification, target, args_hash, policy, authorization, started_at
+            )
+        )
         try:
             result = forward()
         except RefusalError:
@@ -186,13 +205,15 @@ class Enforcer:
                 policy,
                 authorization=authorization,
                 started_at=started_at,
+                intent=intent,
             )
             raise
 
-        if classification.classification == "read" and authorization is None:
+        if intent is None:
             self._fold_read(session, classification, args_hash, policy)
-        else:
-            self._emit_effect(
+            return result
+        try:
+            self._chain_effect(
                 session,
                 call,
                 classification,
@@ -203,9 +224,52 @@ class Enforcer:
                 authorization=authorization,
                 started_at=started_at,
             )
+        except Exception as e:  # noqa: BLE001 - a validation refusal or a failing disk, alike
+            # §06 §6: a code path that returns success without emitting is non-conformant. The
+            # effect did reach the world, so this refusal is not a rollback — it is the caller
+            # being told that what it just did is not in the audit. The write-ahead record above
+            # is deliberately left open: the next session chains it (`recover_intents`).
+            raise refusal(
+                "blocked",
+                "chain-write-failed",
+                "the effect was applied but its record could not be chained locally",
+                action=classification.action,
+                classification=classification.classification,
+                classification_tier=classification.tier,
+            ) from e
+        self._store.resolve_intent(intent, self._clock.now())
         # Zero-touch: the upstream result is returned unchanged. The gateway may refuse, and a
         # refusal is visible; it never rewrites or summarizes what the agent asked for.
         return result
+
+    def recover_intents(self, session: Session) -> int:
+        """Chain every write-ahead record whose call never completed. Returns how many.
+
+        A row survives only when the process died between applying an effect and chaining it, or
+        when the chain write itself failed. Either way the honest statement is that the action was
+        attempted and this component cannot say whether it applied — which is what `attempted`
+        means here, and why these land on the console's attempts page, where a human looks.
+        """
+        recovered = 0
+        now = self._clock.now()
+        for intent_id, body, payloads in self._store.open_intents(session.stream, session.key.id):
+            record = dict(body)
+            record["emitted-at"] = now
+            record["execution"] = {**record["execution"], "finished-at": now}
+            try:
+                self._emitter.append(session.key, session.stream, record, payloads)
+            except Exception:  # noqa: BLE001 - one unchainable record must not strand the rest
+                logger.exception("a write-ahead record could not be recovered into the chain")
+                continue
+            self._store.resolve_intent(intent_id, now)
+            recovered += 1
+        if recovered:
+            logger.error(
+                "%d effect(s) were applied without their record reaching the chain and have now "
+                "been recorded as attempted; the audit cannot say whether they took effect",
+                recovered,
+            )
+        return recovered
 
     def apply_pending_seeds(self, session: Session) -> int:
         """Put every signed-but-unapplied catalog seed in force. Returns how many were applied.
@@ -633,6 +697,40 @@ class Enforcer:
             args_hash,
         )
 
+    def _write_ahead(
+        self,
+        session: Session,
+        call: Call,
+        classification: Classification,
+        target: str,
+        args_hash: str,
+        policy: Policy,
+        authorization: dict[str, Any] | None,
+        started_at: str,
+    ) -> str:
+        """Persist the record of an effect before applying it. Returns the row's id.
+
+        `attempted` is the outcome the record carries if it is ever chained, because it is the only
+        one of the five (§02 §4) that does not claim to know how the call ended. It is written here
+        and never emitted on the happy path: the row is closed the moment the real envelope lands.
+        """
+        body, payloads = self._effect_body(
+            session,
+            call,
+            classification,
+            target,
+            args_hash,
+            "attempted",
+            policy,
+            authorization,
+            started_at,
+        )
+        intent_id = secrets.token_hex(16)
+        self._store.record_intent(
+            intent_id, session.stream, session.key.id, body, payloads, self._clock.now()
+        )
+        return intent_id
+
     def _emit_effect(
         self,
         session: Session,
@@ -644,7 +742,70 @@ class Enforcer:
         policy: Policy,
         authorization: dict[str, Any] | None = None,
         started_at: str | None = None,
+        intent: str | None = None,
     ) -> str | None:
+        """Chain an effect on a path that is already refusing. A failure here is logged, not raised.
+
+        Every caller of this either raises a refusal of its own or is re-raising the downstream's
+        exception, so the call never returns success unrecorded — which is the property §06 §6 is
+        about. The applied path uses `_chain_effect` directly and refuses when it cannot write.
+        """
+        try:
+            envelope_id = self._chain_effect(
+                session,
+                call,
+                classification,
+                target,
+                args_hash,
+                outcome,
+                policy,
+                authorization=authorization,
+                started_at=started_at,
+            )
+        except Exception:  # noqa: BLE001 - a local refusal must be loud, not fatal to the caller
+            logger.exception("the gateway could not chain an envelope for %s", classification.action)
+            return None
+        if intent is not None:
+            self._store.resolve_intent(intent, self._clock.now())
+        return envelope_id
+
+    def _chain_effect(
+        self,
+        session: Session,
+        call: Call,
+        classification: Classification,
+        target: str,
+        args_hash: str,
+        outcome: str,
+        policy: Policy,
+        authorization: dict[str, Any] | None = None,
+        started_at: str | None = None,
+    ) -> str:
+        body, payloads = self._effect_body(
+            session,
+            call,
+            classification,
+            target,
+            args_hash,
+            outcome,
+            policy,
+            authorization,
+            started_at,
+        )
+        return self._emitter.append(session.key, session.stream, body, payloads)
+
+    def _effect_body(
+        self,
+        session: Session,
+        call: Call,
+        classification: Classification,
+        target: str,
+        args_hash: str,
+        outcome: str,
+        policy: Policy,
+        authorization: dict[str, Any] | None,
+        started_at: str | None,
+    ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
         now = self._clock.now()
         payload = {"server": call.server, "tool": call.tool, "arguments": call.arguments}
         payload_hash = object_hash(payload)
@@ -680,11 +841,7 @@ class Enforcer:
         payloads = [
             {"payload-hash": payload_hash, "media-type": "application/json", "payload": payload}
         ]
-        try:
-            return self._emitter.append(session.key, session.stream, body, payloads)
-        except Exception:  # noqa: BLE001 - a local refusal must be loud, not fatal to the caller
-            logger.exception("the gateway could not chain an envelope for %s", classification.action)
-            return None
+        return body, payloads
 
     def _retain_until(self, at: str, classification: str, policy: Policy) -> str:
         """`min(our preference, emitted-at + policy TTL)` — an emitter cannot buy longer retention."""

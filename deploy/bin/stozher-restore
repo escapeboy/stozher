@@ -91,7 +91,13 @@ fi
 echo "== starting the kernel"
 docker compose up -d kernel
 set -a; . ./.env; set +a
-docker run --rm -u "$(id -u):$(id -g)" --network stozher_default stozher-kernel:0.1.0 \
+# Asked of docker, not assumed from the project name: `COMPOSE_PROJECT_NAME` exists precisely so
+# that two installs on one host get separate networks, and a hardcoded one would await the health
+# of the other install's kernel.
+CONTAINER="$(docker compose ps -q kernel)"
+[ -n "$CONTAINER" ] || { echo "the kernel container did not start" >&2; exit 1; }
+NETWORK="$(docker inspect -f '{{range $name, $_ := .NetworkSettings.Networks}}{{$name}}{{end}}' "$CONTAINER")"
+docker run --rm -u "$(id -u):$(id -g)" --network "$NETWORK" stozher-kernel:0.1.0 \
   await-health --url http://kernel:8787 --timeout 90
 
 echo

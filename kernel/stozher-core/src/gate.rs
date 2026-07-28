@@ -9,9 +9,37 @@ use std::collections::HashSet;
 
 use serde_json::Value;
 
+use crate::envelope::is_timestamp;
 use crate::error::{Result, err};
 use crate::jcs;
 use crate::signed::{KeyId, verify_signed_object};
+
+/// A key permitted to approve a scope, and the subject it signs as.
+///
+/// §06 §5 states self-approval as two conjoined MUSTs — `decision.sig.key` MUST NOT equal
+/// `request.key`, **and** the approver subject MUST NOT be the requesting subject. The second is
+/// checkable only if the verifier can name the human behind the key, and a caller that resolved
+/// these keys resolved them *from* subjects (§06 §5: "entries name subjects; the permitted keys are
+/// those subjects' enrolled keys"), so it already holds the answer. Carrying it here is what stops
+/// this module from having to ask the store a question a library has no business asking.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Approver {
+    /// The key permitted to sign a decision.
+    pub key: KeyId,
+    /// The subject that key acts as, when the deployment can name one.
+    pub subject: Option<String>,
+}
+
+impl Approver {
+    /// An approver whose subject is known.
+    #[must_use]
+    pub fn named(key: KeyId, subject: impl Into<String>) -> Self {
+        Self {
+            key,
+            subject: Some(subject.into()),
+        }
+    }
+}
 
 /// A verified authorization.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -50,7 +78,7 @@ const BOUND: [(&str, &[&str]); 9] = [
 pub fn verify_authorization(
     envelope: &Value,
     requires_gate: bool,
-    approvers: &[KeyId],
+    approvers: &[Approver],
     seen_request_hashes: &HashSet<String>,
 ) -> Result<Option<AuthorizationOk>> {
     // (1) A gated effect without an approval signature is rejected. This is the only step that is
@@ -94,7 +122,7 @@ pub fn verify_authorization(
     let decided_by = verify_signed_object(decision)
         .map_err(|e| err!("gate-decision-sig-invalid", "{}", e.detail()))?;
 
-    // (4) nobody approves their own action
+    // (4) nobody approves their own action — §06 §5 states this over the key *and* the subject.
     let requester = request
         .get("key")
         .and_then(Value::as_str)
@@ -105,9 +133,28 @@ pub fn verify_authorization(
             "{decided_by} approved its own request"
         ));
     }
+    // A human holding a second key is still one human, and "escalation terminates at a named human"
+    // (maxim 3) is about the person, not the keypair. The keypair comparison above is satisfied by
+    // any second key, which is the cheapest thing in the protocol to mint — so on its own it stops
+    // nobody. An approver whose subject the caller could not name is left to step (5), which is
+    // where a key nobody can place is refused anyway.
+    let approver = approvers
+        .iter()
+        .find(|candidate| candidate.key == decided_by);
+    if let (Some(acting_as), Some(requested_by)) = (
+        approver.and_then(|a| a.subject.as_deref()),
+        request.get("subject").and_then(Value::as_str),
+    ) {
+        if acting_as == requested_by {
+            return Err(err!(
+                "gate-self-approval",
+                "{decided_by} acts as {acting_as}, the subject that requested the action"
+            ));
+        }
+    }
 
     // (5) the approver is permitted to approve this scope
-    if !approvers.contains(&decided_by) {
+    if approver.is_none() {
         return Err(err!(
             "gate-approver-not-permitted",
             "{decided_by} is not an approver here"
@@ -151,6 +198,26 @@ pub fn verify_authorization(
         .and_then(Value::as_str)
         .ok_or_else(|| err!("schema-missing-member", "authorization.request.not-after"))?;
 
+    // Steps (8) and (9) compare timestamps as strings, which is exact for §01 §2.3's fixed-width
+    // form and meaningless for anything else: `"z"` sorts above every real timestamp, so an approval
+    // bounded by it is bounded by nothing and step (9) becomes vacuous. Nothing upstream is entitled
+    // to have checked these — `envelope::validate` does not descend into `authorization` — so the
+    // comparison validates its own operands rather than assuming someone else did.
+    let at = envelope
+        .get("emitted-at")
+        .and_then(Value::as_str)
+        .ok_or_else(|| err!("schema-missing-member", "emitted-at"))?;
+    for (what, value) in [
+        ("authorization.decision.decided-at", decided_at),
+        ("authorization.decision.not-after", decision_not_after),
+        ("authorization.request.not-after", request_not_after),
+        ("emitted-at", at),
+    ] {
+        if !is_timestamp(value) {
+            return Err(err!("encoding-bad-timestamp", "{what} = {value:?}"));
+        }
+    }
+
     // (8) the request had not already timed out when it was decided
     if decided_at > request_not_after {
         return Err(err!(
@@ -160,10 +227,6 @@ pub fn verify_authorization(
     }
 
     // (9) the effect happened inside the approval's window
-    let at = envelope
-        .get("emitted-at")
-        .and_then(Value::as_str)
-        .ok_or_else(|| err!("schema-missing-member", "emitted-at"))?;
     if at < decided_at || at > decision_not_after {
         return Err(err!(
             "gate-approval-expired",

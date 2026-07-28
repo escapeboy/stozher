@@ -4,18 +4,46 @@
 <p class="lede">Every action waiting on a named human's signature. Approving here does not create a
 signature — it records one you made with a key this kernel has never held.</p>
 
+{% if recorded != "" %}
+<div class="note"><b class="{% if recorded_verdict == "deny" %}violation{% else %}ok{% endif %}">Recorded:
+{{ recorded_verdict }}.</b> Your signed decision is now a <code>gate-decision</code> envelope on the
+kernel's core stream (<code>spec/06 §5</code>) —
+<a href="/console/envelopes/{{ recorded }}">{{ recorded_short }}</a>. Nothing else changed: the
+effect it authorizes has still to be emitted by the component, and it will carry your decision with
+it (<code>spec/06 §1.3</code>).</div>
+{% endif %}
+
+<nav class="jump">Jump to:
+<a href="#parked">parked</a>
+<a href="#answered">answered</a>
+<a href="#blocked">blocked</a>
+<a href="#denied">denied</a>
+</nav>
+
+{# The tutorial is right on a first visit and is 40% of the viewport on every one after it. `details`
+   collapses it with no script, which ADR-0003 rules out anyway. #}
+<details class="tutorial">
+<summary>How an answer is produced — Stozher holds no approver key</summary>
 <div class="note">
-<b>How an answer is produced.</b> Stozher holds no approver private key and has no route that
-produces an approver's signature, so it cannot manufacture an approval. Sign the request hash with
-your own owner-only seed file:
+Stozher holds no approver private key and has no route that produces an approver's signature, so it
+cannot manufacture an approval. Sign the request hash with your own owner-only seed file:
 <pre>stozher-kernel decide --request &lt;request-hash&gt; --key ~/.stozher/ivan.seed \
-                      --role 0 --index 0 --approve</pre>
+                      --role 0 --index 0 --approve
+
+stozher-kernel decide --request &lt;request-hash&gt; --key ~/.stozher/ivan.seed \
+                      --role 0 --index 0 --deny "we don't file public issues for customers"</pre>
 then paste the object it prints into the form below. <code>--role 0</code> is the human root key of
 <code>spec/01 §6</code>; the default, role <code>1'</code>, is an agent subject key and is in no root
-set. The decision travels into the audit as a <code>gate-decision</code> envelope on the kernel's
-core stream (<code>spec/06 §5</code>) and into the effect that consumes it as
+set.
+<p><b><code>--deny</code> takes a reason and the reason is not optional.</b> It is what the calling
+agent is owed (<code>spec/06 §4.1</code>) and what policy tier 3 learns from
+(<code>docs/design/policy-model.md</code>); a denial without one is refused
+(<code>gate-denial-without-reason</code>). A gate you can only say yes to is not a gate.</p>
+The decision travels into the audit as a <code>gate-decision</code> envelope on the kernel's core
+stream (<code>spec/06 §5</code>) and into the effect that consumes it as
 <code>authorization</code> (<code>spec/06 §1.3</code>).
 </div>
+</details>
 
 {% if !spikes.is_empty() %}
 <div class="note"><b class="violation">Gate-request spike.</b> <code>spec/09 §7</code> calls
@@ -24,12 +52,16 @@ train an approver to click through. These subjects have parked an unusual number
 last {{ spike_window }} seconds. Read the queue below with that in mind, and do not answer a run of
 near-identical requests without asking why there is a run.
 <table>
-<tr><th>subject</th><th>parked in window</th><th>most recent</th><th>state</th></tr>
+<thead>
+<tr><th scope="col">subject</th><th scope="col">parked in window</th><th scope="col">most recent</th><th scope="col">state</th></tr>
+</thead>
+<tbody>
 {% for s in spikes %}
-<tr><td>{{ s.subject }}</td><td>{{ s.parked }}</td><td>{{ s.latest }}</td>
+<tr><th scope="row">{{ s.subject }}</th><td>{{ s.parked }}</td><td>{{ s.latest }}</td>
     <td>{% if s.refused %}<b class="violation">at the cap of {{ spike_cap }} — further requests
     from this subject are refused</b>{% else %}below the cap of {{ spike_cap }}{% endif %}</td></tr>
 {% endfor %}
+</tbody>
 </table>
 </div>
 {% endif %}
@@ -41,28 +73,47 @@ approver when something parks — this page is the only place a park becomes vis
 human. Stated rather than left to look like silence.</div>
 {% endif %}
 
-<h2>Parked — waiting on a human</h2>
+<h2 id="parked">Parked — waiting on a human</h2>
 {% if parked.is_empty() %}
 <p class="empty">Nothing is parked.</p>
 {% else %}
 {% for r in parked %}
+{# What is being asked comes first and at a weight the metadata does not compete with. An approver
+   deciding between "close an issue" and "delete a repository" was previously reading those two
+   words in the same typeface as `policy-version`. #}
+<p class="headline">{{ r.subject }} asks to <b>{{ r.action }}</b> on <b>{{ r.target }}</b>
+<span class="{{ r.class }}">({{ r.class }})</span></p>
 <table>
-<tr><th>request</th><td class="hash">{{ r.request_hash }}</td>
-    <th>class</th><td class="{{ r.class }}">{{ r.class }}</td></tr>
-<tr><th>subject</th><td>{{ r.subject }}</td>
-    <th>submitted by</th><td>{{ r.submitted_by }}</td></tr>
-<tr><th>action</th><td>{{ r.action }}</td>
-    <th>target</th><td>{{ r.target }}</td></tr>
-<tr><th>component</th><td>{{ r.component }}</td>
-    <th>args-hash</th><td class="hash">{{ r.args_hash }}</td></tr>
-<tr><th>mandate</th><td class="hash">{{ r.mandate_short }}</td>
-    <th>policy</th><td>{{ r.policy_version }}</td></tr>
-<tr><th>asked</th><td class="num">{{ r.requested_at }}</td>
-    <th>expires</th><td class="num">{% if r.expired %}<span class="violation">{{ r.not_after }} — expired; a timed-out gate is a block, never an allow</span>{% else %}{{ r.not_after }}{% endif %}</td></tr>
-<tr><th>approver ping</th><td colspan="3">
+<tbody>
+<tr><th scope="row">on whose authority</th><td colspan="3">
+{% if r.mandate_ref != "" && r.mandate_ref != "—" %}<b>{{ r.human_root }}</b> —
+<a href="/console/mandates#{{ r.mandate_ref }}">mandate {{ r.mandate_short }}</a> ·
+<a href="/console/audit?mandate-subtree-of={{ r.mandate_ref }}">everything ever done under it</a>
+{% else %}<span class="empty">no mandate cited</span>{% endif %}</td></tr>
+<tr><th scope="row">expires</th><td class="num">{% if r.expired %}<span class="violation">{{ r.not_after }} — expired; a timed-out gate is a block, never an allow</span>{% else %}<b>in {{ r.expires_in }}</b> · {{ r.not_after }}{% endif %}</td>
+    <th scope="row">asked</th><td class="num">{{ r.requested_at }}</td></tr>
+<tr><th scope="row">subject key</th><td class="hash">{{ r.subject_key }}</td>
+    <th scope="row">submitted by</th><td>{{ r.submitted_by }}</td></tr>
+<tr><th scope="row">component</th><td>{{ r.component }}</td>
+    <th scope="row">policy</th><td class="meta">{{ r.policy_version }}</td></tr>
+<tr><th scope="row">request</th><td class="hash">{{ r.request_hash }}</td>
+    <th scope="row">args-hash</th><td class="hash meta">{{ r.args_hash }}</td></tr>
+<tr><th scope="row">approver ping</th><td colspan="3">
 {% if r.notified != "0" %}delivered on {{ r.notified }} channel(s){% else %}<span class="violation">not delivered</span>{% endif %}{% if r.notify_failures != "0" %} · <span class="violation">{{ r.notify_failures }} failure(s)</span>: {{ r.notify_failure }}{% endif %}
 </td></tr>
+</tbody>
 </table>
+
+{# Said plainly rather than left for the approver to discover. `spec/06 §1.1`'s request carries
+   `args-hash` and no arguments, so this kernel does not hold the preimage and cannot show it. The
+   honest move is to name the gap; inventing a preimage would be worse than the gap. #}
+<div class="note"><b>What <code>args-hash</code> does not tell you.</b> It is a commitment to the
+call's arguments, not the arguments. The action request of <code>spec/06 §1.1</code> carries the
+hash only, so this kernel has never held what it commits to and cannot show it here. Your signature
+<i>binds</i> those arguments — an effect executed with any others fails step (10) of
+<code>spec/06 §2</code> — but it does not tell you what they were. If you need to read them before
+answering, get them from the component that built the request and check that they hash to
+<code>{{ r.args_hash }}</code>.</div>
 
 <p>The exact object a signature covers:</p>
 <pre>{{ r.request_json }}</pre>
@@ -77,12 +128,15 @@ human. Stated rather than left to look like silence.</div>
 {% endfor %}
 {% endif %}
 
-<h2>Answered by a named human</h2>
+<h2 id="answered">Answered by a named human</h2>
 {% if answered.is_empty() %}
 <p class="empty">No parked request has been answered yet.</p>
 {% else %}
 <table>
-<tr><th>decided</th><th>verdict</th><th>subject</th><th>class</th><th>action</th><th>target</th><th>decided by</th><th>reason</th><th>record</th></tr>
+<thead>
+<tr><th scope="col">decided</th><th scope="col">verdict</th><th scope="col">subject</th><th scope="col">class</th><th scope="col">action</th><th scope="col">target</th><th scope="col">decided by</th><th scope="col">reason</th><th scope="col">record</th></tr>
+</thead>
+<tbody>
 {% for r in answered %}
 <tr>
 <td class="num">{{ r.decided_at }}</td>
@@ -96,13 +150,14 @@ human. Stated rather than left to look like silence.</div>
 <td class="hash"><a href="/console/envelopes/{{ r.decision_envelope }}">{{ r.decision_short }}</a></td>
 </tr>
 {% endfor %}
+</tbody>
 </table>
 <p class="lede">A denial is as much a record as an approval, and the reason is part of it — it is
 what the calling agent is owed (<code>spec/06 §4.1</code>) and what policy tier 3 would learn from
 (<code>docs/design/policy-model.md</code>).</p>
 {% endif %}
 
-<h2>Did not reach the world — effect envelopes with <code>blocked</code></h2>
+<h2 id="blocked">Did not reach the world — effect envelopes with <code>blocked</code></h2>
 <div class="note">These are recorded effects, not queue entries: a component evaluated policy
 locally, refused, and said so. They are shown here because they are also waiting on a human, and
 separately from the queue above because nothing here can be signed — the action already terminated.
@@ -111,7 +166,10 @@ separately from the queue above because nothing here can be signed — the actio
 <p class="empty">Nothing is blocked.</p>
 {% else %}
 <table>
-<tr><th>emitted</th><th>subject</th><th>class</th><th>action</th><th>target</th><th>evidence</th><th>mandate chain</th><th>envelope</th></tr>
+<thead>
+<tr><th scope="col">emitted</th><th scope="col">subject</th><th scope="col">class</th><th scope="col">action</th><th scope="col">target</th><th scope="col">evidence</th><th scope="col">mandate chain</th><th scope="col">envelope</th></tr>
+</thead>
+<tbody>
 {% for r in rows %}
 <tr>
 <td class="num">{{ r.emitted_at }}</td>
@@ -124,25 +182,30 @@ separately from the queue above because nothing here can be signed — the actio
 <td class="hash"><a href="/console/envelopes/{{ r.id }}">{{ r.short }}</a></td>
 </tr>
 {% endfor %}
+</tbody>
 </table>
 {% endif %}
 
-<h2>Already decided — <code>denied</code> effect envelopes</h2>
+<h2 id="denied">Already decided — <code>denied</code> effect envelopes</h2>
 {% if denied.is_empty() %}
 <p class="empty">No signed denial is on record.</p>
 {% else %}
 <table>
-<tr><th>emitted</th><th>subject</th><th>class</th><th>action</th><th>decided by</th><th>envelope</th></tr>
+<thead>
+<tr><th scope="col">emitted</th><th scope="col">subject</th><th scope="col">class</th><th scope="col">action</th><th scope="col">decided by</th><th scope="col">envelope</th></tr>
+</thead>
+<tbody>
 {% for r in denied %}
 <tr>
 <td class="num">{{ r.emitted_at }}</td>
 <td>{{ r.subject }}</td>
 <td class="{{ r.class }}">{{ r.class }}</td>
 <td>{{ r.action }}</td>
-<td>{{ r.decided_by }}</td>
+<td class="hash">{{ r.decided_by }}</td>
 <td class="hash"><a href="/console/envelopes/{{ r.id }}">{{ r.short }}</a></td>
 </tr>
 {% endfor %}
+</tbody>
 </table>
 {% endif %}
 {% endblock %}

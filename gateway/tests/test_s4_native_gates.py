@@ -356,8 +356,18 @@ async def test_a_consequential_call_parks_pings_approves_and_then_proceeds(
     assert kernel.human_root.id in detail, "the approver's key is on the decision record"
 
     # The answered request moves out of the parked section, with the human named against it.
+    #
+    # The queue truncates identifiers to 12 characters like every other identifier in the console
+    # (QA finding M3: a full 72-character key in a `nowrap` cell pushed the `reason` and `record`
+    # columns off-screen at laptop width). The property under test is unchanged — the human who
+    # answered is named against the request — so this asserts the form the page actually renders.
+    # The *full* key is still asserted above, on the decision record, which is where a verifier
+    # needs it.
     answered = await_console(world, "/console/pending", "Answered by a named human")
-    assert kernel.human_root.id in answered
+    algorithm, material = kernel.human_root.id.split(":", 1)
+    assert f"{algorithm}:{material[:12]}" in answered, (
+        "the answered row does not name the human who decided"
+    )
     assert "approve" in answered
 
 

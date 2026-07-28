@@ -8,7 +8,10 @@ nothing appended for longer than the policy's checkpoint interval ({{ quiet_afte
 <p class="empty">No stream has been written to.</p>
 {% else %}
 <table>
-<tr><th>stream</th><th>kind</th><th>head seq</th><th>head hash</th><th>first seen</th><th>last appended</th><th>silent for</th><th></th></tr>
+<thead>
+<tr><th scope="col">stream</th><th scope="col">kind</th><th scope="col">head seq</th><th scope="col">head hash</th><th scope="col">first seen</th><th scope="col">last appended</th><th scope="col">silent for</th><th scope="col"></th></tr>
+</thead>
+<tbody>
 {% for s in rows %}
 <tr>
 <td><a href="/console/audit?stream={{ s.stream }}">{{ s.stream }}</a></td>
@@ -21,6 +24,7 @@ nothing appended for longer than the policy's checkpoint interval ({{ quiet_afte
 <td><a href="/console/streams/{{ s.stream }}/verify">verify chain</a></td>
 </tr>
 {% endfor %}
+</tbody>
 </table>
 {% endif %}
 {% endblock %}

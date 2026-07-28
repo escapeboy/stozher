@@ -38,6 +38,20 @@ CREATE TABLE IF NOT EXISTS envelopes (
 );
 CREATE INDEX IF NOT EXISTS envelopes_unpushed ON envelopes (pushed_at) WHERE pushed_at IS NULL;
 
+-- The write-ahead record of an effect, written before the effect is applied and closed once the
+-- effect's envelope is chained (§09 §4.1, `emitter-must-persist-before-apply`). A row that outlives
+-- its call is a crash marker: the downstream may have run and nothing was chained for it.
+CREATE TABLE IF NOT EXISTS intents (
+    intent_id     TEXT PRIMARY KEY,
+    stream        TEXT NOT NULL,
+    subject_key   TEXT NOT NULL,
+    body_json     TEXT NOT NULL,
+    payloads_json TEXT NOT NULL DEFAULT '[]',
+    created_at    TEXT NOT NULL,
+    resolved_at   TEXT
+);
+CREATE INDEX IF NOT EXISTS intents_open ON intents (stream) WHERE resolved_at IS NULL;
+
 CREATE TABLE IF NOT EXISTS parked (
     request_hash  TEXT PRIMARY KEY,
     request_json  TEXT NOT NULL,
@@ -208,6 +222,54 @@ class GatewayStore:
                 "SELECT COUNT(*) AS n FROM envelopes WHERE pushed_at IS NULL"
             ).fetchone()
         return int(row["n"])
+
+    # -- write-ahead records ----------------------------------------------------------------
+
+    def record_intent(
+        self,
+        intent_id: str,
+        stream: str,
+        subject_key: str,
+        body: dict[str, Any],
+        payloads: list[dict[str, Any]],
+        created_at: str,
+    ) -> None:
+        """Durably record an effect **before** it is applied. `synchronous=FULL` makes it an fsync."""
+        with self._connect() as connection:
+            connection.execute(
+                "INSERT INTO intents (intent_id, stream, subject_key, body_json, payloads_json, "
+                "created_at) VALUES (?, ?, ?, ?, ?, ?)",
+                (
+                    intent_id,
+                    stream,
+                    subject_key,
+                    json.dumps(body),
+                    json.dumps(payloads),
+                    created_at,
+                ),
+            )
+
+    def resolve_intent(self, intent_id: str, at: str) -> None:
+        """Close a write-ahead record: its effect's envelope is now in the chain."""
+        with self._connect() as connection:
+            connection.execute(
+                "UPDATE intents SET resolved_at = ? WHERE intent_id = ?", (at, intent_id)
+            )
+
+    def open_intents(
+        self, stream: str, subject_key: str
+    ) -> list[tuple[str, dict[str, Any], list[dict[str, Any]]]]:
+        """Write-ahead records whose call never chained an envelope, oldest first."""
+        with self._connect() as connection:
+            rows = connection.execute(
+                "SELECT intent_id, body_json, payloads_json FROM intents WHERE resolved_at IS NULL "
+                "AND stream = ? AND subject_key = ? ORDER BY created_at, rowid",
+                (stream, subject_key),
+            ).fetchall()
+        return [
+            (row["intent_id"], json.loads(row["body_json"]), json.loads(row["payloads_json"]))
+            for row in rows
+        ]
 
     # -- parked requests ------------------------------------------------------------------
 

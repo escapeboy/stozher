@@ -253,6 +253,11 @@ class Gateway:
         self._publish_mandate(session)
         self._record_session_open(session)
         self.session = session
+        # An effect this stream applied without getting its record into the chain — the process was
+        # killed between the two, or the chain write failed — is chained now, before anything else
+        # this session does. Leaving it for later would put it after envelopes that happened after
+        # it (§09 §4.1).
+        self.enforcer.recover_intents(session)
         # Approvals signed while nothing was connected still classified a tool; putting them in
         # force at connect time is what makes "the next call proceeds" true.
         self.enforcer.apply_pending_seeds(session)

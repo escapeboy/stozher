@@ -12,6 +12,13 @@
 #
 # No Redis, no separate database server, no reverse proxy, no metrics sidecar. SQLite is the store
 # (ADR-0003); Postgres is a documented future seam, not a service here.
+#
+# Neither service pins `container_name`. A fixed name is global to the docker daemon, so a second
+# install on the same host — a re-clone, a staging copy beside a real one — collides with the first
+# and the operator gets a container from the *other* checkout answering for this one's config. That
+# failure looks like an authentication bug (a token whose digest matches the config on disk still
+# refusing), which is a long way from its cause. Compose namespaces by project instead; to run two
+# installs side by side, set `COMPOSE_PROJECT_NAME` in each `.env` (it overrides the `name` below).
 
 name: stozher
 
@@ -22,12 +29,16 @@ services:
       # The repository root: the console's templates are compiled into the binary from `console/`.
       context: ..
       dockerfile: deploy/Dockerfile
-    container_name: stozher-kernel
     restart: unless-stopped
     # The operator's own uid, written by `bin/stozher-bootstrap`. A bind-mounted seed at mode 0600
     # is readable by exactly one account, and the kernel refuses to start on anything more
     # permissive (§09 §8) — so the two sides of the mount have to agree on who that account is.
-    user: "${STOZHER_UID:-0}:${STOZHER_GID:-0}"
+    #
+    # No default. `:-0` would mean that any path reaching `up` with an incomplete `.env` — a hand
+    # edit, a CI runner, a restored backup — runs this container as root, quietly, beside a
+    # `cap_drop: ALL` and a `no-new-privileges` chosen to prevent exactly that. Not starting is the
+    # more honest failure, and the message says what to do about it.
+    user: "${STOZHER_UID:?set STOZHER_UID and STOZHER_GID in deploy/.env — run bin/stozher-bootstrap, or add STOZHER_UID=$(id -u) and STOZHER_GID=$(id -g) by hand}:${STOZHER_GID:?set STOZHER_GID in deploy/.env alongside STOZHER_UID}"
     # Loopback by default. `spec/09 §8` requires TLS for component↔kernel traffic; this image
     # terminates none, so exposing the port beyond the host is a decision an operator makes
     # deliberately, with a TLS terminator in front — never a default they inherit.
@@ -58,7 +69,7 @@ services:
       context: ..
       dockerfile: deploy/Dockerfile.gateway
     profiles: ["mcp"]
-    user: "${STOZHER_UID:-0}:${STOZHER_GID:-0}"
+    user: "${STOZHER_UID:?set STOZHER_UID and STOZHER_GID in deploy/.env — run bin/stozher-bootstrap, or add STOZHER_UID=$(id -u) and STOZHER_GID=$(id -g) by hand}:${STOZHER_GID:?set STOZHER_GID in deploy/.env alongside STOZHER_UID}"
     depends_on:
       kernel:
         condition: service_healthy
