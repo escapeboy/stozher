@@ -15,7 +15,13 @@ authors = [{ name = "PRICEX" }]
 # gateway adds no HTTP client. Ed25519 is optional on purpose: an unconditional crypto import would
 # break "a Harbormaster without a kernel loses nothing" for bare installs (ADR-0005).
 dependencies = [
-    "mcp>=1.2.0",
+    # Upper bound is load-bearing, not caution. `tools.py` imports
+    # `mcp.server.fastmcp.tools.base.Tool`, which mcp 2.0 removed; with an open
+    # upper bound pip resolves 2.x and the gateway dies at import — a clean
+    # build of this project broke the day 2.0.0 was published, while every
+    # cached build kept passing. The Rust half builds `--locked` against exactly
+    # this failure mode; this is the Python half of that discipline.
+    "mcp>=1.2,<2",
     "pydantic>=2.5",
 ]
 

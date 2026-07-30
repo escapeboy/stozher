@@ -24,7 +24,10 @@ COPY gateway/src/ src/
 # Two installs, deliberately in this order: Harbormaster first, so that the plugin entry point
 # resolves against the Harbormaster that is actually present rather than one pip pulled in to
 # satisfy us. Pinned to the major line ADR-0005's reconnaissance was performed against.
-RUN pip install --no-cache-dir "harbormaster-mcp>=27.1,<28" \
+# `mcp<2` is repeated here rather than left to the package metadata because this line installs
+# Harbormaster *first* and alone: without the constraint pip resolves mcp 2.x to satisfy
+# Harbormaster's own open bound, and the second install cannot walk it back.
+RUN pip install --no-cache-dir "harbormaster-mcp>=27.1,<28" "mcp>=1.2,<2" \
     && pip install --no-cache-dir ".[crypto]"
 
 # Activation uses only keys Harbormaster already ships (`[plugins] enabled/allow`), so this file
