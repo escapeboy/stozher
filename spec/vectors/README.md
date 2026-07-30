@@ -8,6 +8,26 @@ implementation, in any language: the Rust kernel (`kernel/stozher-core`), the Py
 these files and MUST NOT hardcode them.** That rule is the whole reason these files exist: two
 implementations that each assert against their own constants cannot discover that they disagree.
 
+## 0. The keys in these files are public test data, not secrets
+
+These vectors contain fields named `secret-key` and `private-key`. That is deliberate and safe, and
+worth stating plainly before anyone greps this directory and reaches for the alarm:
+
+- **Signature vectors require known keypairs.** Ed25519 is deterministic, so "both implementations
+  produce byte-identical signatures" is only testable if both sign with the *same* key. A vector with
+  no secret key can assert verification but never signing.
+- **The `slip10-ed25519` seeds are the ones published in the SLIP-0010 specification itself**
+  (`000102030405060708090a0b0c0d0e0f…`). They are the canonical interoperability vectors every
+  implementation of that derivation scheme tests against.
+- **Every other key is derived deterministically from a public label** —
+  `sha256("stozher/0.1 test vector key: " + label)` — by `generate_vectors.py` in this directory.
+  Anyone can regenerate the entire corpus; that reproducibility is the point.
+
+**No key here is ever operational.** A real deployment mints keys from the OS CSPRNG
+(`getrandom`), stores them owner-only (`0600`), and refuses to load a key file carrying group or
+other permission bits. Key material is excluded by `.gitignore` and `.dockerignore`, and no seed,
+`.env`, or store file appears in any commit on any branch of this repository.
+
 ## 1. Layout
 
 ```

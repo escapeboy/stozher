@@ -1,0 +1,24 @@
+Stozher — accountability kernel for agentic work
+Copyright 2026 PRICEX LTD
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+
+--------------------------------------------------------------------------------
+
+Cryptographic construction inherited from the Servanda protocol: Ed25519
+signatures, SLIP-0010 key derivation, and RFC 8785 (JCS) canonicalization with
+SHA-256. No new cryptography is invented in this project; that is deliberate.
+
+The SLIP-0010 test vectors under spec/vectors/ use the seed values published in
+the SLIP-0010 specification itself. They are public test data, not key material.
+See spec/vectors/README.md.
