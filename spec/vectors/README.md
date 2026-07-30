@@ -118,7 +118,7 @@ because a gateway in Python and a kernel in Rust have to agree on what they are 
   is not a human, root not enrolled, self-grant, scope widened (by action and by class), delegation
   not held, window outside parent, revocation — including a revocation that does **not** invalidate an
   effect emitted before it.
-- **Gate authorization** (§06 §2): all ten algorithm steps, including a genuine signature carried
+- **Gate authorization** (§06 §2): all eleven algorithm steps, including a genuine signature carried
   while acting on a different target, a different `args-hash`, and a different mandate; replay;
   self-approval; a signed denial.
 - **Decay** (§04 §5): the same envelope with and without its payload has the **identical** envelope
