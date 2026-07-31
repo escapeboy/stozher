@@ -101,10 +101,14 @@ PY
 # holding this checkout; on a machine where the docker daemon keeps its images on a different one
 # (a Linux VM under Docker Desktop or OrbStack) that daemon's own disk is not covered here, and a
 # build that runs out of space there will say so itself.
-HEADROOM_KB=$(df -Pk . | awk 'NR==2 {print $4}')
-if [ "${HEADROOM_KB:-0}" -lt 5242880 ]; then
-  fail "under 5 GB free on the filesystem holding this checkout ($(( ${HEADROOM_KB:-0} / 1024 )) MB) — a --no-cache build of both images needs more"
-fi
+HEADROOM_KB=$(df -Pk . 2>/dev/null | awk 'NR==2 {print $4}')
+case "$HEADROOM_KB" in
+  # "could not measure" and "measured, and it is low" are different answers, and a check that
+  # reported the first as the second would be this script telling the same kind of confident wrong
+  # story the install used to. Say which one it is.
+  ''|*[!0-9]*) echo "  note: could not read free space from df — skipping the headroom check" >&2 ;;
+  *) [ "$HEADROOM_KB" -ge 5242880 ] || fail "under 5 GB free on the filesystem holding this checkout ($(( HEADROOM_KB / 1024 )) MB) — a --no-cache build of both images needs more" ;;
+esac
 
 # ---------------------------------------------------------------------------------------------
 step "0  wiping every trace of a previous install"
