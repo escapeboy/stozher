@@ -378,18 +378,31 @@ Until that changes it is an operator duty, and it is stated here rather than lef
 a deployment nobody schedules decay on keeps every payload for ever, and the property the pitch
 claims is one you are providing, not one you are receiving.
 
-Schedule it however you already schedule things. A cron entry on the host, running as the operator
-whose uid the deployment was installed with:
+Schedule it however you already schedule things. A two-line script beside the deployment, and one
+cron entry — a wrapper rather than an inline command because crontab has no line continuation, and
+because `$` in a crontab is the shell's only after cron has finished with the line:
 
-```cron
-# Nightly, 04:17. Reads deploy/.env for the credential rather than holding a copy of it.
-17 4 * * *  cd /path/to/stozher/deploy && set -a && . ./.env && set +a && \
-            curl -fsS -X POST -H "Authorization: Bearer $STOZHER_KERNEL_TOKEN" \
-                 "http://127.0.0.1:${STOZHER_KERNEL_PORT}/v1/maintenance/decay" >/dev/null
+```sh
+cat > bin/stozher-decay <<'SH'
+#!/usr/bin/env sh
+# Reads deploy/.env for the credential rather than keeping a second copy of it.
+set -eu
+cd "$(dirname "$0")/.."
+set -a; . ./.env; set +a
+exec curl -fsS -X POST -H "Authorization: Bearer $STOZHER_KERNEL_TOKEN" \
+     "http://127.0.0.1:${STOZHER_KERNEL_PORT}/v1/maintenance/decay"
+SH
+chmod 700 bin/stozher-decay
 ```
 
-`-f` matters: without it curl exits zero on a 401, and a retention job that silently stopped
-authenticating is the failure mode you would least like to be quiet.
+```cron
+# Nightly at 04:17, as the operator whose uid the deployment was installed with.
+17 4 * * * /path/to/stozher/deploy/bin/stozher-decay >/dev/null
+```
+
+`curl -f` matters: without it curl exits zero on a `401`, and a retention job that has silently
+stopped authenticating is the failure you would least like to be quiet. `set -e` in the wrapper
+means cron gets a non-zero status and mails you, which is the point of running it under cron at all.
 
 **This is an interim measure and should be read as one.** The right owner of that schedule is the
 kernel: it already owns a periodic interval for checkpoints, decay checkpoints streams as part of
