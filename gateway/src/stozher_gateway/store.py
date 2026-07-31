@@ -17,7 +17,7 @@ import json
 import os
 import sqlite3
 import threading
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
@@ -143,18 +143,31 @@ class GatewayStore:
             os.chmod(path, 0o600)
 
     @contextmanager
-    def _connect(self) -> Iterator[sqlite3.Connection]:
+    def _connect(self, immediate: bool = False) -> Iterator[sqlite3.Connection]:
+        """One short-lived connection. `immediate` takes SQLite's writer lock up front.
+
+        A `BEGIN IMMEDIATE` acquires the RESERVED lock before the first read, which is what makes a
+        read-modify-write atomic *against other processes* and not merely against other threads.
+        """
         with self._lock:
             if self._shared is not None:
                 self._shared.row_factory = sqlite3.Row
-                yield self._shared
-                self._shared.commit()
+                if immediate:
+                    self._shared.execute("BEGIN IMMEDIATE")
+                try:
+                    yield self._shared
+                    self._shared.commit()
+                except BaseException:
+                    self._shared.rollback()
+                    raise
                 return
             connection = sqlite3.connect(self.path, timeout=5.0)
             connection.row_factory = sqlite3.Row
             try:
                 connection.execute("PRAGMA journal_mode=WAL")
                 connection.execute("PRAGMA synchronous=FULL")
+                if immediate:
+                    connection.execute("BEGIN IMMEDIATE")
                 yield connection
                 connection.commit()
             finally:
@@ -162,33 +175,47 @@ class GatewayStore:
 
     # -- the local chain ------------------------------------------------------------------
 
-    def head(self, stream: str) -> tuple[int, str | None]:
-        """The next free `seq` and the `prev-hash` it must carry."""
-        with self._connect() as connection:
+    def append_next(
+        self,
+        stream: str,
+        build: Callable[[int, str | None], tuple[str, dict[str, Any]]],
+        payloads: list[dict[str, Any]],
+        created_at: str,
+    ) -> str:
+        """Take this stream's next `seq`, build the envelope for it and store it, atomically.
+
+        Reading the head and inserting at it is one read-modify-write, and it must be atomic against
+        every writer of this stream — not just every thread. A stream name is config-derived
+        (`gw:<device>:<caller>`) and stdio spawns one process per client connection, so two
+        connections of the same caller are two processes sharing one stream and one database file.
+        An in-process lock says nothing about the other process: both read the same head, both build
+        at that `seq`, and one loses `PRIMARY KEY (stream, seq)` — a `chain-write-failed` raised
+        *after* the effect was already forwarded, which is the outcome §06 §6 spends the whole
+        write-ahead design avoiding.
+
+        Serializing on SQLite's own writer lock is preferred over a second lock of our own: the
+        database is already the thing both processes share, an advisory file lock would be a
+        parallel mechanism that can disagree with it, and a per-connection stream suffix would fix
+        it by changing stream identity — which is spec-visible (§07) and would fragment one caller's
+        audit trail into a chain per connection.
+
+        `build` runs inside that transaction and MUST NOT touch this store: the lock guarding it is
+        not reentrant. It is given the `seq` and `prev-hash` to chain at, and returns the envelope's
+        id and body.
+        """
+        with self._connect(immediate=True) as connection:
             row = connection.execute(
                 "SELECT seq, id FROM envelopes WHERE stream = ? ORDER BY seq DESC LIMIT 1",
                 (stream,),
             ).fetchone()
-        if row is None:
-            return 0, None
-        return int(row["seq"]) + 1, str(row["id"])
-
-    def append(
-        self,
-        stream: str,
-        seq: int,
-        envelope_id: str,
-        envelope: dict[str, Any],
-        payloads: list[dict[str, Any]],
-        created_at: str,
-    ) -> None:
-        """Durably record an envelope before it is pushed anywhere."""
-        with self._connect() as connection:
+            seq, prev = (0, None) if row is None else (int(row["seq"]) + 1, str(row["id"]))
+            envelope_id, envelope = build(seq, prev)
             connection.execute(
                 "INSERT INTO envelopes (stream, seq, id, envelope_json, payloads_json, created_at) "
                 "VALUES (?, ?, ?, ?, ?, ?)",
                 (stream, seq, envelope_id, json.dumps(envelope), json.dumps(payloads), created_at),
             )
+        return envelope_id
 
     def unpushed(self, limit: int = 64) -> list[tuple[str, dict[str, Any], list[dict[str, Any]]]]:
         """Envelopes not yet accepted by the kernel, in chain order per stream."""

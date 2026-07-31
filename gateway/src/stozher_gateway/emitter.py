@@ -148,8 +148,8 @@ class Emitter:
         failure this product exists to prevent.
         """
         payloads = payloads or []
-        with self._chain_lock:
-            seq, prev = self._store.head(stream)
+
+        def build(seq: int, prev: str | None) -> tuple[str, dict[str, Any]]:
             envelope = dict(body)
             envelope.update({"stream": stream, "seq": seq, "prev-hash": prev})
             signed = key.sign(envelope)
@@ -157,9 +157,14 @@ class Emitter:
                 validate_shape(signed)
             except EnvelopeError as e:
                 raise ChainError(e.code, e.detail, seq) from e
-            envelope_id = object_id(signed)
-            self._store.append(stream, seq, envelope_id, signed, payloads, self._clock.now())
-        return envelope_id
+            return object_id(signed), signed
+
+        # The guarantee that one `seq` is written once lives in `append_next`, which holds the
+        # database's writer lock across the read and the insert and so covers the other *processes*
+        # a config-derived stream name is shared with. This lock is only to keep this process's own
+        # threads off that lock, where they would contend for it and burn the busy timeout.
+        with self._chain_lock:
+            return self._store.append_next(stream, build, payloads, self._clock.now())
 
     def fold_read(
         self,

@@ -180,6 +180,8 @@ class GatewaySection(BaseModel):
     #: stdio spawns one process per client connection, so long-lived downstream sessions would
     #: duplicate per session and leak threads. Opt in explicitly, the way `bridge_in_stdio` does.
     persist_downstream_in_stdio: bool = False
+    #: How long to wait on a downstream server before abandoning the call and reaping it.
+    downstream_timeout_seconds: float = Field(default=30.0, gt=0)
     #: Harbormaster's own tools are actions too (§10 §8): under enforcement they are classified,
     #: mandated and gated like anything else.
     govern_native_tools: bool = True
