@@ -1,0 +1,1250 @@
+{
+  "v": "stozher/0.1",
+  "kind": "manifest",
+  "description": "Manifest validation (spec 08 section 1). Validate `manifest` as a signed object and against section 1's rules; the result MUST match `expected.valid` and on failure the code MUST equal `expected.error`. Registration conditions (section 3) are not part of this check.",
+  "keys": [
+    {
+      "label": "agent:triage",
+      "secret-key": "672c513b926233aeb427b90af6bae503e96b49d3252997cbf89cfe591f6514fa",
+      "public-key": "0bab4865a246a78aae98ececc8399f7483eb86ccbb19d24536602f95069fc8a6",
+      "key-id": "ed25519:0bab4865a246a78aae98ececc8399f7483eb86ccbb19d24536602f95069fc8a6"
+    }
+  ],
+  "vectors": [
+    {
+      "name": "valid",
+      "description": "a manifest the kernel would register",
+      "manifest": {
+        "v": "stozher/0.1",
+        "kind": "manifest",
+        "name": "github",
+        "version": "1.4.0",
+        "subject-class": "tool-proxy",
+        "description": "GitHub operations proxied through the gateway",
+        "actions": [
+          {
+            "action": "github.get_file",
+            "class": "read",
+            "evidence-schema": "github.get_file.v1",
+            "aggregate": {
+              "sampling": "first-and-last",
+              "max-samples": 8
+            },
+            "idempotent": true,
+            "target-kind": "repo-path"
+          },
+          {
+            "action": "github.create_issue",
+            "class": "consequential",
+            "evidence-schema": "github.create_issue.v1",
+            "idempotent": false,
+            "target-kind": "repo",
+            "degrade": null
+          }
+        ],
+        "evidence-schemas": {
+          "github.get_file.v1": {
+            "type": "object",
+            "required": [
+              "path"
+            ],
+            "properties": {
+              "path": {
+                "type": "string"
+              }
+            },
+            "additionalProperties": false
+          },
+          "github.create_issue.v1": {
+            "type": "object",
+            "required": [
+              "title"
+            ],
+            "properties": {
+              "title": {
+                "type": "string"
+              }
+            },
+            "additionalProperties": false
+          }
+        },
+        "budget-dimensions": [
+          "requests",
+          "money-eur"
+        ],
+        "durable-objects": [],
+        "conformance": {
+          "self-test": "github.selftest",
+          "vectors-version": "stozher/0.1"
+        },
+        "sig": {
+          "alg": "ed25519",
+          "key": "ed25519:0bab4865a246a78aae98ececc8399f7483eb86ccbb19d24536602f95069fc8a6",
+          "value": "98d88d7d9ac12b78f941e0bb6655c6d7ceae7b56383e2731293e9376010c9e41919d3cbddaeb0bef6106d51dec9c95ea47b7bd041cd5b3a1a74947afd249b608"
+        }
+      },
+      "expected": {
+        "valid": true,
+        "error": null
+      }
+    },
+    {
+      "name": "unknown-member",
+      "description": "the member set is closed",
+      "manifest": {
+        "v": "stozher/0.1",
+        "kind": "manifest",
+        "name": "github",
+        "version": "1.4.0",
+        "subject-class": "tool-proxy",
+        "description": "GitHub operations proxied through the gateway",
+        "actions": [
+          {
+            "action": "github.get_file",
+            "class": "read",
+            "evidence-schema": "github.get_file.v1",
+            "aggregate": {
+              "sampling": "first-and-last",
+              "max-samples": 8
+            },
+            "idempotent": true,
+            "target-kind": "repo-path"
+          },
+          {
+            "action": "github.create_issue",
+            "class": "consequential",
+            "evidence-schema": "github.create_issue.v1",
+            "idempotent": false,
+            "target-kind": "repo",
+            "degrade": null
+          }
+        ],
+        "evidence-schemas": {
+          "github.get_file.v1": {
+            "type": "object",
+            "required": [
+              "path"
+            ],
+            "properties": {
+              "path": {
+                "type": "string"
+              }
+            },
+            "additionalProperties": false
+          },
+          "github.create_issue.v1": {
+            "type": "object",
+            "required": [
+              "title"
+            ],
+            "properties": {
+              "title": {
+                "type": "string"
+              }
+            },
+            "additionalProperties": false
+          }
+        },
+        "budget-dimensions": [
+          "requests",
+          "money-eur"
+        ],
+        "durable-objects": [],
+        "conformance": {
+          "self-test": "github.selftest",
+          "vectors-version": "stozher/0.1"
+        },
+        "maintainer": "someone",
+        "sig": {
+          "alg": "ed25519",
+          "key": "ed25519:0bab4865a246a78aae98ececc8399f7483eb86ccbb19d24536602f95069fc8a6",
+          "value": "bead4db12aaacbbcb33b8ee3c9b123bf3fbb345701dfe1d1519a43053e167be893b4734454b19192ad77b9403d9d12a49fddf935bb8197376a11453d626ea207"
+        }
+      },
+      "expected": {
+        "valid": false,
+        "error": "schema-unknown-member"
+      }
+    },
+    {
+      "name": "missing-conformance",
+      "description": "spec 08 section 1.1 makes `conformance` a MUST, and section 4.8's harness invokes the self-test it names",
+      "manifest": {
+        "v": "stozher/0.1",
+        "kind": "manifest",
+        "name": "github",
+        "version": "1.4.0",
+        "subject-class": "tool-proxy",
+        "description": "GitHub operations proxied through the gateway",
+        "actions": [
+          {
+            "action": "github.get_file",
+            "class": "read",
+            "evidence-schema": "github.get_file.v1",
+            "aggregate": {
+              "sampling": "first-and-last",
+              "max-samples": 8
+            },
+            "idempotent": true,
+            "target-kind": "repo-path"
+          },
+          {
+            "action": "github.create_issue",
+            "class": "consequential",
+            "evidence-schema": "github.create_issue.v1",
+            "idempotent": false,
+            "target-kind": "repo",
+            "degrade": null
+          }
+        ],
+        "evidence-schemas": {
+          "github.get_file.v1": {
+            "type": "object",
+            "required": [
+              "path"
+            ],
+            "properties": {
+              "path": {
+                "type": "string"
+              }
+            },
+            "additionalProperties": false
+          },
+          "github.create_issue.v1": {
+            "type": "object",
+            "required": [
+              "title"
+            ],
+            "properties": {
+              "title": {
+                "type": "string"
+              }
+            },
+            "additionalProperties": false
+          }
+        },
+        "budget-dimensions": [
+          "requests",
+          "money-eur"
+        ],
+        "durable-objects": [],
+        "sig": {
+          "alg": "ed25519",
+          "key": "ed25519:0bab4865a246a78aae98ececc8399f7483eb86ccbb19d24536602f95069fc8a6",
+          "value": "e0fc9c9eac58085d69b8895705dc664e09f51788f43fa1f3dfab37f42874fc646107a16ffbe1fec8c625c3cc3bceaf121acd65f9f82d4d5b1982cbc8d9a05001"
+        }
+      },
+      "expected": {
+        "valid": false,
+        "error": "schema-missing-member"
+      }
+    },
+    {
+      "name": "conformance-without-a-self-test",
+      "description": "a manifest naming no self-test is one no conformance run could be performed against",
+      "manifest": {
+        "v": "stozher/0.1",
+        "kind": "manifest",
+        "name": "github",
+        "version": "1.4.0",
+        "subject-class": "tool-proxy",
+        "description": "GitHub operations proxied through the gateway",
+        "actions": [
+          {
+            "action": "github.get_file",
+            "class": "read",
+            "evidence-schema": "github.get_file.v1",
+            "aggregate": {
+              "sampling": "first-and-last",
+              "max-samples": 8
+            },
+            "idempotent": true,
+            "target-kind": "repo-path"
+          },
+          {
+            "action": "github.create_issue",
+            "class": "consequential",
+            "evidence-schema": "github.create_issue.v1",
+            "idempotent": false,
+            "target-kind": "repo",
+            "degrade": null
+          }
+        ],
+        "evidence-schemas": {
+          "github.get_file.v1": {
+            "type": "object",
+            "required": [
+              "path"
+            ],
+            "properties": {
+              "path": {
+                "type": "string"
+              }
+            },
+            "additionalProperties": false
+          },
+          "github.create_issue.v1": {
+            "type": "object",
+            "required": [
+              "title"
+            ],
+            "properties": {
+              "title": {
+                "type": "string"
+              }
+            },
+            "additionalProperties": false
+          }
+        },
+        "budget-dimensions": [
+          "requests",
+          "money-eur"
+        ],
+        "durable-objects": [],
+        "conformance": {
+          "vectors-version": "stozher/0.1"
+        },
+        "sig": {
+          "alg": "ed25519",
+          "key": "ed25519:0bab4865a246a78aae98ececc8399f7483eb86ccbb19d24536602f95069fc8a6",
+          "value": "48c7d7d696285aeb23fce212f4b203c7d10c05969afe89f902f0ae7bcd35b2df41548f0399371de376cd1bf4cff6a1881fc91330ffcb65dddcac8f89b3e5bd09"
+        }
+      },
+      "expected": {
+        "valid": false,
+        "error": "schema-missing-member"
+      }
+    },
+    {
+      "name": "name-not-of-the-required-form",
+      "description": "the name must match ^[a-z][a-z0-9-]{1,31}$",
+      "manifest": {
+        "v": "stozher/0.1",
+        "kind": "manifest",
+        "name": "GitHub",
+        "version": "1.4.0",
+        "subject-class": "tool-proxy",
+        "description": "GitHub operations proxied through the gateway",
+        "actions": [
+          {
+            "action": "github.get_file",
+            "class": "read",
+            "evidence-schema": "github.get_file.v1",
+            "aggregate": {
+              "sampling": "first-and-last",
+              "max-samples": 8
+            },
+            "idempotent": true,
+            "target-kind": "repo-path"
+          },
+          {
+            "action": "github.create_issue",
+            "class": "consequential",
+            "evidence-schema": "github.create_issue.v1",
+            "idempotent": false,
+            "target-kind": "repo",
+            "degrade": null
+          }
+        ],
+        "evidence-schemas": {
+          "github.get_file.v1": {
+            "type": "object",
+            "required": [
+              "path"
+            ],
+            "properties": {
+              "path": {
+                "type": "string"
+              }
+            },
+            "additionalProperties": false
+          },
+          "github.create_issue.v1": {
+            "type": "object",
+            "required": [
+              "title"
+            ],
+            "properties": {
+              "title": {
+                "type": "string"
+              }
+            },
+            "additionalProperties": false
+          }
+        },
+        "budget-dimensions": [
+          "requests",
+          "money-eur"
+        ],
+        "durable-objects": [],
+        "conformance": {
+          "self-test": "github.selftest",
+          "vectors-version": "stozher/0.1"
+        },
+        "sig": {
+          "alg": "ed25519",
+          "key": "ed25519:0bab4865a246a78aae98ececc8399f7483eb86ccbb19d24536602f95069fc8a6",
+          "value": "e6dbc442bb3819e043358ede9632e307bd967a780bd54f3110dbbaaacc7c01af5d0b042c187813e31e7bd7f7b132d5af7742744e1e2301205a15d7be3a70c103"
+        }
+      },
+      "expected": {
+        "valid": false,
+        "error": "manifest-malformed"
+      }
+    },
+    {
+      "name": "subject-class-unknown",
+      "description": "the subject classes of section 1.1 are closed",
+      "manifest": {
+        "v": "stozher/0.1",
+        "kind": "manifest",
+        "name": "github",
+        "version": "1.4.0",
+        "subject-class": "wizard",
+        "description": "GitHub operations proxied through the gateway",
+        "actions": [
+          {
+            "action": "github.get_file",
+            "class": "read",
+            "evidence-schema": "github.get_file.v1",
+            "aggregate": {
+              "sampling": "first-and-last",
+              "max-samples": 8
+            },
+            "idempotent": true,
+            "target-kind": "repo-path"
+          },
+          {
+            "action": "github.create_issue",
+            "class": "consequential",
+            "evidence-schema": "github.create_issue.v1",
+            "idempotent": false,
+            "target-kind": "repo",
+            "degrade": null
+          }
+        ],
+        "evidence-schemas": {
+          "github.get_file.v1": {
+            "type": "object",
+            "required": [
+              "path"
+            ],
+            "properties": {
+              "path": {
+                "type": "string"
+              }
+            },
+            "additionalProperties": false
+          },
+          "github.create_issue.v1": {
+            "type": "object",
+            "required": [
+              "title"
+            ],
+            "properties": {
+              "title": {
+                "type": "string"
+              }
+            },
+            "additionalProperties": false
+          }
+        },
+        "budget-dimensions": [
+          "requests",
+          "money-eur"
+        ],
+        "durable-objects": [],
+        "conformance": {
+          "self-test": "github.selftest",
+          "vectors-version": "stozher/0.1"
+        },
+        "sig": {
+          "alg": "ed25519",
+          "key": "ed25519:0bab4865a246a78aae98ececc8399f7483eb86ccbb19d24536602f95069fc8a6",
+          "value": "fabc6363746823dcdbfa0a86bb0dbe73c72a6339b8a2c5f25cda83ace41cc3d074b46268ccb9ae3fd547bad78a17aaf51e147efd6d4f2bc5ec9ea3d54e436f0a"
+        }
+      },
+      "expected": {
+        "valid": false,
+        "error": "manifest-malformed"
+      }
+    },
+    {
+      "name": "no-actions",
+      "description": "a component that declares no action conforms to nothing",
+      "manifest": {
+        "v": "stozher/0.1",
+        "kind": "manifest",
+        "name": "github",
+        "version": "1.4.0",
+        "subject-class": "tool-proxy",
+        "description": "GitHub operations proxied through the gateway",
+        "actions": [],
+        "evidence-schemas": {
+          "github.get_file.v1": {
+            "type": "object",
+            "required": [
+              "path"
+            ],
+            "properties": {
+              "path": {
+                "type": "string"
+              }
+            },
+            "additionalProperties": false
+          },
+          "github.create_issue.v1": {
+            "type": "object",
+            "required": [
+              "title"
+            ],
+            "properties": {
+              "title": {
+                "type": "string"
+              }
+            },
+            "additionalProperties": false
+          }
+        },
+        "budget-dimensions": [
+          "requests",
+          "money-eur"
+        ],
+        "durable-objects": [],
+        "conformance": {
+          "self-test": "github.selftest",
+          "vectors-version": "stozher/0.1"
+        },
+        "sig": {
+          "alg": "ed25519",
+          "key": "ed25519:0bab4865a246a78aae98ececc8399f7483eb86ccbb19d24536602f95069fc8a6",
+          "value": "ed805dc74ad05194bdb51c722a78852d51aca7d178039604aa0bd5350b5426f4378496120e1cb7455cb0f5edca7cd572ce56b764e0ccc6f2380c2f044cc50c05"
+        }
+      },
+      "expected": {
+        "valid": false,
+        "error": "manifest-malformed"
+      }
+    },
+    {
+      "name": "action-outside-the-namespace",
+      "description": "a component MUST NOT declare actions in another component's namespace",
+      "manifest": {
+        "v": "stozher/0.1",
+        "kind": "manifest",
+        "name": "github",
+        "version": "1.4.0",
+        "subject-class": "tool-proxy",
+        "description": "GitHub operations proxied through the gateway",
+        "actions": [
+          {
+            "action": "elsewhere.do_it",
+            "class": "read",
+            "evidence-schema": "github.get_file.v1",
+            "aggregate": {
+              "sampling": "first-and-last",
+              "max-samples": 8
+            },
+            "idempotent": true,
+            "target-kind": "repo-path"
+          }
+        ],
+        "evidence-schemas": {
+          "github.get_file.v1": {
+            "type": "object",
+            "required": [
+              "path"
+            ],
+            "properties": {
+              "path": {
+                "type": "string"
+              }
+            },
+            "additionalProperties": false
+          },
+          "github.create_issue.v1": {
+            "type": "object",
+            "required": [
+              "title"
+            ],
+            "properties": {
+              "title": {
+                "type": "string"
+              }
+            },
+            "additionalProperties": false
+          }
+        },
+        "budget-dimensions": [
+          "requests",
+          "money-eur"
+        ],
+        "durable-objects": [],
+        "conformance": {
+          "self-test": "github.selftest",
+          "vectors-version": "stozher/0.1"
+        },
+        "sig": {
+          "alg": "ed25519",
+          "key": "ed25519:0bab4865a246a78aae98ececc8399f7483eb86ccbb19d24536602f95069fc8a6",
+          "value": "17d3945c36f0825238cfaa3a9f943895878853f3cfd7b79825638cb293eb736e65235a563d68f091133b7def3dd54678f17408a2340a19b04306609835228c02"
+        }
+      },
+      "expected": {
+        "valid": false,
+        "error": "manifest-action-namespace"
+      }
+    },
+    {
+      "name": "evidence-schema-not-declared",
+      "description": "every declared action needs a schema, so every audit record is typed and queryable",
+      "manifest": {
+        "v": "stozher/0.1",
+        "kind": "manifest",
+        "name": "github",
+        "version": "1.4.0",
+        "subject-class": "tool-proxy",
+        "description": "GitHub operations proxied through the gateway",
+        "actions": [
+          {
+            "action": "github.get_file",
+            "class": "read",
+            "evidence-schema": "github.undeclared.v1",
+            "aggregate": {
+              "sampling": "first-and-last",
+              "max-samples": 8
+            },
+            "idempotent": true,
+            "target-kind": "repo-path"
+          }
+        ],
+        "evidence-schemas": {
+          "github.get_file.v1": {
+            "type": "object",
+            "required": [
+              "path"
+            ],
+            "properties": {
+              "path": {
+                "type": "string"
+              }
+            },
+            "additionalProperties": false
+          },
+          "github.create_issue.v1": {
+            "type": "object",
+            "required": [
+              "title"
+            ],
+            "properties": {
+              "title": {
+                "type": "string"
+              }
+            },
+            "additionalProperties": false
+          }
+        },
+        "budget-dimensions": [
+          "requests",
+          "money-eur"
+        ],
+        "durable-objects": [],
+        "conformance": {
+          "self-test": "github.selftest",
+          "vectors-version": "stozher/0.1"
+        },
+        "sig": {
+          "alg": "ed25519",
+          "key": "ed25519:0bab4865a246a78aae98ececc8399f7483eb86ccbb19d24536602f95069fc8a6",
+          "value": "c3346e9ac9ccc31a649004a005fd90755edb1d9d6bdb0124ff941ba6c148e41c3d71e3d122b4f0f461c9ae5baf5131795ea3071dd59ef60baa673fc7e9af5708"
+        }
+      },
+      "expected": {
+        "valid": false,
+        "error": "manifest-evidence-schema-missing"
+      }
+    },
+    {
+      "name": "evidence-schema-left-open",
+      "description": "a schema admitting extra members cannot make an audit record typed, which is the only reason it is required",
+      "manifest": {
+        "v": "stozher/0.1",
+        "kind": "manifest",
+        "name": "github",
+        "version": "1.4.0",
+        "subject-class": "tool-proxy",
+        "description": "GitHub operations proxied through the gateway",
+        "actions": [
+          {
+            "action": "github.get_file",
+            "class": "read",
+            "evidence-schema": "github.get_file.v1",
+            "aggregate": {
+              "sampling": "first-and-last",
+              "max-samples": 8
+            },
+            "idempotent": true,
+            "target-kind": "repo-path"
+          },
+          {
+            "action": "github.create_issue",
+            "class": "consequential",
+            "evidence-schema": "github.create_issue.v1",
+            "idempotent": false,
+            "target-kind": "repo",
+            "degrade": null
+          }
+        ],
+        "evidence-schemas": {
+          "github.get_file.v1": {
+            "type": "object",
+            "required": [
+              "path"
+            ],
+            "properties": {
+              "path": {
+                "type": "string"
+              }
+            }
+          },
+          "github.create_issue.v1": {
+            "type": "object",
+            "required": [
+              "title"
+            ],
+            "properties": {
+              "title": {
+                "type": "string"
+              }
+            },
+            "additionalProperties": false
+          }
+        },
+        "budget-dimensions": [
+          "requests",
+          "money-eur"
+        ],
+        "durable-objects": [],
+        "conformance": {
+          "self-test": "github.selftest",
+          "vectors-version": "stozher/0.1"
+        },
+        "sig": {
+          "alg": "ed25519",
+          "key": "ed25519:0bab4865a246a78aae98ececc8399f7483eb86ccbb19d24536602f95069fc8a6",
+          "value": "80d0baba1c481a5138977bc97651cb7f8c8d7cf5212d808a8c4d05fc5a517bab8d4a8c1301ac5f5848d56bf9097f41a16a1f77956b2132c5f3c518fc3595c40d"
+        }
+      },
+      "expected": {
+        "valid": false,
+        "error": "manifest-malformed"
+      }
+    },
+    {
+      "name": "read-action-without-an-aggregate-rule",
+      "description": "declaring the sampling rule up front is what makes an aggregate auditable",
+      "manifest": {
+        "v": "stozher/0.1",
+        "kind": "manifest",
+        "name": "github",
+        "version": "1.4.0",
+        "subject-class": "tool-proxy",
+        "description": "GitHub operations proxied through the gateway",
+        "actions": [
+          {
+            "action": "github.get_file",
+            "class": "read",
+            "evidence-schema": "github.get_file.v1",
+            "idempotent": true,
+            "target-kind": "repo-path"
+          }
+        ],
+        "evidence-schemas": {
+          "github.get_file.v1": {
+            "type": "object",
+            "required": [
+              "path"
+            ],
+            "properties": {
+              "path": {
+                "type": "string"
+              }
+            },
+            "additionalProperties": false
+          },
+          "github.create_issue.v1": {
+            "type": "object",
+            "required": [
+              "title"
+            ],
+            "properties": {
+              "title": {
+                "type": "string"
+              }
+            },
+            "additionalProperties": false
+          }
+        },
+        "budget-dimensions": [
+          "requests",
+          "money-eur"
+        ],
+        "durable-objects": [],
+        "conformance": {
+          "self-test": "github.selftest",
+          "vectors-version": "stozher/0.1"
+        },
+        "sig": {
+          "alg": "ed25519",
+          "key": "ed25519:0bab4865a246a78aae98ececc8399f7483eb86ccbb19d24536602f95069fc8a6",
+          "value": "8637c74e8b4e79bb0ba50532b7facfdd04f9f7cad524ca253144fd343d9d1762a415cab489d349f6602f18c4071b3d99a7d1661bb29c0ff415c30ef6e74c5809"
+        }
+      },
+      "expected": {
+        "valid": false,
+        "error": "manifest-malformed"
+      }
+    },
+    {
+      "name": "aggregate-on-a-non-read-action",
+      "description": "only class read is aggregated (spec 02 section 7)",
+      "manifest": {
+        "v": "stozher/0.1",
+        "kind": "manifest",
+        "name": "github",
+        "version": "1.4.0",
+        "subject-class": "tool-proxy",
+        "description": "GitHub operations proxied through the gateway",
+        "actions": [
+          {
+            "action": "github.create_issue",
+            "class": "consequential",
+            "evidence-schema": "github.create_issue.v1",
+            "aggregate": {
+              "sampling": "first-and-last",
+              "max-samples": 8
+            },
+            "idempotent": true,
+            "target-kind": "repo-path"
+          }
+        ],
+        "evidence-schemas": {
+          "github.get_file.v1": {
+            "type": "object",
+            "required": [
+              "path"
+            ],
+            "properties": {
+              "path": {
+                "type": "string"
+              }
+            },
+            "additionalProperties": false
+          },
+          "github.create_issue.v1": {
+            "type": "object",
+            "required": [
+              "title"
+            ],
+            "properties": {
+              "title": {
+                "type": "string"
+              }
+            },
+            "additionalProperties": false
+          }
+        },
+        "budget-dimensions": [
+          "requests",
+          "money-eur"
+        ],
+        "durable-objects": [],
+        "conformance": {
+          "self-test": "github.selftest",
+          "vectors-version": "stozher/0.1"
+        },
+        "sig": {
+          "alg": "ed25519",
+          "key": "ed25519:0bab4865a246a78aae98ececc8399f7483eb86ccbb19d24536602f95069fc8a6",
+          "value": "2a89e7bb4960afdd8e49e2dc051b4b6da2315519d83b05b9da8a6fc413989e5e6c57a21b57b7ee8d4feadec61f6bdd4aa656ebc2cb42ced817bd0619a70a5702"
+        }
+      },
+      "expected": {
+        "valid": false,
+        "error": "manifest-malformed"
+      }
+    },
+    {
+      "name": "max-samples-above-the-ceiling",
+      "description": "spec 02 section 7.4 bounds the samples at 16",
+      "manifest": {
+        "v": "stozher/0.1",
+        "kind": "manifest",
+        "name": "github",
+        "version": "1.4.0",
+        "subject-class": "tool-proxy",
+        "description": "GitHub operations proxied through the gateway",
+        "actions": [
+          {
+            "action": "github.get_file",
+            "class": "read",
+            "evidence-schema": "github.get_file.v1",
+            "aggregate": {
+              "sampling": "first-and-last",
+              "max-samples": 17
+            },
+            "idempotent": true,
+            "target-kind": "repo-path"
+          }
+        ],
+        "evidence-schemas": {
+          "github.get_file.v1": {
+            "type": "object",
+            "required": [
+              "path"
+            ],
+            "properties": {
+              "path": {
+                "type": "string"
+              }
+            },
+            "additionalProperties": false
+          },
+          "github.create_issue.v1": {
+            "type": "object",
+            "required": [
+              "title"
+            ],
+            "properties": {
+              "title": {
+                "type": "string"
+              }
+            },
+            "additionalProperties": false
+          }
+        },
+        "budget-dimensions": [
+          "requests",
+          "money-eur"
+        ],
+        "durable-objects": [],
+        "conformance": {
+          "self-test": "github.selftest",
+          "vectors-version": "stozher/0.1"
+        },
+        "sig": {
+          "alg": "ed25519",
+          "key": "ed25519:0bab4865a246a78aae98ececc8399f7483eb86ccbb19d24536602f95069fc8a6",
+          "value": "96efa5826cdac90f722b1ea39954cf2f892b743afa25f39b63ab6fe74dc817d503a983eaeef029b1920fbea193d940cdd019a29b5453b78a5b6a15f3d20e5d08"
+        }
+      },
+      "expected": {
+        "valid": false,
+        "error": "aggregate-sample-bounds"
+      }
+    },
+    {
+      "name": "prohibited-with-a-degraded-form",
+      "description": "an action nobody may perform has no reduced form to fall back to",
+      "manifest": {
+        "v": "stozher/0.1",
+        "kind": "manifest",
+        "name": "github",
+        "version": "1.4.0",
+        "subject-class": "tool-proxy",
+        "description": "GitHub operations proxied through the gateway",
+        "actions": [
+          {
+            "action": "github.delete_repo",
+            "class": "prohibited",
+            "evidence-schema": "github.create_issue.v1",
+            "idempotent": true,
+            "target-kind": "repo-path",
+            "degrade": {
+              "form": "archive"
+            }
+          }
+        ],
+        "evidence-schemas": {
+          "github.get_file.v1": {
+            "type": "object",
+            "required": [
+              "path"
+            ],
+            "properties": {
+              "path": {
+                "type": "string"
+              }
+            },
+            "additionalProperties": false
+          },
+          "github.create_issue.v1": {
+            "type": "object",
+            "required": [
+              "title"
+            ],
+            "properties": {
+              "title": {
+                "type": "string"
+              }
+            },
+            "additionalProperties": false
+          }
+        },
+        "budget-dimensions": [
+          "requests",
+          "money-eur"
+        ],
+        "durable-objects": [],
+        "conformance": {
+          "self-test": "github.selftest",
+          "vectors-version": "stozher/0.1"
+        },
+        "sig": {
+          "alg": "ed25519",
+          "key": "ed25519:0bab4865a246a78aae98ececc8399f7483eb86ccbb19d24536602f95069fc8a6",
+          "value": "569fb7782a6c901a06f34b70e03c62d17cfbfec451c6cf6c64ca466b5c9a091e25527aa831a4abd02fc97996592a6e99e5da0811f55565f850ed150eebfea00b"
+        }
+      },
+      "expected": {
+        "valid": false,
+        "error": "manifest-prohibited-degrade"
+      }
+    },
+    {
+      "name": "class-not-one-of-the-four",
+      "description": "the weight classes are closed",
+      "manifest": {
+        "v": "stozher/0.1",
+        "kind": "manifest",
+        "name": "github",
+        "version": "1.4.0",
+        "subject-class": "tool-proxy",
+        "description": "GitHub operations proxied through the gateway",
+        "actions": [
+          {
+            "action": "github.get_file",
+            "class": "mostly-harmless",
+            "evidence-schema": "github.get_file.v1",
+            "aggregate": {
+              "sampling": "first-and-last",
+              "max-samples": 8
+            },
+            "idempotent": true,
+            "target-kind": "repo-path"
+          }
+        ],
+        "evidence-schemas": {
+          "github.get_file.v1": {
+            "type": "object",
+            "required": [
+              "path"
+            ],
+            "properties": {
+              "path": {
+                "type": "string"
+              }
+            },
+            "additionalProperties": false
+          },
+          "github.create_issue.v1": {
+            "type": "object",
+            "required": [
+              "title"
+            ],
+            "properties": {
+              "title": {
+                "type": "string"
+              }
+            },
+            "additionalProperties": false
+          }
+        },
+        "budget-dimensions": [
+          "requests",
+          "money-eur"
+        ],
+        "durable-objects": [],
+        "conformance": {
+          "self-test": "github.selftest",
+          "vectors-version": "stozher/0.1"
+        },
+        "sig": {
+          "alg": "ed25519",
+          "key": "ed25519:0bab4865a246a78aae98ececc8399f7483eb86ccbb19d24536602f95069fc8a6",
+          "value": "09841f92fc1a652c2872a5e3531c3e1bfdd696b69776d9b1d1381847f414a8088360ad6d919fa3386eb5c8d186daa1dda31a1cad3948428f2030b67cfcf7da0e"
+        }
+      },
+      "expected": {
+        "valid": false,
+        "error": "envelope-classification-unknown"
+      }
+    },
+    {
+      "name": "budget-dimension-nobody-defines",
+      "description": "budget dimensions are the ones spec 03 section 4.3 names, plus money-<ccy>",
+      "manifest": {
+        "v": "stozher/0.1",
+        "kind": "manifest",
+        "name": "github",
+        "version": "1.4.0",
+        "subject-class": "tool-proxy",
+        "description": "GitHub operations proxied through the gateway",
+        "actions": [
+          {
+            "action": "github.get_file",
+            "class": "read",
+            "evidence-schema": "github.get_file.v1",
+            "aggregate": {
+              "sampling": "first-and-last",
+              "max-samples": 8
+            },
+            "idempotent": true,
+            "target-kind": "repo-path"
+          },
+          {
+            "action": "github.create_issue",
+            "class": "consequential",
+            "evidence-schema": "github.create_issue.v1",
+            "idempotent": false,
+            "target-kind": "repo",
+            "degrade": null
+          }
+        ],
+        "evidence-schemas": {
+          "github.get_file.v1": {
+            "type": "object",
+            "required": [
+              "path"
+            ],
+            "properties": {
+              "path": {
+                "type": "string"
+              }
+            },
+            "additionalProperties": false
+          },
+          "github.create_issue.v1": {
+            "type": "object",
+            "required": [
+              "title"
+            ],
+            "properties": {
+              "title": {
+                "type": "string"
+              }
+            },
+            "additionalProperties": false
+          }
+        },
+        "budget-dimensions": [
+          "vibes"
+        ],
+        "durable-objects": [],
+        "conformance": {
+          "self-test": "github.selftest",
+          "vectors-version": "stozher/0.1"
+        },
+        "sig": {
+          "alg": "ed25519",
+          "key": "ed25519:0bab4865a246a78aae98ececc8399f7483eb86ccbb19d24536602f95069fc8a6",
+          "value": "f35d4515e09ff7c1fcf85fa09169013762ecac27a473233d9c7bffbbf46d47d5296ec1f51426e103b2a9beca8b3187cbfd263287ed3c1377882d73b6cacc5801"
+        }
+      },
+      "expected": {
+        "valid": false,
+        "error": "manifest-malformed"
+      }
+    },
+    {
+      "name": "durable-transition-with-no-signer",
+      "description": "a transition nobody may sign is a transition that cannot happen",
+      "manifest": {
+        "v": "stozher/0.1",
+        "kind": "manifest",
+        "name": "github",
+        "version": "1.4.0",
+        "subject-class": "tool-proxy",
+        "description": "GitHub operations proxied through the gateway",
+        "actions": [
+          {
+            "action": "github.get_file",
+            "class": "read",
+            "evidence-schema": "github.get_file.v1",
+            "aggregate": {
+              "sampling": "first-and-last",
+              "max-samples": 8
+            },
+            "idempotent": true,
+            "target-kind": "repo-path"
+          },
+          {
+            "action": "github.create_issue",
+            "class": "consequential",
+            "evidence-schema": "github.create_issue.v1",
+            "idempotent": false,
+            "target-kind": "repo",
+            "degrade": null
+          }
+        ],
+        "evidence-schemas": {
+          "github.get_file.v1": {
+            "type": "object",
+            "required": [
+              "path"
+            ],
+            "properties": {
+              "path": {
+                "type": "string"
+              }
+            },
+            "additionalProperties": false
+          },
+          "github.create_issue.v1": {
+            "type": "object",
+            "required": [
+              "title"
+            ],
+            "properties": {
+              "title": {
+                "type": "string"
+              }
+            },
+            "additionalProperties": false
+          }
+        },
+        "budget-dimensions": [
+          "requests",
+          "money-eur"
+        ],
+        "durable-objects": [
+          {
+            "object-type": "github.ticket",
+            "id-kind": "ticket-id",
+            "transitions": [
+              {
+                "transition": "opened",
+                "from": [],
+                "to": "open",
+                "signers": []
+              }
+            ]
+          }
+        ],
+        "conformance": {
+          "self-test": "github.selftest",
+          "vectors-version": "stozher/0.1"
+        },
+        "sig": {
+          "alg": "ed25519",
+          "key": "ed25519:0bab4865a246a78aae98ececc8399f7483eb86ccbb19d24536602f95069fc8a6",
+          "value": "2eae8e216bdab4c5204492974bed963a374ebb22ce7929b30639159ce4ebeae2ca6f9ee55b0d442467cf275331a3bbfd6d821dc8f57ac3cadae22095549f1b0b"
+        }
+      },
+      "expected": {
+        "valid": false,
+        "error": "manifest-malformed"
+      }
+    }
+  ]
+}

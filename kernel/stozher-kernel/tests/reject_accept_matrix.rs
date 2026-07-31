@@ -219,9 +219,20 @@ fn replay_vectors(report: &mut Report) -> BTreeSet<String> {
                 // dispatcher does replay.
                 | "money-compare"
                 // Evaluation over a policy document, with no envelope to submit either. Run against
-                // the real `Policy` by `tests/policy_vectors.rs`; its consequences for ingest are
+                // the real `Policy` by `tests/kernel_vectors.rs`; its consequences for ingest are
                 // reached through every row here that carries a `classification`.
                 | "policy-evaluation"
+                // A document rather than an envelope. `tests/kernel_vectors.rs` runs it against the
+                // real `Manifest::parse`, and this file's `manifest/*` rows replay the registration
+                // path that parse sits behind.
+                | "manifest"
+                // Both carry envelopes, and both cite keys, mandates and signals that exist only in
+                // the vector file — replaying them here would refuse every one of them for an
+                // unresolvable mandate rather than for the rule under test. `stozher-core`'s runner
+                // applies the rules directly; the ingest paths are covered by `trigger/*` and the
+                // checkpoint rows here.
+                | "trigger"
+                | "checkpoint"
         ) {
             continue;
         }

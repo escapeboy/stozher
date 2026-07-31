@@ -78,6 +78,9 @@ _NESTED: dict[str, tuple[tuple[str, ...], tuple[str, ...]]] = {
         (),
     ),
     "evidence": (("schema", "media-type", "payload-hash", "retain-until"), ()),
+    # §07 §4. Absent here for the whole of v0.1, so a `trigger` was permitted on an effect and its
+    # members were never looked at — the one implementation checked them, this one accepted anything.
+    "trigger": (("signal-ref", "standing-mandate-ref"), ("rule",)),
     "authorization": (("request", "decision"), ()),
     "sig": (("alg", "key", "value"), ()),
     "resource": (("kind", "name"), ()),
@@ -160,6 +163,8 @@ def validate(envelope: Any) -> None:
         _execution(envelope["execution"])
     if "evidence" in envelope:
         _evidence(envelope["evidence"])
+    if "trigger" in envelope:
+        _trigger(envelope["trigger"])
     if kind == "aggregate":
         _aggregate(envelope)
     if kind == "cognition":
@@ -209,6 +214,14 @@ def _execution(execution: dict[str, Any]) -> None:
     _timestamp(finished, "execution.finished-at")
     if finished < started:
         raise EnvelopeError("execution-time-inverted", f"{finished} precedes {started}")
+
+
+def _trigger(trigger: dict[str, Any]) -> None:
+    """§07 §4: both references are envelope ids, so both are digests."""
+    _hash(trigger["signal-ref"], "trigger.signal-ref")
+    _hash(trigger["standing-mandate-ref"], "trigger.standing-mandate-ref")
+    if "rule" in trigger and not isinstance(trigger["rule"], str):
+        raise EnvelopeError("schema-type-mismatch", "trigger.rule must be a string")
 
 
 def _evidence(evidence: dict[str, Any]) -> None:

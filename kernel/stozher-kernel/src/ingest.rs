@@ -910,46 +910,21 @@ impl Ingest {
         let Some(trigger) = env.get("trigger") else {
             return Ok(());
         };
-        let standing_ref = trigger["standing-mandate-ref"]
-            .as_str()
-            .ok_or_else(|| Error::new("schema-missing-member", "trigger.standing-mandate-ref"))?;
-        if env["mandate-ref"].as_str() != Some(standing_ref) {
-            return Err(Error::new(
-                "trigger-mandate-mismatch",
-                "the authority for a triggered action is the mandate the effect is judged against",
-            ));
-        }
-        let signal_ref = trigger["signal-ref"]
-            .as_str()
-            .ok_or_else(|| Error::new("schema-missing-member", "trigger.signal-ref"))?;
-        let signal = self
-            .store
-            .envelope_by_id(signal_ref)
-            .await?
-            .ok_or_else(|| {
-                Error::new(
-                    "trigger-signal-unresolved",
-                    format!("no appended signal envelope with id {signal_ref}"),
-                )
-            })?;
-        if signal.envelope()?["kind"].as_str() != Some("signal") {
-            return Err(Error::new(
-                "trigger-signal-unresolved",
-                format!("{signal_ref} is not a signal envelope"),
-            ));
-        }
-        let mandate = self.store.mandate(standing_ref).await?.ok_or_else(|| {
-            Error::new("mandate-unresolved", format!("no mandate {standing_ref}"))
-        })?;
-        if mandate["mandate-kind"].as_str() != Some("standing") {
-            // An interactive mandate cannot authorize a triggered action — by definition nobody was
-            // watching (§07 §4.3).
-            return Err(Error::new(
-                "trigger-mandate-not-standing",
-                "a triggered effect must cite a standing mandate",
-            ));
-        }
-        Ok(())
+        // Resolution is this side's — it owns the store; the judgement is `stozher_core::trigger`'s,
+        // so §07 §4 is one rule in one place and `spec/vectors/trigger.json` can state it as a
+        // table. A lookup that finds nothing is `None`, which the rule reads as unresolved.
+        let signal = match trigger["signal-ref"].as_str() {
+            Some(reference) => match self.store.envelope_by_id(reference).await? {
+                Some(record) => Some(record.envelope()?),
+                None => None,
+            },
+            None => None,
+        };
+        let mandate = match trigger["standing-mandate-ref"].as_str() {
+            Some(reference) => self.store.mandate(reference).await?,
+            None => None,
+        };
+        stozher_core::trigger::check(env, mandate.as_ref(), signal.as_ref())
     }
 
     async fn validate_policy_change(

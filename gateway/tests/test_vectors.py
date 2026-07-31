@@ -358,6 +358,13 @@ def test_vector_file(entry: dict[str, Any]) -> None:
     doc = load(entry["path"])
     assert doc["kind"] == entry["kind"], f"{entry['path']}: kind disagrees with index.json"
     handler = HANDLERS.get(doc["kind"])
+    if entry.get("role") == "kernel":
+        # A file whose subject is the kernel's own logic — manifest registration, checkpoint
+        # attestation, trigger resolution. This component plays no kernel, so it declines them, and
+        # `test_the_declined_files_are_the_ones_expected` asserts the list rather than letting a new
+        # one slip through as a silent skip.
+        assert handler is None, f"{entry['path']}: kernel-role file with an emitter-side handler"
+        return
     # An unrecognised kind fails the run rather than being skipped (`spec/vectors/README.md` §1).
     assert handler is not None, f"{entry['path']}: no handler for kind {doc['kind']!r}"
     vectors = doc["vectors"]
@@ -372,3 +379,18 @@ def test_the_run_asserted_something() -> None:
     assert len(INDEX["files"]) >= 13, "index.json lost vector files"
     assert len(ASSERTIONS) > 200, f"only {len(ASSERTIONS)} vector assertions ran"
     assert len(set(ASSERTIONS)) == len(ASSERTIONS), "an assertion label was reused"
+
+
+def test_the_declined_files_are_the_ones_expected() -> None:
+    """`role: "kernel"` is a statement, not a skip.
+
+    A component that implements no kernel may decline those files — §08 §4.1 scopes conformance to
+    "the primitives it uses" — but a *new* kernel-role file appearing must be a visible decision
+    rather than one more thing this suite quietly stopped asking. So the list is written down.
+    """
+    declined = sorted(e["path"] for e in INDEX["files"] if e.get("role") == "kernel")
+    assert declined == ["checkpoint.json", "manifest.json", "trigger.json"], declined
+
+    # And every other file is one this component does run: a role nobody recognises is not a licence.
+    for entry in INDEX["files"]:
+        assert entry.get("role") in ("primitive", "kernel"), entry

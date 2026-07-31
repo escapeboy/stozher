@@ -1,11 +1,15 @@
-//! `spec/vectors/policy-evaluation.json` — `spec/05 §3`, run against this implementation.
+//! The corpus files whose subject is the kernel's own logic, run against this implementation.
 //!
-//! # Why this file is here and not in `stozher-core`
+//! # Why these are here and not in `stozher-core`
 //!
 //! The corpus runner lives in `stozher-core`, because that is where the primitives are. Policy
-//! evaluation is the kernel's, and the kernel depends on core rather than the other way round, so
-//! the one vector file that exercises §05 §3 has to be run from this side. `stozher-core`'s runner
-//! names the kind and does nothing with it; this asserts it did not thereby go unchecked.
+//! evaluation and manifest validation are the kernel's, and the kernel depends on core rather than
+//! the other way round, so the files that exercise §05 §3 and §08 §1 have to be run from this side.
+//! `stozher-core`'s runner names those kinds and does nothing with them; this asserts they did not
+//! thereby go unchecked.
+//!
+//! `index.json` marks them `role: "kernel"`, which is the same statement made to a third
+//! implementation: a harness that plays no kernel may decline them, and must say so.
 //!
 //! # What §05 §3 turned out to be
 //!
@@ -83,6 +87,52 @@ fn every_policy_evaluation_vector_matches_this_implementation() {
     assert!(
         failures.is_empty(),
         "{} policy-evaluation vectors disagree with this implementation:\n  {}",
+        failures.len(),
+        failures.join("\n  ")
+    );
+}
+
+
+fn manifest_corpus() -> Value {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../spec/vectors/manifest.json");
+    let text = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("reading the corpus: {e}"));
+    serde_json::from_str(&text).unwrap_or_else(|e| panic!("parsing the corpus: {e}"))
+}
+
+#[test]
+fn every_manifest_vector_matches_this_implementation() {
+    let corpus = manifest_corpus();
+    let vectors = corpus["vectors"].as_array().expect("vectors");
+    assert!(
+        vectors.len() >= 17,
+        "the corpus shrank to {} vectors; §08 §1 had none at all before v0.9 and every one of them \
+         is a rule a third-party component has to satisfy before it can be registered",
+        vectors.len()
+    );
+
+    let mut failures: Vec<String> = Vec::new();
+    for vector in vectors {
+        let name = vector["name"].as_str().unwrap_or("?");
+        let expected_valid = vector["expected"]["valid"].as_bool().unwrap_or(false);
+        let expected_error = vector["expected"]["error"].as_str();
+        match stozher_kernel::manifest::Manifest::parse(&vector["manifest"]) {
+            Ok(_) if expected_valid => {}
+            Ok(_) => failures.push(format!(
+                "{name}: accepted, the corpus says {expected_error:?}"
+            )),
+            Err(e) if !expected_valid && Some(e.code()) == expected_error => {}
+            Err(e) if expected_valid => {
+                failures.push(format!("{name}: refused {}: {e}", e.code()));
+            }
+            Err(e) => failures.push(format!(
+                "{name}: refused {}, the corpus says {expected_error:?}",
+                e.code()
+            )),
+        }
+    }
+    assert!(
+        failures.is_empty(),
+        "{} manifest vectors disagree with this implementation:\n  {}",
         failures.len(),
         failures.join("\n  ")
     );

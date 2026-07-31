@@ -17,7 +17,7 @@ use std::path::{Path, PathBuf};
 use serde_json::Value;
 use stozher_core::mandate::{MandateRequest, VerifyParams, verify_mandate_chain};
 use stozher_core::signed::KeyId;
-use stozher_core::{chain, crypto, envelope, gate, jcs, payload, signed};
+use stozher_core::{chain, crypto, envelope, gate, jcs, payload, signed, trigger};
 
 fn vectors_dir() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../../spec/vectors")
@@ -134,12 +134,13 @@ fn every_vector_validates_against_the_reference_implementation() {
                 "payload-binding" => check_payload_binding(&mut report, &id, vector),
                 "money-compare" => check_money_compare(&mut report, &id, vector),
                 "parity" => check_parity(&mut report, &id, vector),
+                "checkpoint" => check_checkpoint(&mut report, &id, vector),
                 // Evaluated where the code being tested lives. `stozher-kernel` owns policy
-                // evaluation and depends on this crate, so it cannot be called from here;
-                // `stozher-kernel/tests/policy_vectors.rs` runs this file and asserts it ran every
-                // vector in it. Named rather than defaulted, so a kind nobody implemented still
-                // fails below.
-                "policy-evaluation" => {}
+                // evaluation and manifest validation, and it depends on this crate, so they cannot be called from here; `stozher-kernel/tests/kernel_vectors.rs`
+                // runs these files and asserts it ran every vector in them. Named rather than
+                // defaulted, so a kind nobody implemented still fails below.
+                "trigger" => check_trigger(&mut report, &id, &doc, vector),
+                "policy-evaluation" | "manifest" => {}
                 unknown => panic!(
                     "{path}: unsupported vector kind {unknown:?}. Vectors are never skipped: \
                      implement support or remove the file."
@@ -379,6 +380,73 @@ fn check_envelope_shape(report: &mut Report, id: &str, vector: &Value) {
             format!("accepted an envelope that must fail {expected}"),
         ),
         (Ok(()), None) => {}
+    }
+}
+
+fn check_checkpoint(report: &mut Report, id: &str, vector: &Value) {
+    let range: Vec<Value> = vector["range"].as_array().expect("range").clone();
+    let anchor = vector["expected-first-prev"].as_str();
+    let expected = &vector["expected"];
+    match chain::verify_checkpoint(&vector["checkpoint"], &range, anchor) {
+        Ok(ok) => {
+            report.check(
+                id,
+                "validity",
+                &true,
+                &expected["valid"].as_bool().expect("expected.valid"),
+            );
+            if let Some(head) = expected.get("head-hash").and_then(Value::as_str) {
+                report.check(id, "head hash", &ok.head_hash.as_str(), &head);
+            }
+            if let Some(anchored) = expected.get("anchored").and_then(Value::as_bool) {
+                report.check(id, "anchored", &ok.anchored, &anchored);
+            }
+        }
+        Err(e) => {
+            report.check(
+                id,
+                "validity",
+                &false,
+                &expected["valid"].as_bool().expect("expected.valid"),
+            );
+            if let Some(code) = expected["error"].as_str() {
+                report.check(id, "error code", &e.code(), &code);
+            }
+        }
+    }
+}
+
+fn check_trigger(report: &mut Report, id: &str, doc: &Value, vector: &Value) {
+    // The store lookups the rule takes as inputs: the signal resolves only if the vector says the
+    // store holds it, which is how "nobody appended it" is expressed without a store.
+    let appended: Vec<&str> = vector["appended-signals"]
+        .as_array()
+        .map(|list| list.iter().filter_map(Value::as_str).collect())
+        .unwrap_or_default();
+    let signal_ref = vector["envelope"]["trigger"]["signal-ref"]
+        .as_str()
+        .unwrap_or_default();
+    let signal = appended.contains(&signal_ref).then(|| &doc["signal"]);
+    let expected = &vector["expected"];
+
+    match trigger::check(&vector["envelope"], Some(&vector["mandate"]), signal) {
+        Ok(()) => report.check(
+            id,
+            "validity",
+            &true,
+            &expected["valid"].as_bool().expect("expected.valid"),
+        ),
+        Err(e) => {
+            report.check(
+                id,
+                "validity",
+                &false,
+                &expected["valid"].as_bool().expect("expected.valid"),
+            );
+            if let Some(code) = expected["error"].as_str() {
+                report.check(id, "error code", &e.code(), &code);
+            }
+        }
     }
 }
 

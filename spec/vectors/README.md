@@ -49,7 +49,14 @@ spec/vectors/
 ```
 
 A harness MUST read `index.json`, dispatch on `files[].kind`, and **fail on an unrecognised kind
-rather than skipping it**. Adding a vector file of a known kind therefore extends coverage with no
+rather than skipping it**.
+
+Each file also carries a **`role`**. `primitive` is every implementation: canonicalization, hashing,
+signatures, envelope shape, the chain, the mandate walk, the gate algorithm, policy evaluation.
+`kernel` is an implementation playing the kernel's part — manifest validation, checkpoint
+attestation, trigger resolution. A harness that implements no kernel MAY decline the `kernel` files
+(§08 §4.1 scopes conformance to "the primitives it uses"), and MUST say which it declined. Declining
+is a statement; silence is a skip, and a skip is what this section exists to forbid. Adding a vector file of a known kind therefore extends coverage with no
 harness change; adding a new kind fails loudly until support is written, which is the intended
 behaviour — silently skipped vectors are worse than absent ones.
 
@@ -99,6 +106,9 @@ the subject under test.
 | `payload-binding` | `ingest.{envelope,payloads[]}`, optional `chain[]`, `expected.{valid,error,envelope-hash,decayed,chain-head-hash,chain-valid}` | verify payload hashes and reference; an empty `payloads` array is always valid |
 | `money-compare` | `left`, `right`, `expected`, `spec`, `note?` | compare two decimal strings exactly (§01 §2.5); `expected` is `-1`, `0`, `1`, or an error code |
 | `policy-evaluation` | `policy`, `request.{subject,action,resource,manifest-class}`, `expected.{class,decision}` | run §05 §3 steps 1 and 4: classify, then apply the gate rule. `manifest-class` is what a **registered** manifest declares, or `null`; a catalog proposal is not this input (§10 §3) |
+| `trigger` | `envelope`, `mandate`, `appended-signals[]`, file-level `signal`, `expected.{valid,error}` | apply §07 §4 rules 1–3. The signal resolves only if its id is in `appended-signals`; rule 4 has nothing to check, the `rule` string being descriptive |
+| `checkpoint` | `checkpoint`, `range[]`, `expected-first-prev`, `expected.{valid,error,head-hash,anchored}` | verify the checkpoint against the range (§04 §4), anchoring the first envelope when `expected-first-prev` is not null. **MUST NOT read any payload** |
+| `manifest` | `manifest`, `expected.{valid,error}` | validate as a signed object and against §08 §1. Registration conditions (§08 §3) are not part of this check |
 | `parity` | `spec`, `algorithm`, `input`, `expected`, `divergence` | dispatch on `algorithm` (§3.1) and run the named algorithm — the same one an existing kind already exercises, on an input that reaches a branch the existing kind does not |
 
 `expected.error` is `null` on success vectors and otherwise a **normative error code** from the spec

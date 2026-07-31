@@ -333,8 +333,27 @@ def files() -> list[dict]:
 
 _FILES: list[dict] = []
 
+#: Sentinel for a fixture member that must be absent rather than null.
+_DROP = object()
 
-def emit(path: str, kind: str, description: str, vectors: list[dict], extra: dict | None = None) -> None:
+
+def emit(
+    path: str,
+    kind: str,
+    description: str,
+    vectors: list[dict],
+    extra: dict | None = None,
+    role: str = "primitive",
+) -> None:
+    """Write one vector file and register it in the index.
+
+    `role` says who must run it. `primitive` is every implementation — canonicalization, hashing,
+    signatures, envelope shape, the chain. `kernel` is an implementation playing the kernel's part:
+    policy evaluation is not one of them (an emitter enforces policy locally too), but manifest
+    registration, checkpoint attestation and trigger resolution are. A harness that implements no
+    kernel MUST still run every `primitive` file, and MUST say which `kernel` files it declined
+    rather than passing over them in silence.
+    """
     doc = {"v": V, "kind": kind, "description": description}
     if extra:
         doc.update(extra)
@@ -342,7 +361,9 @@ def emit(path: str, kind: str, description: str, vectors: list[dict], extra: dic
     with open(os.path.join(HERE, path), "w", encoding="utf-8") as fh:
         json.dump(doc, fh, indent=2, ensure_ascii=False)
         fh.write("\n")
-    _FILES.append({"path": path, "kind": kind, "count": len(vectors), "description": description})
+    _FILES.append(
+        {"path": path, "kind": kind, "role": role, "count": len(vectors), "description": description}
+    )
     print(f"  {path:34s} kind={kind:16s} vectors={len(vectors)}")
 
 
@@ -3116,6 +3137,472 @@ def gen_policy_evaluation() -> None:
     )
 
 
+
+def gen_checkpoint() -> None:
+    """spec 04 section 4 — a checkpoint attests a range, and the range has to be that range."""
+    key = KEYS["agent:claude-code/ivan-mbp"]
+    kernel = KEYS["agent:triage"]
+    chain = build_chain(key)
+    stream = chain[0]["stream"]
+    head = object_hash(chain[-1])
+
+    def checkpoint(**over: Any) -> dict:
+        body = {
+            "stream": stream,
+            "from-seq": 0,
+            "to-seq": len(chain) - 1,
+            "head-hash": head,
+            "count": len(chain),
+            "at": "2026-07-26T10:00:00.000Z",
+        }
+        body.update(over)
+        return sign_object(
+            {
+                "v": V,
+                "kind": "checkpoint",
+                "emitted-at": "2026-07-26T10:00:00.000Z",
+                "stream": "kernel:checkpoints",
+                "seq": 0,
+                "prev-hash": None,
+                "identity": {"subject": kernel.label, "key": kernel.key_id, "component": "kernel"},
+                "checkpoint": body,
+            },
+            kernel,
+        )
+
+    cases: list[tuple[str, dict, list[dict], str | None, str | None, str]] = [
+        (
+            "attests-the-range-it-was-given",
+            checkpoint(),
+            chain,
+            None,
+            None,
+            "count, range and head all agree",
+        ),
+        (
+            "count-disagrees-with-the-attested-range",
+            checkpoint(count=len(chain) + 1),
+            chain,
+            None,
+            "checkpoint-count-mismatch",
+            "spec 04 section 4 rule 2: count MUST equal to-seq - from-seq + 1",
+        ),
+        (
+            "count-disagrees-with-the-range-supplied",
+            checkpoint(**{"to-seq": 1, "count": 2}),
+            chain,
+            None,
+            "checkpoint-count-mismatch",
+            "a checkpoint over two envelopes verified against four attests some records, not the "
+            "history",
+        ),
+        (
+            "range-begins-somewhere-else",
+            checkpoint(**{"from-seq": 1, "to-seq": len(chain), "count": len(chain)}),
+            chain,
+            None,
+            "checkpoint-range-mismatch",
+            "the right number of records is still not the right records, and an operator who passed "
+            "the wrong range needs to be told that rather than that their chain does not add up",
+        ),
+        (
+            "head-does-not-reproduce",
+            checkpoint(**{"head-hash": "0" * 64}),
+            chain,
+            None,
+            "checkpoint-head-mismatch",
+            "the attested head is not the one the range produces",
+        ),
+        (
+            "anchored-by-a-caller-supplied-prev",
+            checkpoint(**{"from-seq": 1, "to-seq": len(chain) - 1, "count": len(chain) - 1,
+                          "head-hash": head}),
+            chain[1:],
+            object_hash(chain[0]),
+            None,
+            "a range that does not start at seq 0 is anchored by a prev-hash the caller supplies; "
+            "reading it out of the range under examination would compare a value with itself",
+        ),
+    ]
+
+    vectors = []
+    for name, cp, rng, prev, err, desc in cases:
+        expected: dict[str, Any] = {"valid": err is None, "error": err}
+        if err is None:
+            expected["head-hash"] = cp["checkpoint"]["head-hash"]
+            expected["anchored"] = prev is not None or cp["checkpoint"]["from-seq"] == 0
+        vectors.append(
+            {
+                "name": name,
+                "description": desc,
+                "checkpoint": cp,
+                "range": rng,
+                "expected-first-prev": prev,
+                "expected": expected,
+            }
+        )
+    emit(
+        "checkpoint.json",
+        "checkpoint",
+        "Checkpoint attestation (spec 04 section 4). Verify `checkpoint` against `range`, anchoring "
+        "the first envelope with `expected-first-prev` when it is not null. The result MUST match "
+        "`expected.valid`; on failure the code MUST equal `expected.error`; on success the head hash "
+        "and `anchored` MUST match. No payload is read.",
+        vectors,
+        {"keys": [key.as_vector(), kernel.as_vector()]},
+        role="kernel",
+    )
+
+
+def gen_trigger() -> None:
+    """spec 07 section 4 — the only way a signal leads to an effect."""
+    key = KEYS["agent:claude-code/ivan-mbp"]
+    root = KEYS["human:ivan"]
+    standing = mandate("standing", root, "human", key)
+    interactive = mandate("interactive", root, "human", key, nonce="1" * 32)
+    standing_ref = object_hash(standing)
+    interactive_ref = object_hash(interactive)
+    signal = sign_object(signal_env(0, None, key), key)
+    signal_ref = object_hash(signal)
+
+    def effect(mandate_ref: str, trigger: dict | None) -> dict:
+        env = base_effect(0, None, key, **{"mandate-ref": mandate_ref})
+        if trigger is not None:
+            env["trigger"] = trigger
+        return sign_object(env, key)
+
+    def trig(**over: Any) -> dict:
+        body = {
+            "signal-ref": signal_ref,
+            "standing-mandate-ref": standing_ref,
+            "rule": "github.issue_opened -> triage",
+        }
+        body.update(over)
+        return body
+
+    cases: list[tuple[str, dict, dict, list[str], str | None, str]] = [
+        (
+            "a-triggered-effect-cites-the-standing-rule-it-acts-under",
+            effect(standing_ref, trig()),
+            standing,
+            [signal_ref],
+            None,
+            "the authority for a triggered action is a human's standing rule, cited explicitly",
+        ),
+        (
+            "the-rule-string-is-descriptive-only",
+            effect(standing_ref, trig(rule="anything at all, matching every signal ever")),
+            standing,
+            [signal_ref],
+            None,
+            "spec 07 section 4 rule 4: scope comes from the mandate, never from the rule text, so a "
+            "rule that matches more signals than intended cannot widen what the effect may do",
+        ),
+        (
+            "the-rule-member-is-optional",
+            effect(standing_ref, {"signal-ref": signal_ref, "standing-mandate-ref": standing_ref}),
+            standing,
+            [signal_ref],
+            None,
+            "only the two references are required",
+        ),
+        (
+            "trigger-cites-a-different-mandate-than-the-envelope",
+            effect(interactive_ref, trig()),
+            interactive,
+            [signal_ref],
+            "trigger-mandate-mismatch",
+            "spec 07 section 4 rule 1: the trigger's mandate is the same one the effect is judged "
+            "against, or the citation is decoration",
+        ),
+        (
+            "the-signal-was-never-appended",
+            effect(standing_ref, trig(**{"signal-ref": "9" * 64})),
+            standing,
+            [],
+            "trigger-signal-unresolved",
+            "spec 07 section 4 rule 2: the audit must be able to answer why this happened at 03:00 "
+            "with nobody awake",
+        ),
+        (
+            "an-interactive-mandate-cannot-authorize-a-trigger",
+            effect(interactive_ref, trig(**{"standing-mandate-ref": interactive_ref})),
+            interactive,
+            [signal_ref],
+            "trigger-mandate-not-standing",
+            "spec 07 section 4 rule 3: by definition nobody was watching",
+        ),
+    ]
+
+    vectors = []
+    for name, env, man, appended, err, desc in cases:
+        vectors.append(
+            {
+                "name": name,
+                "description": desc,
+                "envelope": env,
+                "mandate": man,
+                "appended-signals": appended,
+                "expected": {"valid": err is None, "error": err},
+            }
+        )
+    emit(
+        "trigger.json",
+        "trigger",
+        "Trigger resolution (spec 07 section 4). `mandate` is the mandate object the envelope's "
+        "`mandate-ref` resolves to; `appended-signals` lists the signal envelope ids the store "
+        "holds. Apply rules 1 to 3; the result MUST match `expected.valid` and on failure the code "
+        "MUST equal `expected.error`. Structural validation of the envelope is not part of this "
+        "check.",
+        vectors,
+        {"keys": [key.as_vector(), root.as_vector()], "signal": signal},
+        role="kernel",
+    )
+
+
+def gen_manifest() -> None:
+    """spec 08 section 1 — what a manifest has to be before it can be registered."""
+    component = KEYS["agent:triage"]
+
+    def manifest_doc(**over: Any) -> dict:
+        doc = {
+            "v": V,
+            "kind": "manifest",
+            "name": "github",
+            "version": "1.4.0",
+            "subject-class": "tool-proxy",
+            "description": "GitHub operations proxied through the gateway",
+            "actions": [
+                {
+                    "action": "github.get_file",
+                    "class": "read",
+                    "evidence-schema": "github.get_file.v1",
+                    "aggregate": {"sampling": "first-and-last", "max-samples": 8},
+                    "idempotent": True,
+                    "target-kind": "repo-path",
+                },
+                {
+                    "action": "github.create_issue",
+                    "class": "consequential",
+                    "evidence-schema": "github.create_issue.v1",
+                    "idempotent": False,
+                    "target-kind": "repo",
+                    "degrade": None,
+                },
+            ],
+            "evidence-schemas": {
+                "github.get_file.v1": {
+                    "type": "object",
+                    "required": ["path"],
+                    "properties": {"path": {"type": "string"}},
+                    "additionalProperties": False,
+                },
+                "github.create_issue.v1": {
+                    "type": "object",
+                    "required": ["title"],
+                    "properties": {"title": {"type": "string"}},
+                    "additionalProperties": False,
+                },
+            },
+            "budget-dimensions": ["requests", "money-eur"],
+            "durable-objects": [],
+            "conformance": {"self-test": "github.selftest", "vectors-version": V},
+        }
+        for member, value in over.items():
+            if value is _DROP:
+                doc.pop(member, None)
+            else:
+                doc[member] = value
+        return sign_object(doc, component)
+
+    def action(**over: Any) -> dict:
+        base = {
+            "action": "github.get_file",
+            "class": "read",
+            "evidence-schema": "github.get_file.v1",
+            "aggregate": {"sampling": "first-and-last", "max-samples": 8},
+            "idempotent": True,
+            "target-kind": "repo-path",
+        }
+        base.update(over)
+        return {k: v for k, v in base.items() if v is not _DROP}
+
+    cases: list[tuple[str, dict, str | None, str]] = [
+        ("valid", manifest_doc(), None, "a manifest the kernel would register"),
+        (
+            "unknown-member",
+            manifest_doc(**{"maintainer": "someone"}),
+            "schema-unknown-member",
+            "the member set is closed",
+        ),
+        (
+            "missing-conformance",
+            manifest_doc(conformance=_DROP),
+            "schema-missing-member",
+            "spec 08 section 1.1 makes `conformance` a MUST, and section 4.8's harness invokes the "
+            "self-test it names",
+        ),
+        (
+            "conformance-without-a-self-test",
+            manifest_doc(conformance={"vectors-version": V}),
+            "schema-missing-member",
+            "a manifest naming no self-test is one no conformance run could be performed against",
+        ),
+        (
+            "name-not-of-the-required-form",
+            manifest_doc(name="GitHub"),
+            "manifest-malformed",
+            "the name must match ^[a-z][a-z0-9-]{1,31}$",
+        ),
+        (
+            "subject-class-unknown",
+            manifest_doc(**{"subject-class": "wizard"}),
+            "manifest-malformed",
+            "the subject classes of section 1.1 are closed",
+        ),
+        (
+            "no-actions",
+            manifest_doc(actions=[]),
+            "manifest-malformed",
+            "a component that declares no action conforms to nothing",
+        ),
+        (
+            "action-outside-the-namespace",
+            manifest_doc(actions=[action(action="elsewhere.do_it")]),
+            "manifest-action-namespace",
+            "a component MUST NOT declare actions in another component's namespace",
+        ),
+        (
+            "evidence-schema-not-declared",
+            manifest_doc(actions=[action(**{"evidence-schema": "github.undeclared.v1"})]),
+            "manifest-evidence-schema-missing",
+            "every declared action needs a schema, so every audit record is typed and queryable",
+        ),
+        (
+            "evidence-schema-left-open",
+            manifest_doc(
+                **{
+                    "evidence-schemas": {
+                        "github.get_file.v1": {
+                            "type": "object",
+                            "required": ["path"],
+                            "properties": {"path": {"type": "string"}},
+                        },
+                        "github.create_issue.v1": {
+                            "type": "object",
+                            "required": ["title"],
+                            "properties": {"title": {"type": "string"}},
+                            "additionalProperties": False,
+                        },
+                    }
+                }
+            ),
+            "manifest-malformed",
+            "a schema admitting extra members cannot make an audit record typed, which is the only "
+            "reason it is required",
+        ),
+        (
+            "read-action-without-an-aggregate-rule",
+            manifest_doc(actions=[action(aggregate=_DROP)]),
+            "manifest-malformed",
+            "declaring the sampling rule up front is what makes an aggregate auditable",
+        ),
+        (
+            "aggregate-on-a-non-read-action",
+            manifest_doc(
+                actions=[
+                    action(
+                        action="github.create_issue",
+                        **{
+                            "class": "consequential",
+                            "evidence-schema": "github.create_issue.v1",
+                        },
+                    )
+                ]
+            ),
+            "manifest-malformed",
+            "only class read is aggregated (spec 02 section 7)",
+        ),
+        (
+            "max-samples-above-the-ceiling",
+            manifest_doc(
+                actions=[action(aggregate={"sampling": "first-and-last", "max-samples": 17})]
+            ),
+            "aggregate-sample-bounds",
+            "spec 02 section 7.4 bounds the samples at 16",
+        ),
+        (
+            "prohibited-with-a-degraded-form",
+            manifest_doc(
+                actions=[
+                    action(
+                        action="github.delete_repo",
+                        aggregate=_DROP,
+                        **{
+                            "class": "prohibited",
+                            "evidence-schema": "github.create_issue.v1",
+                            "degrade": {"form": "archive"},
+                        },
+                    )
+                ]
+            ),
+            "manifest-prohibited-degrade",
+            "an action nobody may perform has no reduced form to fall back to",
+        ),
+        (
+            "class-not-one-of-the-four",
+            manifest_doc(actions=[action(**{"class": "mostly-harmless"})]),
+            "envelope-classification-unknown",
+            "the weight classes are closed",
+        ),
+        (
+            "budget-dimension-nobody-defines",
+            manifest_doc(**{"budget-dimensions": ["vibes"]}),
+            "manifest-malformed",
+            "budget dimensions are the ones spec 03 section 4.3 names, plus money-<ccy>",
+        ),
+        (
+            "durable-transition-with-no-signer",
+            manifest_doc(
+                **{
+                    "durable-objects": [
+                        {
+                            "object-type": "github.ticket",
+                            "id-kind": "ticket-id",
+                            "transitions": [
+                                {"transition": "opened", "from": [], "to": "open", "signers": []}
+                            ],
+                        }
+                    ]
+                }
+            ),
+            "manifest-malformed",
+            "a transition nobody may sign is a transition that cannot happen",
+        ),
+    ]
+
+    vectors = []
+    for name, doc, err, desc in cases:
+        vectors.append(
+            {
+                "name": name,
+                "description": desc,
+                "manifest": doc,
+                "expected": {"valid": err is None, "error": err},
+            }
+        )
+    emit(
+        "manifest.json",
+        "manifest",
+        "Manifest validation (spec 08 section 1). Validate `manifest` as a signed object and against "
+        "section 1's rules; the result MUST match `expected.valid` and on failure the code MUST "
+        "equal `expected.error`. Registration conditions (section 3) are not part of this check.",
+        vectors,
+        {"keys": [component.as_vector()]},
+        role="kernel",
+    )
+
+
 def gen_index() -> None:
     index = {
         "v": V,
@@ -3161,6 +3648,9 @@ def main() -> int:
     gen_money_compare()
     gen_parity()
     gen_policy_evaluation()
+    gen_checkpoint()
+    gen_trigger()
+    gen_manifest()
     gen_index()
     return 0
 

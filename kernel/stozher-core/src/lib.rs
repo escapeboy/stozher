@@ -58,6 +58,7 @@ pub mod jcs;
 pub mod mandate;
 pub mod payload;
 pub mod signed;
+pub mod trigger;
 
 pub use error::{Error, Result};
 
