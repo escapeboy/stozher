@@ -162,11 +162,20 @@ seven whatever happened to them, so a red run tells an operator *which* checks a
 goes red; `the_negative_cases_cannot_be_declared_inapplicable` and
 `a_group_the_specification_does_not_define_is_refused` are the two panics.
 
-**None of the seven groups is implemented.** Several need machinery this release did not build: a
-live component to drive, N > `max-samples` calls for §4.3, a kernel that can be made unreachable for
-§4.5, and the eight refusals of §4.4. What is closed is the hazard — from here, adding a check can
-only move a group from red to green, and no amount of half-finishing can produce a green run that was
-not earned.
+**Two of the seven groups are implemented**, both the ones decidable without a component to drive:
+§4.6 durable objects (from the manifest alone) and §4.7 decay independence (from the head hashes
+either side of a decay). Each is run against a conformant fixture *and* against the failure it exists
+to catch — an undeclared transition, a human-only transition an agent can sign, a head that moved, a
+"decay" that deleted nothing.
+
+**The other five need machinery this release did not build:** a live component to drive, N >
+`max-samples` calls for §4.3, a kernel that can be made unreachable for §4.5, and the eight refusals
+of §4.4 — which must come *from the component*, not from the kernel. A run assembled today is
+therefore still red, which is the correct answer rather than an embarrassment: five of the seven
+checks genuinely have not happened.
+
+What is closed is the hazard. From here, adding a check can only move a group from red to green, and
+no amount of half-finishing can produce a green run that was not earned.
 
 ## 9. Budget prevention, and the outage the first version of it caused
 

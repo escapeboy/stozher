@@ -18,12 +18,16 @@
 //! red to green; it can never be forgotten into looking green, because the default is red and the
 //! list of groups is fixed here rather than assembled from whatever ran.
 //!
-//! # What is not here yet
+//! # What is here, and what is not
 //!
-//! Every group's implementation. Several need a live component and a kernel that can be made
-//! unreachable — §08 §4.5's offline behaviour, §4.3's "driving N > max-samples calls", §4.4's eight
-//! negative cases. ADR-0015 §7 records that as the open item; this module is what stops the gap being
-//! silently bridged in the meantime.
+//! Two groups are implemented: §4.6 durable objects, which is decidable from the manifest alone, and
+//! §4.7 decay independence, which needs only the head hashes either side of a decay. The other five
+//! need a component to drive — §4.1 wants the component to reproduce the vector corpus, §4.2 a
+//! sample envelope per declared action, §4.3 more than `max-samples` calls, §4.4 eight refusals from
+//! the component, and §4.5 the component running with the kernel unreachable.
+//!
+//! So a run assembled today is still red, and that is the correct answer rather than an
+//! embarrassment: five of the seven checks genuinely have not happened. ADR-0015 §8 records it.
 
 use std::collections::BTreeMap;
 
@@ -192,6 +196,155 @@ impl Run {
             "groups": groups
         })
     }
+}
+
+/// §08 §4.6 — replay a declared transition sequence, and attack it.
+///
+/// Three claims, and the second and third are the ones that matter: "replaying a transition sequence
+/// folds to the expected state; an **illegal transition is rejected**; a `human`-only transition
+/// signed by an **agent key is rejected**." A harness that only replayed the happy path would certify
+/// a component whose state machine accepts anything — which is the same as no state machine.
+///
+/// Returns [`GroupResult::NotApplicable`] when the manifest declares no durable objects, and says so
+/// rather than passing: "there was nothing to check" and "it was checked" are different claims.
+#[must_use]
+pub fn check_durable_objects(manifest: &crate::manifest::Manifest) -> GroupResult {
+    let objects = manifest.document()["durable-objects"]
+        .as_array()
+        .cloned()
+        .unwrap_or_default();
+    if objects.is_empty() {
+        return GroupResult::NotApplicable {
+            why: "the manifest declares no durable objects".to_owned(),
+        };
+    }
+
+    let mut checks = 0u32;
+    for object in &objects {
+        let Some(object_type) = object["object-type"].as_str() else {
+            return GroupResult::Failed {
+                detail: "a declared durable object has no object-type".to_owned(),
+            };
+        };
+        let transitions = object["transitions"]
+            .as_array()
+            .cloned()
+            .unwrap_or_default();
+
+        // 1. Every declared transition is accepted from a state it declares as a `from`, by a signer
+        //    role it declares. This is the fold, and on its own it certifies nothing.
+        for transition in &transitions {
+            let Some(name) = transition["transition"].as_str() else {
+                return GroupResult::Failed {
+                    detail: format!("{object_type} declares a transition with no name"),
+                };
+            };
+            let from = transition["from"]
+                .as_array()
+                .and_then(|list| list.first())
+                .and_then(Value::as_str)
+                .map(str::to_owned);
+            let Some(role) = transition["signers"]
+                .as_array()
+                .and_then(|list| list.first())
+                .and_then(Value::as_str)
+            else {
+                return GroupResult::Failed {
+                    detail: format!("{object_type}.{name} declares no signer role"),
+                };
+            };
+            if let Err(e) = manifest.check_transition(object_type, name, role, from.as_deref()) {
+                return GroupResult::Failed {
+                    detail: format!(
+                        "{object_type}.{name} was refused from its own declared state: {e}"
+                    ),
+                };
+            }
+            checks += 1;
+        }
+
+        // 2. A transition the manifest does not declare is refused. Without this, "the state machine
+        //    accepted the sequence" is true of one that accepts everything.
+        if manifest
+            .check_transition(object_type, "no-such-transition", "agent", None)
+            .is_ok()
+        {
+            return GroupResult::Failed {
+                detail: format!("{object_type} accepted a transition it does not declare"),
+            };
+        }
+        checks += 1;
+
+        // 3. A `human`-only transition signed by an agent key is refused. This is the one that
+        //    matters to an auditor: it is the boundary between "an agent moved the object" and "a
+        //    person did", and a component that blurs it makes every later record unattributable.
+        for transition in &transitions {
+            let signers: Vec<&str> = transition["signers"]
+                .as_array()
+                .map(|list| list.iter().filter_map(Value::as_str).collect())
+                .unwrap_or_default();
+            if signers != ["human"] {
+                continue;
+            }
+            let Some(name) = transition["transition"].as_str() else {
+                continue;
+            };
+            let from = transition["from"]
+                .as_array()
+                .and_then(|list| list.first())
+                .and_then(Value::as_str)
+                .map(str::to_owned);
+            if manifest
+                .check_transition(object_type, name, "agent", from.as_deref())
+                .is_ok()
+            {
+                return GroupResult::Failed {
+                    detail: format!(
+                        "{object_type}.{name} is declared human-only and was accepted from an agent key"
+                    ),
+                };
+            }
+            checks += 1;
+        }
+    }
+    GroupResult::Passed { checks }
+}
+
+/// §08 §4.7 — after deleting every payload the component's samples referenced, the chain still
+/// verifies and produces the **same head hash** (§04 §5.1).
+///
+/// The property is what makes evidence erasable at all: a deletion that moved a head hash would mean
+/// the audit trail and the GDPR obligation were in direct conflict. Asserting only "it still
+/// verifies" would miss the half that matters — a rebuilt chain also verifies.
+///
+/// `before` and `after` are the head hashes either side of decay, and `verified` is whether the chain
+/// verified after it. The caller does the deleting, because that is a store operation and this module
+/// holds no store.
+#[must_use]
+pub fn check_decay_independence(
+    before: &str,
+    after: &str,
+    verified: bool,
+    payloads_deleted: usize,
+) -> GroupResult {
+    if payloads_deleted == 0 {
+        // Deleting nothing and finding the head unchanged is not evidence of anything. A group that
+        // passed here would certify decay independence for a component that never decayed.
+        return GroupResult::Failed {
+            detail: "no payload was deleted, so nothing about decay was demonstrated".to_owned(),
+        };
+    }
+    if !verified {
+        return GroupResult::Failed {
+            detail: "the chain did not verify after payload decay".to_owned(),
+        };
+    }
+    if before != after {
+        return GroupResult::Failed {
+            detail: format!("the head hash moved across decay: {before} became {after}"),
+        };
+    }
+    GroupResult::Passed { checks: 3 }
 }
 
 #[cfg(test)]
