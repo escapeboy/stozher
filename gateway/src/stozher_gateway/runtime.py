@@ -352,6 +352,7 @@ class Gateway:
                 server,
                 self.loop,
                 persistent=self.config.gateway.persist_downstream_in_stdio,
+                timeout=self.config.gateway.downstream_timeout_seconds,
             )
             self._downstream[server.name] = downstream
             downstream.start()

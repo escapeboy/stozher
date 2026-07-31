@@ -10,10 +10,18 @@
 # ----------------------------------
 #   * No store. `var/` is removed, so there is no reused SQLite file and no chain to inherit.
 #   * No keys. `secrets/` is removed, so every seed is generated during the run.
-#   * No configuration. `config/` and `.env` are removed, so the ceremony writes them.
+#   * No configuration. `config/*` and `.env` are removed, so the ceremony writes them.
+#   * No ceremony output. `genesis/` is removed, so the envelopes are signed during the run.
 #   * No images. Both are deleted and rebuilt with `--no-cache`, so the Rust compile and the Python
 #     install are inside the measured window. A machine that has never seen this project has no
 #     layer cache, and a number that assumed one would be a number about *this* machine.
+#
+# That list is exhaustive, and `backups/` is deliberately not on it. This script used to remove it
+# too — silently, with the confirmation line below not mentioning it — so anyone who ran the gate in
+# a directory that was also a real deployment lost their archives without being told. Nothing in
+# `backups/` can affect the measured install: `bin/stozher-bootstrap` never reads it. A wipe that
+# reaches further than the thing it is trying to measure is not a cleaner wipe, it is a destructive
+# one.
 #
 # The clock is wall-clock, taken from the shell before the first command and after the last
 # assertion. Nothing is excluded from it and nothing is done before it starts.
@@ -50,11 +58,57 @@ done
 
 START=$(date +%s)
 step() { printf '\n\033[1m[%4ds] %s\033[0m\n' "$(( $(date +%s) - START ))" "$*"; }
-fail() { printf '\n\033[1;31mGATE FAILED: %s\033[0m\n' "$*" >&2; exit 1; }
+SAID_WHY="no"
+fail() { SAID_WHY="yes"; printf '\n\033[1;31mGATE FAILED: %s\033[0m\n' "$*" >&2; exit 1; }
 elapsed() { echo $(( $(date +%s) - START )); }
 
+# A gate that dies on an unanticipated command — a `set -e` trip, a python traceback, a Ctrl-C —
+# used to end in a raw stack trace with no verdict line. Whether the gate passed is the entire
+# output of this script, so it says so on every exit path, not only the ones it predicted.
+FAILED_AT=""
+on_exit() {
+  local rc=$?
+  if [ "$rc" -ne 0 ] && [ "$SAID_WHY" = "no" ]; then
+    printf '\n\033[1;31mGATE FAILED: exited %d at %s:%s — see the output above\033[0m\n' \
+      "$rc" "$(basename "$0")" "${FAILED_AT:-?}" >&2
+  fi
+  exit "$rc"
+}
+trap 'FAILED_AT="$LINENO"' ERR
+trap on_exit EXIT
+
+# Preconditions, checked before the clock has anything to measure. Each of these fails the run
+# several minutes in — after a Rust compile, typically — and each is a one-line question here.
 command -v docker >/dev/null || fail "docker is required"
 command -v python3 >/dev/null || fail "python3 is required to drive an MCP client"
+docker info >/dev/null 2>&1 || fail "the docker daemon is not reachable — 'docker info' failed. Start it and re-run."
+
+# The ceremony below publishes on 127.0.0.1:8787 and nothing tells it to pick another port. A port
+# already in use fails at step 2, after the images have been built.
+python3 - <<'PY' || fail "127.0.0.1:8787 is already in use — free it, or stop the other install, and re-run"
+import socket, sys
+probe = socket.socket()
+probe.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+try:
+    probe.bind(("127.0.0.1", 8787))
+except OSError:
+    sys.exit(1)
+finally:
+    probe.close()
+PY
+
+# The Rust compile, the Python install and both images need room. This asks about the filesystem
+# holding this checkout; on a machine where the docker daemon keeps its images on a different one
+# (a Linux VM under Docker Desktop or OrbStack) that daemon's own disk is not covered here, and a
+# build that runs out of space there will say so itself.
+HEADROOM_KB=$(df -Pk . 2>/dev/null | awk 'NR==2 {print $4}')
+case "$HEADROOM_KB" in
+  # "could not measure" and "measured, and it is low" are different answers, and a check that
+  # reported the first as the second would be this script telling the same kind of confident wrong
+  # story the install used to. Say which one it is.
+  ''|*[!0-9]*) echo "  note: could not read free space from df — skipping the headroom check" >&2 ;;
+  *) [ "$HEADROOM_KB" -ge 5242880 ] || fail "under 5 GB free on the filesystem holding this checkout ($(( HEADROOM_KB / 1024 )) MB) — a --no-cache build of both images needs more" ;;
+esac
 
 # ---------------------------------------------------------------------------------------------
 step "0  wiping every trace of a previous install"
@@ -64,7 +118,7 @@ if [ "$CLEAN" = "yes" ]; then
   # `|| true`, which would leave the previous install's containers standing while claiming a wipe.
   printf 'STOZHER_UID=%s\nSTOZHER_GID=%s\n' "$(id -u)" "$(id -g)" > .env
   docker compose down --remove-orphans --volumes >/dev/null 2>&1 || true
-  rm -rf var secrets genesis backups config/kernel-config.json config/stozher-gateway.toml .env
+  rm -rf var secrets genesis config/kernel-config.json config/stozher-gateway.toml .env
   if [ "$REBUILD" = "yes" ]; then
     docker image rm -f stozher-kernel:0.1.0 stozher-gateway:0.1.0 >/dev/null 2>&1 || true
   fi

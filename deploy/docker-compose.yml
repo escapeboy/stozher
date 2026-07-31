@@ -44,10 +44,30 @@ services:
     # deliberately, with a TLS terminator in front — never a default they inherit.
     ports:
       - "127.0.0.1:${STOZHER_KERNEL_PORT:-8787}:8787"
+    # Long syntax, for `create_host_path: false` on every one of them. Docker's default is to
+    # *create* a missing bind source, and for a file-shaped mount it creates a **directory**. Under
+    # that default a `docker compose up` run before the ceremony left `config/kernel-config.json` as
+    # a directory, the kernel logged `config-unreadable: Is a directory (os error 21)`, and
+    # `restart: unless-stopped` looped on it for ever; it also created `secrets/` and
+    # `secrets/kernel/` at the daemon's 0755 rather than the ceremony's 0700. Refusing to start is
+    # the honest failure: nothing here is docker's to invent, every one of these paths is written by
+    # `bin/stozher-bootstrap`, and a deployment that has not been bootstrapped should say so rather
+    # than half-exist.
     volumes:
-      - ./var:/var/lib/stozher/data
-      - ./secrets/kernel:/var/lib/stozher/keys:ro
-      - ./config/kernel-config.json:/etc/stozher/kernel-config.json:ro
+      - type: bind
+        source: ./var
+        target: /var/lib/stozher/data
+        bind: { create_host_path: false }
+      - type: bind
+        source: ./secrets/kernel
+        target: /var/lib/stozher/keys
+        read_only: true
+        bind: { create_host_path: false }
+      - type: bind
+        source: ./config/kernel-config.json
+        target: /etc/stozher/kernel-config.json
+        read_only: true
+        bind: { create_host_path: false }
     environment:
       # Approver-ping credentials, when a channel is configured. Named, never inlined (ADR-0002).
       STOZHER_SLACK_WEBHOOK: "${STOZHER_SLACK_WEBHOOK:-}"
@@ -60,7 +80,28 @@ services:
       - no-new-privileges:true
     cap_drop:
       - ALL
-    read_only: false
+    # The kernel writes to exactly two places: the store under /var/lib/stozher/data and SQLite's
+    # temporary files. The first is a bind mount and stays writable under a read-only rootfs; the
+    # second is why the tmpfs below exists — `VACUUM INTO`, which `bin/stozher-backup` runs against
+    # the live kernel, materialises through a temp file. Everything else in the image is the binary
+    # and a CA bundle, neither of which is written at runtime. So the rootfs is read-only: a
+    # process that cannot write cannot be made to persist anything, and the two paths that must be
+    # writable are named rather than inherited.
+    read_only: true
+    tmpfs:
+      - /tmp:mode=1777,size=64m
+    # Bounded, because unbounded is a choice too. `restart: unless-stopped` in front of a process
+    # that can exhaust the host's memory or pids is a loop that takes the host with it, and the
+    # default json-file driver grows without limit on a stock Linux daemon — the local daemon's
+    # rotation is the local daemon's, not this file's, and shipping a compose file that depends on
+    # it is shipping a deployment whose disk usage is somebody else's default.
+    mem_limit: 512m
+    pids_limit: 256
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
     stop_grace_period: 20s
 
   gateway:
@@ -73,14 +114,33 @@ services:
     depends_on:
       kernel:
         condition: service_healthy
+    # Bind mounts, not named volumes. The gateway's local chain is audit state: it belongs beside
+    # the store, in the directory `bin/stozher-backup` copies. A named volume would also take its
+    # ownership from the image, which is root — and this container runs as the operator.
+    #
+    # `create_host_path: false` for the same reason as the kernel's: every path here is the
+    # ceremony's to write, and an MCP client that starts the gateway against a deployment that was
+    # never bootstrapped should fail at the mount rather than be handed an empty directory where its
+    # configuration file was supposed to be.
     volumes:
-      - ./secrets/gateway:/var/lib/stozher/gateway:ro
-      - ./config/stozher-gateway.toml:/etc/stozher/gateway.toml:ro
-      # Bind mounts, not named volumes. The gateway's local chain is audit state: it belongs
-      # beside the store, in the directory `bin/stozher-backup` copies. A named volume would also
-      # take its ownership from the image, which is root — and this container runs as the operator.
-      - ./var/gateway:/var/lib/stozher/state
-      - ./var/notes:/var/lib/stozher/notes
+      - type: bind
+        source: ./secrets/gateway
+        target: /var/lib/stozher/gateway
+        read_only: true
+        bind: { create_host_path: false }
+      - type: bind
+        source: ./config/stozher-gateway.toml
+        target: /etc/stozher/gateway.toml
+        read_only: true
+        bind: { create_host_path: false }
+      - type: bind
+        source: ./var/gateway
+        target: /var/lib/stozher/state
+        bind: { create_host_path: false }
+      - type: bind
+        source: ./var/notes
+        target: /var/lib/stozher/notes
+        bind: { create_host_path: false }
     environment:
       # §10 §1.1: one caller per process, authenticated. A multi-caller configuration refuses to
       # start rather than guess whose authority a call is under (ADR-0007).
@@ -93,3 +153,14 @@ services:
       - no-new-privileges:true
     cap_drop:
       - ALL
+    # One process per connecting MCP client, so these bound a *session*, not the deployment. The
+    # rootfs is left writable here and not on the kernel: this image carries a Python runtime, which
+    # writes bytecode caches inside site-packages, and a read-only rootfs the interpreter works
+    # around is a claim rather than a control.
+    mem_limit: 512m
+    pids_limit: 256
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"

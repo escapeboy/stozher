@@ -731,6 +731,23 @@ async fn verify(kernel: &Kernel) -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
+    // An empty store is a refusal, not a pass. Nothing the box holds distinguishes "never
+    // bootstrapped" from "restored over the top of the records", and §05 §5.2's ceremony means a
+    // deployment that has ever run holds at least two envelopes — so "no streams" on a box that is
+    // meant to hold an audit trail is a data-loss incident. `deploy/bin/stozher-restore` branches on
+    // this exit code, and a green line over nothing is the one answer that would let a bad restore
+    // through: an unavailable audit is recoverable, an audit wrongly reported intact is not.
+    //
+    // It is deliberately not the same message as a chain that failed verification. "Your records
+    // are wrong" and "you have no records" send an operator to different places.
+    if streams.is_empty() {
+        eprintln!(
+            "no streams: this store holds no audit trail at all. That is not a verified chain — \
+             it is an empty one. If this box has ever run, the records are missing; if it has not, \
+             it has not been bootstrapped yet."
+        );
+        return ExitCode::FAILURE;
+    }
     let mut failures = 0usize;
     for stream in &streams {
         let Some(name) = stream["stream"].as_str() else {

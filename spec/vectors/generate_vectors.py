@@ -1824,7 +1824,8 @@ def decision(
     verdict: str = "approve",
     decided_at: str = "2026-07-26T09:14:58.000Z",
     not_after: str = "2026-07-26T09:29:58.000Z",
-    single_use: bool = True,
+    # Not `bool`: the parity vectors deliberately pass a non-bool here (spec 06 section 1.2).
+    single_use: Any = True,
     reason: Any = None,
     request_hash: str | None = None,
 ) -> dict:
@@ -2200,6 +2201,388 @@ def gen_payload_binding() -> None:
 
 
 # --------------------------------------------------------------------------
+# 10. Parity
+# --------------------------------------------------------------------------
+
+
+def gen_parity() -> None:
+    """The branches on which two implementations of this specification actually disagreed.
+
+    Every vector here was written against a *confirmed* difference in behaviour between
+    `kernel/stozher-core` (Rust) and `gateway/src/stozher_gateway` (Python), read out of both
+    sources. None is hypothetical. The 161 vectors that preceded this file were green because
+    they did not reach these branches -- not because the two implementations agreed.
+
+    Each vector therefore carries a `divergence` member recording what each implementation did
+    before the vector existed. That text is documentation, not an assertion: a harness reads
+    `algorithm`, `input` and `expected`, and nothing else.
+    """
+    agent = KEYS["agent:claude-code/ivan-mbp"]
+    ivan = KEYS["human:ivan"]
+    # Derived here rather than added to KEYS: that roster is emitted verbatim into other vector
+    # files, and this file must not perturb a byte of them. The label is public either way, so
+    # the key stays reproducible by the rule in README §0.
+    ivan2 = named_key("human:ivan/second-device")
+    mila = KEYS["human:mila"]
+
+    # Approver entries name a subject and a key, because §06 §5 states self-approval over both.
+    # A verifier whose approver list is a bare set of keys cannot evaluate the second MUST at all.
+    approvers = [
+        {"key": ivan.key_id, "subject": "human:ivan"},
+        {"key": ivan2.key_id, "subject": "human:ivan"},
+        {"key": mila.key_id, "subject": "human:mila"},
+    ]
+
+    # A human acting directly through a tool. §06 §5: this still needs another named human.
+    human_request = {**REQUEST, "subject": "human:ivan", "key": ivan.key_id}
+    human_request_hash = object_hash(human_request)
+    request_hash = object_hash(REQUEST)
+
+    def human_env(auth: dict, **over: Any) -> dict:
+        body = base_effect(0, None, ivan, **over)
+        body["identity"] = {"subject": "human:ivan", "key": ivan.key_id, "component": "gateway"}
+        body["authorization"] = auth
+        return sign_object(body, ivan)
+
+    def agent_env(auth: dict, **over: Any) -> dict:
+        body = base_effect(0, None, agent, **over)
+        body["authorization"] = auth
+        return sign_object(body, agent)
+
+    def auth_case(
+        name: str,
+        spec: str,
+        desc: str,
+        envelope: dict,
+        expected: dict,
+        divergence: str,
+        *,
+        seen: list[str] | None = None,
+        appr: list[dict] | None = None,
+    ) -> dict:
+        return {
+            "name": name,
+            "spec": spec,
+            "description": desc,
+            "algorithm": "verify-authorization",
+            "input": {
+                "envelope": envelope,
+                "requires-gate": True,
+                "approvers": appr if appr is not None else approvers,
+                "seen-request-hashes": seen or [],
+            },
+            "expected": expected,
+            "divergence": divergence,
+        }
+
+    def chain_case(
+        name: str, spec: str, desc: str, envelopes: list[dict], expected: dict, divergence: str
+    ) -> dict:
+        return {
+            "name": name,
+            "spec": spec,
+            "description": desc,
+            "algorithm": "verify-chain",
+            "input": {"stream": STREAM, "envelopes": envelopes, "expected-first-prev": None},
+            "expected": expected,
+            "divergence": divergence,
+        }
+
+    # ---- 1. self-approval is stated over the subject as well as the key (§06 §5) ----
+
+    vectors = [
+        auth_case(
+            "self-approval-by-a-second-key-of-the-same-subject",
+            "06 §5",
+            "human:ivan requests a consequential action and approves it with a second key that is "
+            "also human:ivan's. §06 §5 states self-approval as two conjoined MUSTs -- the decision "
+            "key MUST NOT equal the request key, AND the approver subject MUST NOT be the "
+            "requesting subject -- and only the second one catches this. A second keypair is the "
+            "cheapest thing in the protocol to mint, so a key-only check stops nobody; 'escalation "
+            "terminates at a named human' is about the person, not the keypair.",
+            human_env({"request": human_request, "decision": decision(human_request, ivan2)}),
+            {"valid": False, "error": "gate-self-approval"},
+            "kernel rejects (gate.rs resolves the approver's subject); gateway accepted -- its "
+            "`approvers` is a list of key strings, so it structurally cannot resolve a subject.",
+        ),
+        auth_case(
+            "approval-by-a-different-subject-is-accepted",
+            "06 §5",
+            "the positive control for the vector above: the same request approved by human:mila, a "
+            "different named human, is a valid authorization. A subject check that rejects this "
+            "has broken the gate rather than tightened it.",
+            human_env({"request": human_request, "decision": decision(human_request, mila)}),
+            {
+                "valid": True,
+                "error": None,
+                "request-hash": human_request_hash,
+                "decided-by": mila.key_id,
+                "single-use": True,
+            },
+            "both implementations accept; the vector exists so that a fix for the case above "
+            "cannot be 'reject everything'.",
+        ),
+        auth_case(
+            "self-approval-by-the-same-key",
+            "06 §2 step 4",
+            "the key-level MUST, held in the same file as the subject-level one so that a "
+            "verifier which gains the subject check cannot quietly lose the key check.",
+            human_env({"request": human_request, "decision": decision(human_request, ivan)}),
+            {"valid": False, "error": "gate-self-approval"},
+            "both implementations reject; this is the branch the pre-existing corpus reached.",
+        ),
+        auth_case(
+            "approver-whose-subject-the-deployment-cannot-name",
+            "06 §5",
+            "an approver entry with a null subject: the deployment lists the key as permitted but "
+            "cannot say whose it is. The subject MUST is unevaluable, so the verdict rests on the "
+            "key check (step 4) and on the key being explicitly permitted (step 5), and the "
+            "authorization is accepted. A verifier MUST NOT infer a subject it was not given, and "
+            "MUST NOT treat 'unknown' as 'the requester'.",
+            human_env({"request": human_request, "decision": decision(human_request, ivan2)}),
+            {
+                "valid": True,
+                "error": None,
+                "request-hash": human_request_hash,
+                "decided-by": ivan2.key_id,
+                "single-use": True,
+            },
+            "the spec does not state what to do when the subject is unknown; this vector pins the "
+            "reading the kernel already implements, so that the two cannot drift once the gateway "
+            "grows subjects.",
+            appr=[{"key": ivan2.key_id, "subject": None}, {"key": mila.key_id, "subject": "human:mila"}],
+        ),
+    ]
+
+    # ---- 2. timestamps are validated for shape before they are compared (§01 §2.3) ----
+
+    vectors += [
+        auth_case(
+            "decision-not-after-is-not-a-timestamp",
+            "01 §2.3, 06 §2 steps 8-9",
+            "the approval's `not-after` is the string \"z\", carried under a signature that "
+            "verifies. Steps (8) and (9) compare timestamps as strings, which is exact for §01 "
+            "§2.3's fixed-width 24-byte form and meaningless for anything else: \"z\" sorts above "
+            "every real timestamp, so an approval bounded by it is bounded by nothing and step (9) "
+            "becomes vacuous. The comparison MUST validate its own operands -- nothing upstream "
+            "descends into `authorization`.",
+            agent_env({"request": REQUEST, "decision": decision(REQUEST, mila, not_after="z")}),
+            {"valid": False, "error": "encoding-bad-timestamp"},
+            "kernel rejects (gate.rs shape-checks all four timestamps before comparing); gateway "
+            "ACCEPTED -- an approval that never expires.",
+        ),
+        auth_case(
+            "request-not-after-is-not-a-timestamp",
+            "01 §2.3, 06 §2 step 8",
+            "the same trap on the other side of step (8): a request whose `not-after` is \"z\" was "
+            "never capable of timing out in the approver's queue.",
+            agent_env(
+                {
+                    "request": {**REQUEST, "not-after": "z"},
+                    "decision": decision({**REQUEST, "not-after": "z"}, mila),
+                }
+            ),
+            {"valid": False, "error": "encoding-bad-timestamp"},
+            "kernel rejects; gateway ACCEPTED.",
+        ),
+        auth_case(
+            "decision-decided-at-absent",
+            "06 §1.2, 06 §2 steps 8-9",
+            "`decided-at` is REQUIRED on a gate decision and is an operand of both step (8) and "
+            "step (9). A verifier that defaults it to the empty string satisfies both comparisons "
+            "vacuously -- \"\" is below every timestamp, so the approval appears to have been "
+            "granted before the beginning of time and the window check passes.",
+            agent_env(
+                {
+                    "request": REQUEST,
+                    "decision": sign_object(
+                        {
+                            k: v
+                            for k, v in decision(REQUEST, mila).items()
+                            if k not in ("decided-at", "sig")
+                        },
+                        mila,
+                    ),
+                }
+            ),
+            {"valid": False, "error": "schema-missing-member"},
+            "kernel rejects; gateway ACCEPTED via `.get(\"decided-at\", \"\")`.",
+        ),
+        auth_case(
+            "effect-emitted-exactly-at-the-approval-deadline",
+            "06 §2 step 9",
+            "the boundary control for the three vectors above: step (9) is `decided-at <= at <= "
+            "not-after`, inclusive at both ends, so an effect emitted on the deadline is inside "
+            "the window. Validating the shape of a timestamp MUST NOT change the comparison.",
+            agent_env(
+                {"request": REQUEST, "decision": decision(REQUEST, mila)},
+                **{"emitted-at": "2026-07-26T09:29:58.000Z"},
+            ),
+            {
+                "valid": True,
+                "error": None,
+                "request-hash": request_hash,
+                "decided-by": mila.key_id,
+                "single-use": True,
+            },
+            "both implementations accept.",
+        ),
+    ]
+
+    # ---- 3. `single-use` on a non-bool coerces towards single use (§06 §1.2) ----
+
+    vectors += [
+        auth_case(
+            "single-use-zero-is-single-use",
+            "06 §1.2, 06 §2 step 11",
+            "`single-use` is `0`, not a boolean. §06 §1.2 makes it a MUST and the default profile "
+            "MUST set it true; `false` is permitted only where policy explicitly allows it. A "
+            "value outside the type therefore is not the permission to reuse -- it is a malformed "
+            "decision, and the safe reading of a malformed decision is the restrictive one. This "
+            "vector is asserted as replay because that makes the reading observable: the approval "
+            "has been used once already.",
+            agent_env({"request": REQUEST, "decision": decision(REQUEST, mila, single_use=0)}),
+            {"valid": False, "error": "gate-authorization-replayed"},
+            "kernel treats it as single-use (`as_bool().unwrap_or(true)`); gateway treated it as "
+            "REUSABLE (`bool(0)` is False) -- a replayable approval on a malformed field.",
+            seen=[request_hash],
+        ),
+        auth_case(
+            "single-use-zero-on-first-use",
+            "06 §1.2",
+            "the same malformed decision, not yet used: it authorizes the action once, and the "
+            "verifier reports `single-use: true` so the caller records the request hash.",
+            agent_env({"request": REQUEST, "decision": decision(REQUEST, mila, single_use=0)}),
+            {
+                "valid": True,
+                "error": None,
+                "request-hash": request_hash,
+                "decided-by": mila.key_id,
+                "single-use": True,
+            },
+            "kernel reports single-use true; gateway reported false.",
+        ),
+        auth_case(
+            "single-use-empty-array-is-single-use",
+            "06 §1.2",
+            "a second non-bool shape, so that the coercion cannot be fixed for the literal `0` "
+            "alone. Any value that is not a JSON boolean reads as single use.",
+            agent_env({"request": REQUEST, "decision": decision(REQUEST, mila, single_use=[])}),
+            {"valid": False, "error": "gate-authorization-replayed"},
+            "kernel treats it as single-use; gateway treated it as reusable.",
+            seen=[request_hash],
+        ),
+        auth_case(
+            "single-use-false-is-genuinely-reusable",
+            "06 §3",
+            "the control that keeps the rule above from becoming 'always single use': `false` is "
+            "a JSON boolean and IS the standing permission §06 §3 describes, so a second use of "
+            "the same request hash is accepted.",
+            agent_env({"request": REQUEST, "decision": decision(REQUEST, mila, single_use=False)}),
+            {
+                "valid": True,
+                "error": None,
+                "request-hash": request_hash,
+                "decided-by": mila.key_id,
+                "single-use": False,
+            },
+            "both implementations accept.",
+            seen=[request_hash],
+        ),
+    ]
+
+    # ---- 4/5. chain verification order and the sequence error codes (§04 §2) ----
+
+    chain = build_chain(agent)
+
+    probe = json.loads(json.dumps(chain))
+    del probe[3]["policy-version"]
+
+    resigned_malformed = list(chain)
+    resigned_malformed[3] = sign_object(
+        {k: v for k, v in chain[3].items() if k not in ("policy-version", "sig")}, agent
+    )
+
+    vectors += [
+        chain_case(
+            "unsigned-object-must-not-probe-the-schema",
+            "04 §2.1, 02 §9.2",
+            "the last envelope is both malformed (a REQUIRED member removed) and no longer signed "
+            "for (the removal broke the signature). §04 §2.1 fixes the order as parse -> verify "
+            "sig -> schema, so the answer MUST be the signature code: an object nobody signed is "
+            "not entitled to a reply describing which member the schema wanted. Reversing the "
+            "order turns the verifier into a free schema oracle for unsigned input.",
+            probe,
+            {"valid": False, "error": "sig-invalid", "failed-at-seq": 3},
+            "gateway is correct; kernel validated the schema first (chain.rs) and answered with "
+            "the structural code. This is the one place the reference implementation contradicts "
+            "an ADR that claims it conforms (ADR-0006 §1 adjudicated it explicitly).",
+        ),
+        chain_case(
+            "malformed-but-correctly-signed-reports-the-schema-code",
+            "04 §2.1",
+            "the control that gives the vector above its meaning: the same envelope, the same "
+            "missing member, but re-signed. The signature step passes, so the schema step is "
+            "reached and names the missing member. Ordering is what the pair tests -- a verifier "
+            "that answers `sig-invalid` here has stopped checking the schema at all.",
+            resigned_malformed,
+            {"valid": False, "error": "schema-missing-member", "failed-at-seq": 3},
+            "both implementations report the schema code.",
+        ),
+        chain_case(
+            "seq-revisits-an-already-occupied-position",
+            "04 §2, 04 §3",
+            "the range runs 0, 1, 2 and then 1 again. §04 §3 defines the two codes by what they "
+            "describe: a different envelope for an *occupied* `(stream, seq)` is "
+            "`chain-seq-duplicate`, while `chain-seq-gap` is reserved for a `seq` that *exceeds* "
+            "the head + 1 ('an emitter must not be able to reserve future positions'). A `seq` "
+            "that moves backwards reserves nothing -- it re-claims a position the range has "
+            "already filled -- so it is a duplicate. §04 §2 pairs the codes the same way: 'no "
+            "gaps and no reuse'.",
+            [chain[0], chain[1], chain[2], chain[1]],
+            {"valid": False, "error": "chain-seq-duplicate", "failed-at-seq": 1},
+            "kernel reports chain-seq-duplicate (compares against first-seq + index); gateway "
+            "reported chain-seq-gap (compares against the previous seq, so its duplicate branch "
+            "only fires on exact equality). The pre-existing `chain.json/seq-duplicate` vector is "
+            "the equality case, which both implementations already agreed on -- which is why the "
+            "disagreement survived a green corpus.",
+        ),
+        chain_case(
+            "seq-jumps-forward-over-a-position",
+            "04 §3",
+            "the contrast to the vector above, so that the sequence codes cannot be collapsed "
+            "into one: 0, 1, then 3 reserves a position that no envelope fills, and that is the "
+            "case §04 §3 names `chain-seq-gap`.",
+            [chain[0], chain[1], chain[3]],
+            {"valid": False, "error": "chain-seq-gap", "failed-at-seq": 3},
+            "both implementations report chain-seq-gap.",
+        ),
+    ]
+
+    emit(
+        "parity.json",
+        "parity",
+        "Cross-implementation parity (spec 01 section 2.3, 04 sections 2-3, 06 sections 1.2, 2 and 5). "
+        "Each vector reaches a branch on which two independent implementations of this specification "
+        "were observed to disagree. Dispatch on `algorithm`: `verify-authorization` takes "
+        "`input.{envelope,requires-gate,approvers,seen-request-hashes}` and `verify-chain` takes "
+        "`input.{stream,envelopes,expected-first-prev}`. Note that `approvers` entries here are "
+        "objects carrying a `key` and a nullable `subject`, not bare key strings: §06 §5 states "
+        "self-approval over the subject as well as the key, and a verifier given only keys cannot "
+        "evaluate it. `divergence` is documentation and MUST NOT be asserted on.",
+        vectors,
+        {
+            "keys": [
+                agent.as_vector(),
+                ivan.as_vector(),
+                ivan2.as_vector(),
+                mila.as_vector(),
+            ]
+        },
+    )
+
+
+# --------------------------------------------------------------------------
 # index
 # --------------------------------------------------------------------------
 
@@ -2246,6 +2629,7 @@ def main() -> int:
     gen_mandate_chain()
     gen_authorization()
     gen_payload_binding()
+    gen_parity()
     gen_index()
     return 0
 

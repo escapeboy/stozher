@@ -34,3 +34,11 @@ missing_docs = "warn"
 # one. Our own crates stay unoptimized so panics keep useful line numbers.
 [profile.test.package."*"]
 opt-level = 2
+
+# Arithmetic overflow must trap in the profile that actually ships. Without this the test suite and
+# production disagree about what the same line of code does — debug panics, release wraps — so an
+# overflow is not merely unfixed but *structurally invisible* to every test we run. For a system
+# whose output is an audit claim, a silently wrapped sum is a false claim, and preferring a crash to
+# a false claim is the whole posture: an unavailable audit is recoverable, a wrong one is not.
+[profile.release]
+overflow-checks = true

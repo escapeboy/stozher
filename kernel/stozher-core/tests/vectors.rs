@@ -132,6 +132,7 @@ fn every_vector_validates_against_the_reference_implementation() {
                 "mandate-chain" => check_mandate_chain(&mut report, &id, &doc, vector),
                 "authorization" => check_authorization(&mut report, &id, vector),
                 "payload-binding" => check_payload_binding(&mut report, &id, vector),
+                "parity" => check_parity(&mut report, &id, vector),
                 unknown => panic!(
                     "{path}: unsupported vector kind {unknown:?}. Vectors are never skipped: \
                      implement support or remove the file."
@@ -574,6 +575,133 @@ fn check_payload_binding(report: &mut Report, id: &str, vector: &Value) {
             ),
         }
     }
+}
+
+/// Cross-implementation parity: each vector reaches a branch on which two independent
+/// implementations were observed to disagree.
+///
+/// Unlike every other kind, these vectors are not a second opinion on a branch both implementations
+/// already agreed about — they exist *because* the implementations diverged, and the expectation
+/// records what the specification mandates rather than what either one did. A parity vector that
+/// passes on both sides is a divergence that has been closed.
+///
+/// Dispatch is on `algorithm` rather than the file's `kind`, because a divergence is a property of a
+/// branch, not of an operation: closing them needs both `verify_authorization` and `verify_chain` in
+/// the same file, against the same key material.
+fn check_parity(report: &mut Report, id: &str, vector: &Value) {
+    let input = &vector["input"];
+    match vector["algorithm"].as_str().expect("algorithm") {
+        "verify-authorization" => {
+            check_parity_authorization(report, id, input, &vector["expected"])
+        }
+        "verify-chain" => check_parity_chain(report, id, input, &vector["expected"]),
+        other => report.fail(id, format!("unsupported parity algorithm {other:?}")),
+    }
+}
+
+fn check_parity_authorization(report: &mut Report, id: &str, input: &Value, expected: &Value) {
+    // `approvers` carries objects here, not the bare key strings the `authorization` kind uses:
+    // §06 §5 states self-approval over the subject *as well as* the key, so a corpus that cannot
+    // express "a second key belonging to the same person" cannot reach the branch that separates a
+    // key-only check from a conforming one.
+    let approvers: Vec<gate::Approver> = input["approvers"]
+        .as_array()
+        .expect("approvers")
+        .iter()
+        .map(|entry| gate::Approver {
+            key: KeyId::parse(entry["key"].as_str().expect("approvers[].key")).expect("key id"),
+            subject: entry
+                .get("subject")
+                .and_then(Value::as_str)
+                .map(str::to_owned),
+        })
+        .collect();
+    let seen: HashSet<String> = input["seen-request-hashes"]
+        .as_array()
+        .map(|list| {
+            list.iter()
+                .filter_map(Value::as_str)
+                .map(str::to_owned)
+                .collect()
+        })
+        .unwrap_or_default();
+    let requires_gate = input["requires-gate"].as_bool().expect("requires-gate");
+
+    let result = gate::verify_authorization(&input["envelope"], requires_gate, &approvers, &seen);
+    report.check(
+        id,
+        "validity",
+        &result.is_ok(),
+        &expected["valid"].as_bool().expect("expected.valid"),
+    );
+    match result {
+        Ok(ok) => {
+            if let Some(hash) = expected.get("request-hash").and_then(Value::as_str) {
+                report.check(
+                    id,
+                    "request hash",
+                    &ok.as_ref().map(|a| a.request_hash.as_str()),
+                    &Some(hash),
+                );
+            }
+            if let Some(key) = expected.get("decided-by").and_then(Value::as_str) {
+                report.check(
+                    id,
+                    "decided by",
+                    &ok.as_ref().map(|a| a.decided_by.as_str()),
+                    &Some(key),
+                );
+            }
+            if let Some(single_use) = expected.get("single-use").and_then(Value::as_bool) {
+                report.check(
+                    id,
+                    "single use",
+                    &ok.as_ref().map(|a| a.single_use),
+                    &Some(single_use),
+                );
+            }
+        }
+        Err(e) => {
+            if let Some(expected_code) = parity_error(expected) {
+                report.check(id, "error code", &e.code(), &expected_code);
+            }
+        }
+    }
+}
+
+fn check_parity_chain(report: &mut Report, id: &str, input: &Value, expected: &Value) {
+    let envelopes: Vec<Value> = input["envelopes"].as_array().expect("envelopes").clone();
+    let stream = input["stream"].as_str().expect("stream");
+    let anchor = input.get("expected-first-prev").and_then(Value::as_str);
+
+    let result = chain::verify_chain(&envelopes, stream, anchor);
+    report.check(
+        id,
+        "validity",
+        &result.is_ok(),
+        &expected["valid"].as_bool().expect("expected.valid"),
+    );
+    match result {
+        Ok(ok) => {
+            if let Some(head) = expected.get("head-hash").and_then(Value::as_str) {
+                report.check(id, "head hash", &ok.head_hash.as_str(), &head);
+            }
+        }
+        Err(e) => {
+            if let Some(expected_code) = parity_error(expected) {
+                report.check(id, "error code", &e.code(), &expected_code);
+            }
+            if let Some(seq) = expected.get("failed-at-seq").and_then(Value::as_u64) {
+                report.check(id, "failed-at-seq", &e.seq(), &Some(seq));
+            }
+        }
+    }
+}
+
+/// A parity vector's `expected.error` is explicitly `null` on the accepting branches, so a present
+/// member is not the same as an expected code.
+fn parity_error(expected: &Value) -> Option<&str> {
+    expected.get("error").and_then(Value::as_str)
 }
 
 /// The index must enumerate exactly the vector files present on disk.

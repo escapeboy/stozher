@@ -21,6 +21,8 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
 
+from .gate import Approver
+
 __all__ = [
     "CallerConfig",
     "ConfigError",
@@ -137,13 +139,25 @@ class OrgConfig(BaseModel):
     policy_key: str | None = Field(default=None, pattern=_KEY_ID)
     roots: list[RootConfig] = Field(default_factory=list)
 
-    def approver_keys(self, subjects: list[str]) -> list[str]:
-        """The keys permitted to approve for the named subjects (§06 §5).
+    def approvers(self, subjects: list[str]) -> list[Approver]:
+        """The approvers permitted to sign for the named subjects (§06 §5).
 
         An approver is always a named human: a group, a role or a rotation may determine whom to
-        notify, but never who signs.
+        notify, but never who signs. Each key is returned with the subject it was resolved *from*,
+        because that is what makes the subject half of §06 §5's self-approval prohibition checkable
+        at all (see :class:`~stozher_gateway.gate.Approver`).
+
+        §06 §5's second kind of approver — a human holding a mandate whose scope includes the action
+        — is **not** resolvable here: the gateway holds its own caller's mandate and nothing else,
+        so it has no way to learn which humans hold which mandates. This returns the roots it can
+        name and no more; a caller that asked for subjects and got back fewer must refuse rather
+        than substitute a set it *can* verify (§06 §6).
         """
-        return [root.key for root in self.roots if root.subject in subjects]
+        return [Approver(root.key, root.subject) for root in self.roots if root.subject in subjects]
+
+    def root_approvers(self) -> list[Approver]:
+        """Every enrolled human root, each carrying its subject."""
+        return [Approver(root.key, root.subject) for root in self.roots]
 
 
 class DevConfig(BaseModel):
@@ -166,6 +180,8 @@ class GatewaySection(BaseModel):
     #: stdio spawns one process per client connection, so long-lived downstream sessions would
     #: duplicate per session and leak threads. Opt in explicitly, the way `bridge_in_stdio` does.
     persist_downstream_in_stdio: bool = False
+    #: How long to wait on a downstream server before abandoning the call and reaping it.
+    downstream_timeout_seconds: float = Field(default=30.0, gt=0)
     #: Harbormaster's own tools are actions too (§10 §8): under enforcement they are classified,
     #: mandated and gated like anything else.
     govern_native_tools: bool = True

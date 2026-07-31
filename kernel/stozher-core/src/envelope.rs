@@ -34,6 +34,37 @@ pub const MAX_SAFE_INTEGER: i128 = 9_007_199_254_740_991;
 /// Maximum length in octets of `correlation-ref`.
 pub const CORRELATION_REF_MAX: usize = 512;
 
+/// The most distinct actions one `aggregate` window may fold.
+///
+/// `spec/02 §7` bounds `sample-hashes` at 16 but leaves `counts.by-action` unbounded, which makes
+/// one envelope an unbounded amount of work for every consumer that iterates it — including the
+/// kernel's own mandate walk, which does a signature-verifying ancestry query per distinct action.
+///
+/// 1024 is chosen so that `i64` accumulation over the counts cannot leave its range even in
+/// principle: `check_numbers` caps each count at [`MAX_SAFE_INTEGER`], and
+/// `1024 * MAX_SAFE_INTEGER` is 9223372036854774784, which is below `i64::MAX`, while 1025 of them
+/// is not. It is also two orders of magnitude above any real window: `by-action` keys are
+/// `<manifest name>.<action>` identifiers, so the cardinality is bounded in practice by how many
+/// distinct actions one component declares, not by traffic.
+pub const AGGREGATE_MAX_ACTIONS: usize = 1024;
+
+/// A `counts` member is negative.
+///
+/// Implementation-local, hence the `x-` prefix: §02 §7 rule 3 constrains `total` to the *sum* of
+/// `by-action` and says nothing about the sign, because a count of things that happened has no
+/// meaningful negative value. Without the check the sum is satisfiable by cancellation — one entry
+/// of 1000000 and one of -999999 sum to 1 — so `aggregate-count-mismatch` becomes a check an
+/// emitter passes while recording a window of a million reads as one. Registered in
+/// `stozher_kernel::codes::REGISTER`.
+pub const AGGREGATE_COUNT_NEGATIVE: &str = "x-aggregate-count-negative";
+
+/// `counts.by-action` folds more than [`AGGREGATE_MAX_ACTIONS`] distinct actions.
+///
+/// Implementation-local, hence the `x-` prefix: `spec/02 §9.1` tabulates no code for this because
+/// it states no bound. It is registered alongside the kernel's other local codes in
+/// `stozher_kernel::codes::REGISTER` so the set stays reviewable in one place.
+pub const AGGREGATE_CARDINALITY: &str = "x-aggregate-cardinality";
+
 const COMMON: [&str; 8] = [
     "v",
     "kind",
@@ -445,19 +476,42 @@ fn validate_aggregate(
     let total = counts["total"]
         .as_i64()
         .ok_or_else(|| err!("schema-type-mismatch", "counts.total must be an integer"))?;
+    if total < 0 {
+        return Err(err!(AGGREGATE_COUNT_NEGATIVE, "counts.total is {total}"));
+    }
     let by_action = counts["by-action"]
         .as_object()
         .ok_or_else(|| err!("schema-type-mismatch", "counts.by-action must be an object"))?;
-    let mut sum: i64 = 0;
-    for value in by_action.values() {
-        sum += value.as_i64().ok_or_else(|| {
+    if by_action.len() > AGGREGATE_MAX_ACTIONS {
+        return Err(err!(
+            AGGREGATE_CARDINALITY,
+            "{} distinct actions exceeds {AGGREGATE_MAX_ACTIONS}",
+            by_action.len()
+        ));
+    }
+    // Accumulated in `i128`, not `i64`. Each count is already bounded at `MAX_SAFE_INTEGER` by
+    // `check_numbers`, but the *sum* of many of them is not, and an accumulator that wraps turns
+    // `aggregate-count-mismatch` into a check an emitter can choose to pass: land the wrap on the
+    // declared total and a window of 1.8e19 reads records as one.
+    let mut sum: i128 = 0;
+    for (action, value) in by_action {
+        let count = value.as_i64().ok_or_else(|| {
             err!(
                 "schema-type-mismatch",
                 "counts.by-action values must be integers"
             )
         })?;
+        // A count of calls that happened cannot be negative, and without saying so the sum is
+        // satisfiable by cancellation rather than by being true.
+        if count < 0 {
+            return Err(err!(
+                AGGREGATE_COUNT_NEGATIVE,
+                "counts.by-action[{action}] is {count}"
+            ));
+        }
+        sum += i128::from(count);
     }
-    if sum != total {
+    if sum != i128::from(total) {
         return Err(err!(
             "aggregate-count-mismatch",
             "total {total} != sum {sum}"
@@ -570,11 +624,39 @@ pub fn is_timestamp(s: &str) -> bool {
         return false;
     }
     let num = |range: std::ops::Range<usize>| s[range].parse::<u32>().unwrap_or(u32::MAX);
-    (1..=12).contains(&num(5..7))
-        && (1..=31).contains(&num(8..10))
+    let (year, month, day) = (num(0..4), num(5..7), num(8..10));
+    (1..=12).contains(&month)
+        && day >= 1
+        && day <= days_in_month(year, month)
         && num(11..13) <= 23
         && num(14..16) <= 59
         && num(17..19) <= 60
+}
+
+/// Days in a Gregorian month. `0` for a month outside `1..=12`, so an out-of-range month can never
+/// admit a day.
+///
+/// This is the deployment's single calendar. It lives here, in the crate everything else depends on,
+/// because there were two: this range-checked the day at `1..=31` and accepted `2026-02-31`, while
+/// `stozher_kernel::clock` rejected it — so whether a date existed depended on which validator a
+/// code path happened to reach. `gate.rs` reached for this one before comparing approval windows,
+/// and since the form is fixed-width, `"2026-02-31"` sorts after every real day in February: an
+/// approval bounded by a day that never arrives is an approval that does not expire.
+#[must_use]
+pub fn days_in_month(year: u32, month: u32) -> u32 {
+    match month {
+        1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
+        4 | 6 | 9 | 11 => 30,
+        2 if is_leap_year(year) => 29,
+        2 => 28,
+        _ => 0,
+    }
+}
+
+/// The Gregorian leap rule: every fourth year, except centuries, except every fourth century.
+#[must_use]
+pub fn is_leap_year(year: u32) -> bool {
+    year % 4 == 0 && (year % 100 != 0 || year % 400 == 0)
 }
 
 /// Every JSON number in a protocol object must be an integer in the binary64-exact range.

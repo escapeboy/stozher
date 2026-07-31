@@ -241,6 +241,7 @@ fn replay_vectors(report: &mut Report) -> BTreeSet<String> {
                 "authorization" => replay_authorization(report, &id, vector),
                 "chain" => replay_chain(report, &id, vector),
                 "payload-binding" => replay_payload(report, &id, vector),
+                "parity" => replay_parity(report, &id, vector),
                 unknown => panic!(
                     "{path}: unsupported vector kind {unknown:?}. Vectors are never skipped: \
                      implement support or remove the file."
@@ -405,6 +406,87 @@ fn replay_authorization(report: &mut Report, id: &str, vector: &Value) {
                 format!("accepted an authorization that must fail {expected}"),
             );
         }
+    }
+}
+
+/// Replay a cross-implementation parity vector.
+///
+/// It needs its own arm rather than reusing `replay_authorization`: a parity vector nests its input
+/// under `input`, and its `approvers` are objects carrying a nullable `subject` where the
+/// `authorization` kind has bare key strings. That difference is the point of the kind — §06 §5's
+/// self-approval rule is stated over the subject as well as the key, and a corpus that cannot name a
+/// subject cannot reach the branch where the two answers differ.
+fn replay_parity(report: &mut Report, id: &str, vector: &Value) {
+    let input = &vector["input"];
+    let expected = &vector["expected"];
+    let expected_error = expected["error"].as_str();
+
+    let outcome = match vector["algorithm"].as_str().expect("algorithm") {
+        "verify-authorization" => {
+            let approvers: Vec<gate::Approver> = input["approvers"]
+                .as_array()
+                .expect("approvers")
+                .iter()
+                .map(|entry| gate::Approver {
+                    key: KeyId::parse(entry["key"].as_str().expect("approvers[].key"))
+                        .expect("approver key id"),
+                    subject: entry
+                        .get("subject")
+                        .and_then(Value::as_str)
+                        .map(str::to_owned),
+                })
+                .collect();
+            let seen: std::collections::HashSet<String> = input["seen-request-hashes"]
+                .as_array()
+                .map(|list| {
+                    list.iter()
+                        .filter_map(Value::as_str)
+                        .map(str::to_owned)
+                        .collect()
+                })
+                .unwrap_or_default();
+            gate::verify_authorization(
+                &input["envelope"],
+                input["requires-gate"].as_bool().expect("requires-gate"),
+                &approvers,
+                &seen,
+            )
+            .map(|_| ())
+            .map_err(|e| (e.code().to_owned(), e.seq()))
+        }
+        "verify-chain" => {
+            let envelopes: Vec<Value> = input["envelopes"].as_array().expect("envelopes").clone();
+            chain::verify_chain(
+                &envelopes,
+                input["stream"].as_str().expect("stream"),
+                input.get("expected-first-prev").and_then(Value::as_str),
+            )
+            .map(|_| ())
+            .map_err(|e| (e.code().to_owned(), e.seq()))
+        }
+        other => {
+            report.fail(id, format!("unsupported parity algorithm {other:?}"));
+            return;
+        }
+    };
+
+    report.check(
+        id,
+        "validity",
+        &outcome.is_ok(),
+        &expected["valid"].as_bool().expect("expected.valid"),
+    );
+    match (&outcome, expected_error) {
+        (Err((code, seq)), Some(want)) => {
+            report.check(id, "reason code", &code.as_str(), &want);
+            if let Some(at) = expected["failed-at-seq"].as_u64() {
+                report.check(id, "failed-at-seq", seq, &Some(at));
+            }
+            report.replayed(want);
+        }
+        (Err((code, _)), None) => report.fail(id, format!("refused a valid vector: {code}")),
+        (Ok(()), Some(want)) => report.fail(id, format!("accepted a vector that must fail {want}")),
+        (Ok(()), None) => {}
     }
 }
 

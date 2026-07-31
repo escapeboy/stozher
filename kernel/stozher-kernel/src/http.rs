@@ -716,12 +716,35 @@ async fn get_payload(
         return response;
     }
     match kernel.ingest.store().payload(&payload_hash).await {
-        Ok(Some((media_type, bytes))) => {
+        Ok(Some((_media_type, bytes))) => {
+            // The declared `media-type` is emitter-controlled and is deliberately *not* reflected
+            // here. Ingest allowlists it (`payload::ALLOWED_MEDIA_TYPES`), but this origin also
+            // serves the console, and `deploy/bin/stozher-console` proxies browser GETs to it with
+            // the kernel credential attached — so a payload the browser renders is script running
+            // as the console. A payload is bytes an auditor downloads; served as an opaque
+            // attachment it cannot become a document, including the payloads written before the
+            // allowlist existed. The declared type stays queryable on the envelope's `evidence`,
+            // where it describes the bytes without instructing a browser about them.
             let mut response = (StatusCode::OK, bytes).into_response();
-            if let Ok(value) = axum::http::HeaderValue::from_str(&media_type) {
-                response
-                    .headers_mut()
-                    .insert(axum::http::header::CONTENT_TYPE, value);
+            let headers = response.headers_mut();
+            headers.insert(
+                axum::http::header::CONTENT_TYPE,
+                axum::http::HeaderValue::from_static("application/octet-stream"),
+            );
+            headers.insert(
+                "x-content-type-options",
+                axum::http::HeaderValue::from_static("nosniff"),
+            );
+            // The filename is checked to be 64 lowercase hex rather than assumed to be: it comes
+            // from the request path, and a quote in it would end the quoted-string early. A hash
+            // that reached a stored row is hex in practice, but "in practice" is not a check.
+            let disposition = if stozher_core::crypto::is_digest_hex(&payload_hash) {
+                format!("attachment; filename=\"{payload_hash}.bin\"")
+            } else {
+                "attachment".to_owned()
+            };
+            if let Ok(value) = axum::http::HeaderValue::from_str(&disposition) {
+                headers.insert(axum::http::header::CONTENT_DISPOSITION, value);
             }
             response
         }

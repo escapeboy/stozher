@@ -8,9 +8,18 @@
 # detectable; a restore path that did not run the check would be handing back an audit trail whose
 # only claim to integrity is that a tar file extracted without error.
 #
-# Existing state is never overwritten in place. The current store, config and secrets are moved
-# aside with a timestamp first, so a restore that turns out to have been the wrong archive is
-# itself reversible.
+# **And a failed verification is undone, not merely reported.** The check necessarily runs after the
+# archive is installed and the kernel is up — that is the only way to ask the kernel about the
+# store. Exiting non-zero at that point and stopping would leave the deployment *running*, serving
+# the very chain that was just shown not to verify, with the good store renamed out from under it.
+# For a product whose claim is provable auditability that is the wrong thing to leave behind, so a
+# failed verification brings the deployment down, moves the rejected material aside under
+# `.rejected-<utc>`, and puts the previous state back under its own names.
+#
+# Existing state is never overwritten in place, and nothing is ever deleted. The current store,
+# config and secrets are moved aside with a timestamp first, so a restore that turns out to have
+# been the wrong archive is itself reversible — see "Undoing a restore by hand" in README.md §4 for
+# the procedure when you are not running this script.
 #
 # Usage: bin/stozher-restore <archive.tar.gz> [--force]
 
@@ -57,10 +66,15 @@ docker compose down --remove-orphans >/dev/null 2>&1 || true
 
 STAMP="$(date -u +%Y%m%dT%H%M%SZ)"
 # Never `rm`. A restore pointed at the wrong archive is a mistake an operator must be able to walk
-# back out of, so the previous state is renamed rather than replaced.
+# back out of, so the previous state is renamed rather than replaced. Both lists are what makes that
+# walk-back automatic when the chain fails to verify: MOVED is what has a `.superseded-` twin to put
+# back, INSTALLED is what this run wrote and must therefore take away again.
+MOVED=""
+INSTALLED=""
 aside() {
   if [ -e "$1" ]; then
     mv "$1" "${1}.superseded-${STAMP}"
+    MOVED="${MOVED} $1"
     echo "  moved $1 aside"
   fi
 }
@@ -75,12 +89,36 @@ if [ -d "$STAGE/secrets" ]; then aside secrets; fi
 echo "== restoring"
 mkdir -p var var/gateway var/notes config
 cp -p "$STAGE/store/stozher.db" var/stozher.db
-if [ -f "$STAGE/store/gateway.db" ]; then cp -p "$STAGE/store/gateway.db" var/gateway/gateway.db; fi
+INSTALLED="${INSTALLED} var/stozher.db"
+if [ -f "$STAGE/store/gateway.db" ]; then
+  cp -p "$STAGE/store/gateway.db" var/gateway/gateway.db
+  INSTALLED="${INSTALLED} var/gateway/gateway.db"
+fi
 cp -p "$STAGE/config/kernel-config.json" config/
-if [ -f "$STAGE/config/stozher-gateway.toml" ]; then cp -p "$STAGE/config/stozher-gateway.toml" config/; fi
-if [ -f "$STAGE/config/env" ]; then cp -p "$STAGE/config/env" .env; chmod 600 .env; fi
+INSTALLED="${INSTALLED} config/kernel-config.json"
+if [ -f "$STAGE/config/stozher-gateway.toml" ]; then
+  cp -p "$STAGE/config/stozher-gateway.toml" config/
+  INSTALLED="${INSTALLED} config/stozher-gateway.toml"
+fi
+if [ -f "$STAGE/config/env" ]; then
+  # `COMPOSE_PROJECT_NAME` names *this* install — which containers this directory manages — and not
+  # the one the archive happened to be taken from. Taking the archive's would move this deployment
+  # into another install's project namespace mid-restore, and every `docker compose` call after this
+  # line, the rollback's `down` included, would then be addressing the wrong containers.
+  LOCAL_PROJECT="$(grep -E '^[[:space:]]*COMPOSE_PROJECT_NAME=' .env 2>/dev/null | tail -n 1 || true)"
+  if [ -f .env ]; then cp -p .env ".env.superseded-${STAMP}"; MOVED="${MOVED} .env"; fi
+  cp -p "$STAGE/config/env" .env
+  if [ -n "$LOCAL_PROJECT" ]; then
+    { grep -vE '^[[:space:]]*COMPOSE_PROJECT_NAME=' .env || true; printf '%s\n' "$LOCAL_PROJECT"; } > .env.next
+    mv .env.next .env
+    echo "  kept this install's ${LOCAL_PROJECT} rather than the archive's"
+  fi
+  chmod 600 .env
+  INSTALLED="${INSTALLED} .env"
+fi
 if [ -d "$STAGE/secrets" ]; then
   cp -R "$STAGE/secrets" secrets
+  INSTALLED="${INSTALLED} secrets"
   # The archive preserved the modes; assert them rather than trust them. The kernel refuses to
   # start on a seed anyone but its owner can read (§09 §8), and discovering that at `up` is a
   # worse place to discover it than here.
@@ -88,24 +126,80 @@ if [ -d "$STAGE/secrets" ]; then
   find secrets -name '*.seed' -exec chmod 600 {} +
 fi
 
+# The inverse of everything above, run when the chain does not verify.
+roll_back() {
+  echo
+  echo "== rolling back"
+  # `down` first, and before `.env` goes back: compose interpolates the whole file on every
+  # invocation and `user:` has no default, so the file that is on disk has to still be a complete
+  # one when this runs.
+  docker compose down --remove-orphans >/dev/null 2>&1 || true
+  local path
+  for path in $INSTALLED; do
+    if [ -e "$path" ]; then
+      mv "$path" "${path}.rejected-${STAMP}"
+      echo "  the restored $path is now ${path}.rejected-${STAMP}"
+    fi
+  done
+  for path in $MOVED; do
+    if [ -e "${path}.superseded-${STAMP}" ]; then
+      mv "${path}.superseded-${STAMP}" "$path"
+      echo "  put $path back"
+    fi
+  done
+}
+
 echo "== starting the kernel"
-docker compose up -d kernel
+# Every failure from here on rolls back, this one included: an archive whose configuration is
+# missing or malformed fails at `up`, and `set -e` would otherwise walk out leaving the archive's
+# material installed and the previous state renamed away under it.
+if ! docker compose up -d kernel; then
+  echo "the restored state did not come up" >&2
+  roll_back
+  exit 1
+fi
 set -a; . ./.env; set +a
 # Asked of docker, not assumed from the project name: `COMPOSE_PROJECT_NAME` exists precisely so
 # that two installs on one host get separate networks, and a hardcoded one would await the health
 # of the other install's kernel.
 CONTAINER="$(docker compose ps -q kernel)"
-[ -n "$CONTAINER" ] || { echo "the kernel container did not start" >&2; exit 1; }
+if [ -z "$CONTAINER" ]; then
+  echo "the kernel container did not start on the restored state" >&2
+  roll_back
+  exit 1
+fi
 NETWORK="$(docker inspect -f '{{range $name, $_ := .NetworkSettings.Networks}}{{$name}}{{end}}' "$CONTAINER")"
-docker run --rm -u "$(id -u):$(id -g)" --network "$NETWORK" stozher-kernel:0.1.0 \
-  await-health --url http://kernel:8787 --timeout 90
+if ! docker run --rm -u "$(id -u):$(id -g)" --network "$NETWORK" stozher-kernel:0.1.0 \
+     await-health --url http://kernel:8787 --timeout 90; then
+  echo "the kernel did not become healthy on the restored state" >&2
+  roll_back
+  exit 1
+fi
 
 echo
 echo "== verifying the restored chain"
 # This is the whole point of the script. `verify` walks every stream, recomputes each envelope's
 # hash, checks each `prev-hash` link and each signature, and checks the checkpoints that anchor
-# them. It exits non-zero on any failure, and `set -e` makes that this script's exit status.
-docker compose exec -T kernel stozher-kernel verify --config /etc/stozher/kernel-config.json
+# them. It exits non-zero on any failure — and a non-zero here is not a message to print on the way
+# out. The kernel is up at this moment, serving the store that just failed, so reporting and exiting
+# would leave running exactly the thing that was rejected. Undo it instead.
+if ! docker compose exec -T kernel stozher-kernel verify --config /etc/stozher/kernel-config.json; then
+  echo >&2
+  echo "The restored chain does NOT verify. This archive is not a usable audit trail," >&2
+  echo "and nothing from it is being left running." >&2
+  roll_back
+  cat >&2 <<ROLLED
+
+The deployment is down, and whatever was here before this run is back under its own names.
+The rejected material is kept rather than deleted, suffixed .rejected-${STAMP}, so the archive
+can be investigated instead of guessed at.
+
+Bring the previous deployment back up when you are ready:
+
+  docker compose up -d kernel
+ROLLED
+  exit 1
+fi
 
 echo
 echo "Restored from $ARCHIVE, and the chain verifies."

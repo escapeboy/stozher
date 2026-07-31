@@ -79,6 +79,26 @@ pub const STORE_UNAVAILABLE: &str = "x-store-unavailable";
 /// queue an approver has to read.
 pub const GATE_RATE_LIMITED: &str = "x-gate-rate-limited";
 
+/// §02 §7 — `sample-hashes` is bounded at 16 but `counts.by-action` is left unbounded, so one
+/// envelope is an unbounded amount of work for every consumer that iterates it. Defined in
+/// `stozher_core::envelope` because the check is structural; listed here so the register stays the
+/// single place the local codes can be read.
+pub use stozher_core::envelope::AGGREGATE_CARDINALITY;
+
+/// §02 §7 rule 3 constrains `counts.total` to the sum of `by-action` and says nothing about the
+/// sign, so the sum was satisfiable by cancellation. No code is given for a negative count.
+pub use stozher_core::envelope::AGGREGATE_COUNT_NEGATIVE;
+
+/// §04 §4 — a checkpoint whose attested range simply begins somewhere other than the range
+/// supplied to verify it against. §04 names codes for the count and the head, but not for this.
+/// Defined in `stozher_core::chain`; listed here so the register stays the one place to read them.
+pub use stozher_core::chain::CHECKPOINT_RANGE_MISMATCH;
+
+/// §02 §4 — "any other IANA media type" is the right rule for a format and the wrong one for
+/// something the kernel serves back over HTTP from the origin its console runs on. No code is given
+/// for a payload whose declared type the kernel will not serve. Defined in `stozher_core::payload`.
+pub use stozher_core::payload::MEDIA_TYPE_NOT_ALLOWED;
+
 /// The caller presented no credential, or one that does not resolve (§05 §2.2, §10 §1.1).
 ///
 /// Also not a rejection: there is no authenticated subject to attribute one to.
@@ -86,8 +106,12 @@ pub const CALLER_UNAUTHENTICATED: &str = "x-caller-unauthenticated";
 
 /// The complete register. A test asserts on this so the list cannot grow without the growth being
 /// a visible, reviewed diff.
-pub const REGISTER: [&str; 11] = [
+pub const REGISTER: [&str; 15] = [
     GATE_RATE_LIMITED,
+    AGGREGATE_COUNT_NEGATIVE,
+    MEDIA_TYPE_NOT_ALLOWED,
+    CHECKPOINT_RANGE_MISMATCH,
+    AGGREGATE_CARDINALITY,
     POLICY_OFFLINE_ALLOWS_GATED,
     POLICY_CHANGE_TARGET_MISMATCH,
     POLICY_CHANGE_DOCUMENT_UNBOUND,

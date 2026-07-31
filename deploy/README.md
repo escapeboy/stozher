@@ -77,6 +77,40 @@ worth knowing which:
    session with no resolvable mandate and §03 §1 forbids the gateway from granting itself one.
 8. **Verifies the chain.**
 
+### Start with the ceremony, not with `docker compose up`
+
+`bin/stozher-bootstrap` is the install. There is no shorter path that ends anywhere useful, because
+every file the two services mount — the store, the seeds, both configuration files — is written by
+the ceremony and by nothing else. Running `docker compose up` first therefore stops with
+
+```
+Error response from daemon: invalid mount config for type "bind":
+bind source path does not exist: .../deploy/var
+```
+
+That message is the intended outcome and it costs you nothing: every bind mount here declares
+`create_host_path: false`, so docker refuses rather than inventing the missing paths. Left to its
+default it would *create* them, and for a file-shaped mount it creates a **directory** — which is
+how `config/kernel-config.json` used to end up as a directory, the kernel logged
+`config-unreadable: Is a directory (os error 21)`, and `restart: unless-stopped` looped on it. Run
+the ceremony and the message goes away.
+
+### Two installs on one host
+
+Set `COMPOSE_PROJECT_NAME` in `deploy/.env` **before** running the ceremony, one value per checkout:
+
+```sh
+cd deploy
+printf 'COMPOSE_PROJECT_NAME=stozher-staging\n' > .env
+./bin/stozher-bootstrap --root human:ivan --port 8801
+```
+
+The ceremony rewrites `.env` — every credential in it is generated, so it has to — but it reads your
+keys back out first and re-emits them, `COMPOSE_PROJECT_NAME` among them. Compose then namespaces
+the containers, the network and the volumes of each install separately, and neither service pins a
+`container_name`, so nothing else has to change. Give each install its own `--port` as well: both
+publish on `127.0.0.1`, and two of them cannot have the same one.
+
 ### What the ceremony actually is
 
 Genesis is **two fully-validated envelopes**, not a bypass (ADR-0006 §2):
@@ -266,15 +300,123 @@ rather than a formality: it runs `stozher-kernel verify` over every stream and e
 of them fails. Nothing is deleted — the previous store, config and secrets are renamed
 `.superseded-<utc>` first, so a restore from the wrong archive is itself reversible.
 
+**A failed verification is undone, not just reported.** The check can only run after the archive is
+installed and the kernel is up — that is the only way to ask the kernel about a store — so a script
+that stopped at the refusal would leave the deployment *running*, serving the chain it had just
+rejected, with the good store renamed out from under it. Instead the deployment comes down, the
+material from the archive is renamed `.rejected-<utc>`, and the previous state goes back under its
+own names. You get an exit status of 1, a kernel that is not running, and this:
+
+```
+== rolling back
+  the restored var/stozher.db is now var/stozher.db.rejected-20260731T062559Z
+  ...
+  put var/stozher.db back
+  put config/kernel-config.json back
+```
+
+Nothing is deleted on that path either. An archive that fails to verify is an archive worth keeping.
+
 Verify any time, without a restore:
 
 ```sh
 docker compose exec -T kernel stozher-kernel verify --config /etc/stozher/kernel-config.json
 ```
 
+### Undoing a restore by hand
+
+`bin/stozher-restore` rolls itself back when the chain fails to verify. The case this section is for
+is the other one: the archive verified, the restore succeeded, and it was the *wrong archive* — so
+you want the `.superseded-<utc>` state back, and no script is going to do it for you.
+
+**Move all three SQLite files, together.** This is the whole warning. The store is `stozher.db`
+plus `stozher.db-wal` plus `stozher.db-shm`, and in a running deployment almost everything is in the
+write-ahead log — a live store here measured 4096 bytes with 997 KB sitting in its `-wal`. Move back
+only the file with the obvious name and SQLite opens a database with no content in it. It does not
+error. `verify` reports:
+
+```
+all 0 streams verify
+```
+
+and exits **zero**. An empty audit trail that says it is valid is worse than one that says it is
+broken, and at that point the `-wal` you needed has been superseded by a fresh one.
+
+So, with the deployment stopped and `<utc>` the stamp the restore printed:
+
+```sh
+docker compose down
+for f in var/stozher.db var/stozher.db-wal var/stozher.db-shm var/gateway/gateway.db \
+         config/kernel-config.json config/stozher-gateway.toml secrets .env; do
+    [ -e "$f.superseded-<utc>" ] && mv "$f.superseded-<utc>" "$f"
+done
+docker compose up -d kernel
+docker compose exec -T kernel stozher-kernel verify --config /etc/stozher/kernel-config.json
+```
+
+Read the last line before believing the rest. A **stream count** that matches what this deployment
+had is as much a part of the check as the word `verify` — `all 0 streams verify` means you moved
+back a header and left the data behind, not that you succeeded.
+
 ---
 
-## 5. Security posture — what is and is not protected
+## 5. Retention — and the one thing this install does not do for you
+
+The root README sells "closed loops decay to signed hashes" as a property of the system. It is
+implemented, it is authenticated, and it works:
+
+```sh
+# from deploy/, with the kernel up
+set -a; . ./.env; set +a
+curl -s -X POST -H "Authorization: Bearer $STOZHER_KERNEL_TOKEN" \
+     "http://127.0.0.1:${STOZHER_KERNEL_PORT}/v1/maintenance/decay"
+# -> {"at":"...","decayed-hashes":[],"payloads-deleted":0,"streams-checkpointed":[]}
+```
+
+**Nothing calls it.** Not compose, not a timer in the kernel, not a cron entry this install writes.
+Until that changes it is an operator duty, and it is stated here rather than left to be discovered:
+a deployment nobody schedules decay on keeps every payload for ever, and the property the pitch
+claims is one you are providing, not one you are receiving.
+
+Schedule it however you already schedule things. A two-line script beside the deployment, and one
+cron entry — a wrapper rather than an inline command because crontab has no line continuation, and
+because `$` in a crontab is the shell's only after cron has finished with the line:
+
+```sh
+cat > bin/stozher-decay <<'SH'
+#!/usr/bin/env sh
+# Reads deploy/.env for the credential rather than keeping a second copy of it.
+set -eu
+cd "$(dirname "$0")/.."
+set -a; . ./.env; set +a
+exec curl -fsS -X POST -H "Authorization: Bearer $STOZHER_KERNEL_TOKEN" \
+     "http://127.0.0.1:${STOZHER_KERNEL_PORT}/v1/maintenance/decay"
+SH
+chmod 700 bin/stozher-decay
+```
+
+```cron
+# Nightly at 04:17, as the operator whose uid the deployment was installed with.
+17 4 * * * /path/to/stozher/deploy/bin/stozher-decay >/dev/null
+```
+
+`curl -f` matters: without it curl exits zero on a `401`, and a retention job that has silently
+stopped authenticating is the failure you would least like to be quiet. `set -e` in the wrapper
+means cron gets a non-zero status and mails you, which is the point of running it under cron at all.
+
+**This is an interim measure and should be read as one.** The right owner of that schedule is the
+kernel: it already owns a periodic interval for checkpoints, decay checkpoints streams as part of
+its own work, and the endpoint takes the kernel's own bearer credential — so every external
+scheduler is a second place on the host where that credential has to live, for nothing gained.
+A third compose service to hold a cron daemon is not available either; ADR-0003 fixes the count at
+two, deliberately. A property the product advertises should not depend on a crontab line, and the
+recommendation from this side of the repository is a kernel-owned timer with the interval in
+`kernel-config.json`, next to the checkpoint interval that is already there. Until it exists, the
+cron entry above is the whole of the mechanism.
+
+---
+
+## 6. Security posture — what is and is not protected
 
 ### Protected
 
@@ -323,7 +465,7 @@ docker compose exec -T kernel stozher-kernel verify --config /etc/stozher/kernel
 
 ---
 
-## 6. The gate
+## 7. The gate
 
 ```sh
 ./gate/clean-install.sh
@@ -335,9 +477,15 @@ thirty minutes. It runs the path documented above, using the same scripts, and t
 drives is a hundred lines of standard library so that it exercises the **exact** command this page
 tells you to paste.
 
+**It wipes the directory it runs in.** `var/`, `secrets/`, `genesis/`, both configuration files and
+`.env` — that list is exhaustive, and it is the same list the script's own header gives. `backups/`
+is deliberately not on it: nothing in there can affect the measured install, and a wipe that reaches
+past what it is measuring is not a cleaner wipe. Everything else in that list is gone, though, so if
+this directory is also a real deployment, take a backup and put it somewhere else first.
+
 ---
 
-## 7. Files
+## 8. Files
 
 ```
 deploy/

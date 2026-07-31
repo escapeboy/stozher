@@ -81,12 +81,50 @@ fi
 case "$ROOT_SUBJECT" in human:?*) ;; *) echo "--root must be of the form human:<name>" >&2; exit 2 ;; esac
 command -v docker >/dev/null || { echo "docker is required" >&2; exit 2; }
 
-if [ -e config/kernel-config.json ] && [ "$FORCE" != "yes" ]; then
+# Debris is not a deployment. Docker's default for a missing bind source is to *create* it, and for
+# a file-shaped mount it creates a directory — so a `docker compose up` run before this ceremony
+# used to leave a directory at exactly the path below. A guard keyed on mere existence then told an
+# operator who had never bootstrapped anything that they had, and threatened an audit trail that did
+# not exist: a confident wrong answer, which is the one thing this system is not supposed to give.
+# The compose file now refuses that mount outright (`create_host_path: false`), but debris from an
+# older checkout or an interrupted run still has to be told apart from a real installation.
+#
+# This removes only what provably holds nothing — an empty directory, or a zero-byte file. Anything
+# with content in it is left exactly where it is, for a human to look at.
+clear_debris() {
+  if [ -d "$1" ] && [ -z "$(ls -A "$1" 2>/dev/null)" ]; then
+    rmdir "$1"
+    echo "note: removed $1 — an empty *directory*, not a file."
+    echo "      docker creates one when 'docker compose up' runs before this ceremony has written it."
+  elif [ -f "$1" ] && [ ! -s "$1" ]; then
+    rm -f "$1"
+    echo "note: removed $1 — zero bytes, so a previous run did not finish writing it."
+  fi
+}
+clear_debris config/kernel-config.json
+clear_debris config/stozher-gateway.toml
+
+if [ "$FORCE" != "yes" ]; then
   # Re-running a ceremony over a live deployment would generate new keys for a store whose chain is
   # signed by the old ones. Refuse rather than produce a kernel that cannot verify its own history.
-  echo "config/kernel-config.json exists — this deployment is already bootstrapped." >&2
-  echo "To start over, remove ./var, ./secrets and ./config first (that discards the audit trail)." >&2
-  exit 2
+  # "Already bootstrapped" is therefore a real configuration file with real content in it, and — for
+  # the case where the configuration was removed but the store was not — a store that still exists.
+  if [ -f config/kernel-config.json ] && [ -s config/kernel-config.json ]; then
+    echo "config/kernel-config.json holds a configuration — this deployment is already bootstrapped." >&2
+    echo "To start over, remove ./var, ./secrets and ./config first (that discards the audit trail)." >&2
+    exit 2
+  elif [ -e config/kernel-config.json ]; then
+    echo "config/kernel-config.json exists but is not a configuration file, and is not empty." >&2
+    echo "bin/stozher-bootstrap did not write it. Look at it and move it aside before running this." >&2
+    exit 2
+  elif [ -f var/stozher.db ]; then
+    echo "var/stozher.db holds a store, but there is no configuration beside it." >&2
+    echo "That is a half-removed deployment rather than a fresh one, and bootstrapping over it would" >&2
+    echo "sign a new chain with new keys on top of an existing one. Restore it with" >&2
+    echo "bin/stozher-restore, or remove ./var, ./secrets and ./config to start over (that discards" >&2
+    echo "the audit trail)." >&2
+    exit 2
+  fi
 fi
 
 UID_GID="$(id -u):$(id -g)"
@@ -111,10 +149,39 @@ compose_network() {
   docker inspect -f '{{range $name, $_ := .NetworkSettings.Networks}}{{$name}}{{end}}' "$container"
 }
 
+# `.env` is written twice below, and both writes truncate. Every credential in it is this script's
+# to generate — but some of its keys are the operator's, and truncating theirs away broke the one
+# thing they are documented to be for. `COMPOSE_PROJECT_NAME` is the case that matters:
+# `.env.example` and the compose file both tell an operator to set it here to run two installs on
+# one host, and this script then deleted it *during the install that needed it*. The second install
+# landed in the default `stozher` project, compose recreated the first install's container against
+# the second's mounts, and each install's `docker compose ps` went on reporting a healthy kernel
+# that was in fact serving the other one's store and the other one's keys — with `bin/stozher-backup`
+# snapshotting whichever one won. So the operator's keys are read back out first, and re-emitted
+# verbatim into both writes.
+PRESERVED_KEYS="COMPOSE_PROJECT_NAME STOZHER_SLACK_WEBHOOK STOZHER_WEBHOOK_URL STOZHER_WEBHOOK_TOKEN STOZHER_SMTP_PASSWORD"
+operator_env() {
+  [ -f .env ] || return 0
+  local key line
+  for key in $PRESERVED_KEYS; do
+    line="$(grep -E "^[[:space:]]*${key}=" .env | tail -n 1 || true)"
+    if [ -n "$line" ]; then printf '%s\n' "$line"; fi
+  done
+  return 0
+}
+PRESERVED="$(operator_env)"
+PROJECT="$(printf '%s\n' "$PRESERVED" | sed -n 's/^[[:space:]]*COMPOSE_PROJECT_NAME=//p')"
+if [ -n "$PROJECT" ]; then
+  echo "keeping COMPOSE_PROJECT_NAME=${PROJECT} from the existing .env — this install stays namespaced"
+fi
+
 # `.env` first, and with the uid in it before anything else runs: compose interpolates the whole
 # file on every invocation, so `user:` has to resolve even for a plain `build`.
 umask 077
-printf 'STOZHER_UID=%s\nSTOZHER_GID=%s\nSTOZHER_KERNEL_PORT=%s\n' "$(id -u)" "$(id -g)" "$PORT" > .env
+{
+  printf 'STOZHER_UID=%s\nSTOZHER_GID=%s\nSTOZHER_KERNEL_PORT=%s\n' "$(id -u)" "$(id -g)" "$PORT"
+  if [ -n "$PRESERVED" ]; then printf '%s\n' "$PRESERVED"; fi
+} > .env
 chmod 600 .env
 umask 022
 
@@ -158,7 +225,8 @@ CALLER_TOKEN_SHA="$(printf '%s\n' "$caller_credential" | awk '$1=="token-sha256"
 
 say "4/8  writing .env"
 umask 077
-cat > .env <<ENV
+{
+cat <<ENV
 # Written by bin/stozher-bootstrap. Mode 0600, git-ignored, and the only file here holding secrets.
 STOZHER_UID=$(id -u)
 STOZHER_GID=$(id -g)
@@ -169,6 +237,13 @@ STOZHER_KERNEL_TOKEN=${KERNEL_TOKEN}
 # The MCP client presents this to the gateway. Same rule, one layer out.
 STOZHER_GATEWAY_CALLER_TOKEN=${CALLER_TOKEN}
 ENV
+if [ -n "$PRESERVED" ]; then
+  echo
+  echo "# Carried over verbatim from the .env that was here before this ceremony ran. These keys are"
+  echo "# the operator's, not this script's, and rewriting the file must not silently drop them."
+  printf '%s\n' "$PRESERVED"
+fi
+} > .env
 chmod 600 .env
 umask 022
 echo "wrote .env (mode 0600)"

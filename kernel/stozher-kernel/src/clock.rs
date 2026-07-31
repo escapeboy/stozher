@@ -27,6 +27,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicI64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use stozher_core::envelope;
 use stozher_core::error::{Error, Result};
 
 /// A source of the current instant.
@@ -278,18 +279,17 @@ fn civil_from_days(days: i64) -> (i64, i64, i64) {
     (year + i64::from(month <= 2), month, day)
 }
 
-fn is_leap_year(year: i64) -> bool {
-    (year % 4 == 0 && year % 100 != 0) || year % 400 == 0
-}
-
+/// Delegates to `stozher_core::envelope`, which is where the deployment's one calendar lives.
+///
+/// There used to be two — this one and `envelope::is_timestamp`'s `1..=31` range check — and they
+/// disagreed about whether `2026-02-31` exists. Two calendars in one binary is a bug waiting for
+/// the code path that reaches the wrong one, so this is a forwarder rather than a second opinion.
+/// Years outside `u32` are outside the representable range anyway and admit no day.
 fn days_in_month(year: i64, month: i64) -> i64 {
-    match month {
-        1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
-        4 | 6 | 9 | 11 => 30,
-        2 if is_leap_year(year) => 29,
-        2 => 28,
-        _ => 0,
-    }
+    let (Ok(year), Ok(month)) = (u32::try_from(year), u32::try_from(month)) else {
+        return 0;
+    };
+    i64::from(envelope::days_in_month(year, month))
 }
 
 #[cfg(test)]

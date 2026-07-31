@@ -97,10 +97,77 @@ the subject under test.
 | `mandate-chain` | file-level `roots`, `mandates`; per-vector `leaf-ref`, `subject-key`, `request`, `at`, `max-delegation-depth`, `revocations[]`, `expected.{valid,error,human-root,root-key,depth}` | run the §03 §5 algorithm |
 | `authorization` | `envelope`, `requires-gate`, `approvers[]`, `seen-request-hashes[]`, `expected.{valid,error}` | run the §06 §2 algorithm |
 | `payload-binding` | `ingest.{envelope,payloads[]}`, optional `chain[]`, `expected.{valid,error,envelope-hash,decayed,chain-head-hash,chain-valid}` | verify payload hashes and reference; an empty `payloads` array is always valid |
+| `parity` | `spec`, `algorithm`, `input`, `expected`, `divergence` | dispatch on `algorithm` (§3.1) and run the named algorithm — the same one an existing kind already exercises, on an input that reaches a branch the existing kind does not |
 
 `expected.error` is `null` on success vectors and otherwise a **normative error code** from the spec
 (§00 §1). Implementations MUST report exactly that code — the codes are part of the wire contract,
 because a gateway in Python and a kernel in Rust have to agree on what they are refusing.
+
+### 3.1 The `parity` kind
+
+`parity.json` exists because a green corpus is not the same claim as two agreeing implementations.
+Every vector in it reaches a branch on which the Rust kernel and the Python gateway were **observed**
+to disagree while both passed all 161 vectors that preceded it. A vector is admitted to this file
+only when the difference was read out of both sources; none is hypothetical.
+
+It is a separate kind rather than more `authorization` and `chain` vectors for one substantive
+reason: **the input shape is different.** `parity`'s `approvers` entries are objects
+(`{"key": "ed25519:…", "subject": "human:ivan" | null}`), not the bare key strings the
+`authorization` kind uses. §06 §5 states self-approval over the subject *as well as* the key, and a
+verifier handed only keys cannot evaluate the second MUST at all — so the shape is the test. Filing
+these under `authorization` would have meant changing that kind's contract for every existing vector,
+and a harness would have silently read the new objects as unmatchable key strings instead of failing.
+A new kind fails loudly (§1) until support is written, which is the correct outcome for a corpus that
+has grown a genuinely new requirement.
+
+Per vector:
+
+| Member | Meaning |
+|---|---|
+| `spec` | the section adjudicating this vector, e.g. `"06 §5"` — every parity vector cites one |
+| `algorithm` | `"verify-authorization"` or `"verify-chain"` — the dispatch key |
+| `input` | the algorithm's arguments (below) |
+| `expected` | `valid`, `error`, and the algorithm's success values |
+| `divergence` | prose: what each implementation did before the vector existed. **Documentation. A harness MUST NOT assert on it** |
+
+`algorithm: "verify-authorization"` — the §06 §2 algorithm:
+
+```json
+"input": {
+  "envelope": { … },
+  "requires-gate": true,
+  "approvers": [ { "key": "ed25519:<64 hex>", "subject": "human:ivan" } ],
+  "seen-request-hashes": [ "<64 hex>", … ]
+}
+"expected": { "valid": true, "error": null,
+              "request-hash": "<64 hex>", "decided-by": "ed25519:…", "single-use": true }
+```
+
+`subject` is nullable: a deployment may permit a key without being able to name the human behind it.
+When it is `null` the subject MUST is unevaluable, and the verdict rests on the key comparison
+(step 4) and on the key being explicitly permitted (step 5). A verifier MUST NOT infer a subject it
+was not given. `request-hash`, `decided-by` and `single-use` appear only on success vectors.
+
+`algorithm: "verify-chain"` — the §04 §2.1 algorithm:
+
+```json
+"input": { "stream": "gw:ivan-mbp:0001", "envelopes": [ … ], "expected-first-prev": null }
+"expected": { "valid": false, "error": "chain-seq-duplicate", "failed-at-seq": 1 }
+```
+
+Success vectors additionally carry `head-hash`, `count` and `anchored`, exactly as the `chain` kind
+does. `expected-first-prev` is the anchor of §04 §2.1 and is `null` for a range starting at `seq` 0.
+
+Two properties of this file are load-bearing and worth stating separately:
+
+1. **Half of these vectors currently fail somewhere.** That is what they are for. A parity vector
+   that passes everywhere on the day it lands is a control (each divergence here ships with one), not
+   a finding.
+2. **The expected value is the specification's answer, not the incumbent's.** Where the two
+   implementations disagreed, the vector encodes what §01–§06 mandate — which for
+   `unsigned-object-must-not-probe-the-schema` means the *gateway* was right and the reference
+   kernel was wrong. A parity corpus that defers to the reference implementation would only be
+   testing that the other one has been made to match it.
 
 ## 4. What the vectors deliberately cover
 
@@ -174,9 +241,14 @@ the crypto layer would otherwise be baked into every downstream suite.
 Regenerate with:
 
 ```
-python3 spec/vectors/generate_vectors.py     # requires PyNaCl
+uv run --with pynacl python3 spec/vectors/generate_vectors.py
 cd kernel && cargo test                      # must stay green
 ```
+
+PyNaCl is the generator's only dependency and is deliberately **not** a dependency of any component:
+`gateway/.venv` does not carry it, and nothing in `pyproject.toml` should acquire it. A throwaway
+environment (`uv run --with pynacl`, or a venv outside the repo) is the intended way to run this —
+the generator is a spec artefact, not part of any build.
 
 Regeneration is deterministic: fixed seeds, fixed timestamps, no randomness, no clock reads. A
 regeneration that changes a byte means either the spec changed or something is wrong; the diff is the

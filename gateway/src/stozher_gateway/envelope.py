@@ -17,7 +17,7 @@ import datetime as dt
 import re
 from typing import Any
 
-__all__ = ["CLASSES", "EnvelopeError", "validate"]
+__all__ = ["CLASSES", "EnvelopeError", "is_timestamp", "validate"]
 
 CLASSES = ("read", "benign", "consequential", "prohibited")
 _OUTCOMES = ("applied", "failed", "denied", "blocked", "attempted")
@@ -260,10 +260,22 @@ def _hash(value: Any, name: str) -> None:
         raise EnvelopeError("encoding-not-lowercase-hex", f"{name} must be 64 lowercase hex")
 
 
-def _timestamp(value: Any, name: str) -> None:
+def is_timestamp(value: Any) -> bool:
+    """Whether `value` is §01 §2.3's fixed 24-byte form, and denotes a real instant.
+
+    Public because the gate's step (8) and (9) comparisons need it: those compare timestamps as
+    strings, which is exact for this form and meaningless for anything else, and nothing upstream
+    validates the members of `authorization` (§06 §2, `gate.py`).
+    """
     if not isinstance(value, str) or not _TIMESTAMP.match(value):
-        raise EnvelopeError("encoding-bad-timestamp", f"{name} = {value!r}")
+        return False
     try:
         dt.datetime.strptime(value, "%Y-%m-%dT%H:%M:%S.%fZ")
-    except ValueError as e:
-        raise EnvelopeError("encoding-bad-timestamp", f"{name} = {value!r}") from e
+    except ValueError:
+        return False
+    return True
+
+
+def _timestamp(value: Any, name: str) -> None:
+    if not is_timestamp(value):
+        raise EnvelopeError("encoding-bad-timestamp", f"{name} = {value!r}")

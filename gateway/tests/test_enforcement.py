@@ -196,6 +196,93 @@ def test_an_approval_signed_by_a_stranger_permits_nothing(harness: Harness) -> N
     assert harness.forwarded == []
 
 
+def _with_gate_rule(harness: Harness, approvers: list[str]) -> None:
+    """Republish the harness policy with `consequential` gated to exactly `approvers`."""
+    document = baseline_policy("2026.07.2", clock_module.now(), ROOT.subject)
+    document["gate-rules"] = [
+        {"classes": ["prohibited"], "decision": "deny"},
+        {"classes": ["consequential"], "decision": "gate", "approvers": approvers},
+        {"classes": ["read", "benign"], "decision": "allow"},
+    ]
+    harness.policy = Policy.verified(POLICY_KEY.sign(document), POLICY_KEY.id)
+
+
+def test_an_approver_the_gateway_cannot_resolve_refuses_rather_than_widening(
+    harness: Harness,
+) -> None:
+    """§06 §5's second kind of approver is a human holding a mandate, and §06 §6 rules the rest.
+
+    The gateway resolves approvers against enrolled roots only — it holds its own caller's mandate
+    and has no way to learn who else holds one. Falling back to "any root" would accept a root's
+    signature, forward the call, and leave the kernel to refuse the envelope
+    `gate-approver-not-permitted` once the effect had already happened.
+    """
+    _with_gate_rule(harness, ["human:security-officer"])
+    with pytest.raises(RefusalError) as refused:
+        harness.call("create_issue", title="ship it")
+    document = refused.value.document
+    assert document["result"] == "blocked"
+    assert document["reason-code"] == "gate-approver-unresolvable"
+    assert harness.forwarded == []
+    assert harness.store.pending() == [], "an unenforceable rule must not park a request"
+    blocked = [e for e in harness.chain() if e["execution"]["outcome"] == "blocked"]
+    assert len(blocked) == 1, "the attempt must still reach the audit"
+    assert document["envelope-id"] is not None, "the refusal must name the record it wrote"
+
+
+def test_a_rule_that_names_nobody_still_admits_every_enrolled_root(harness: Harness) -> None:
+    """The control for the test above: an *empty* approver set is first-call gating (§10 §4).
+
+    No rule named anyone, so every enrolled root may approve, and the call parks as usual. Refusing
+    this too would have fixed the widening by breaking the gate.
+    """
+    _with_gate_rule(harness, [])
+    with pytest.raises(RefusalError) as refused:
+        harness.call("create_issue", title="ship it")
+    assert refused.value.document["result"] == "parked"
+    assert len(harness.store.pending()) == 1
+    # And a root's signature over that park is honoured, which is what "every root" has to mean.
+    _park_and_decide(harness, "create_issue", {"title": "ship it"}, approver=ROOT)
+    assert "upstream result" in harness.call("create_issue", title="ship it")
+
+
+# -- arguments that have no canonical form (§01 §3.1, §06 §6) ------------------------------------
+
+
+def test_arguments_outside_binary64_are_refused_and_recorded(harness: Harness) -> None:
+    """`object_hash` on foreign input is the first thing done with a call's arguments.
+
+    It fails closed, so this was never a bypass — it was an *unrecorded* refusal: an uncaught
+    `OverflowError` reached the agent as an opaque MCP error and the attempt was absent from the
+    audit, which §06 §6 has no row for.
+    """
+    with pytest.raises(RefusalError) as refused:
+        harness.call("get_file_contents", n=10**400)
+    document = refused.value.document
+    assert document["result"] == "blocked"
+    assert document["reason-code"] == "jcs-non-finite-number"
+    assert harness.forwarded == []
+    blocked = [e for e in harness.chain() if e["execution"]["outcome"] == "blocked"]
+    assert len(blocked) == 1
+    assert blocked[0]["execution"]["action"] == "github.get_file_contents"
+
+
+def test_arguments_nested_past_the_canonicalizer_are_refused_and_recorded(
+    harness: Harness,
+) -> None:
+    """The other uncaught one: unbounded recursion in `_write` and `_reject_lone_surrogates`."""
+    deep: Any = {"leaf": 1}
+    for _ in range(2000):
+        deep = {"n": deep}
+    with pytest.raises(RefusalError) as refused:
+        harness.call("get_file_contents", deep=deep)
+    document = refused.value.document
+    assert document["result"] == "blocked"
+    assert document["reason-code"] == "jcs-malformed-json"
+    assert harness.forwarded == []
+    assert [e["execution"]["outcome"] for e in harness.chain()] == ["blocked"]
+
+
 def test_a_decision_whose_request_was_rewritten_permits_nothing(harness: Harness) -> None:
     """§06 §2 step (2): pairing a real signature with a rewritten request body."""
     request_hash = _park_and_decide(harness, "create_issue", {"title": "ship it"}, approver=ROOT)

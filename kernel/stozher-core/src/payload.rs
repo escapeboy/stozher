@@ -14,6 +14,40 @@ use crate::jcs;
 /// The JSON media type, for which the payload hash is `object-hash(payload)`.
 pub const JSON_MEDIA_TYPE: &str = "application/json";
 
+/// The media types an evidence payload may declare.
+///
+/// `spec/02 §4` allows "any other IANA media type", which is the right rule for a *format* and the
+/// wrong one for something the kernel serves back over HTTP from the origin its own console runs
+/// on. An evidence payload is bytes an auditor downloads; nothing in the audit story needs a
+/// payload the browser will parse as a document, and the types that get parsed as documents —
+/// `text/html`, `image/svg+xml`, the `+xml` family — are exactly the ones that turn a stored
+/// payload into script with the console's origin.
+///
+/// This is deliberately an allowlist and not a list of dangerous types: the set of things a browser
+/// will execute grows, and a denylist is only ever correct about the browsers that existed when it
+/// was written. Widening this list is a decision someone has to make on purpose.
+pub const ALLOWED_MEDIA_TYPES: [&str; 12] = [
+    JSON_MEDIA_TYPE,
+    "application/octet-stream",
+    "application/pdf",
+    "application/zip",
+    "application/gzip",
+    "text/plain",
+    "text/csv",
+    "text/markdown",
+    "image/png",
+    "image/jpeg",
+    "image/gif",
+    "image/webp",
+];
+
+/// A payload declares a media type outside [`ALLOWED_MEDIA_TYPES`].
+///
+/// Implementation-local, hence the `x-` prefix: §02 §4's "any other IANA media type" does not
+/// contemplate the kernel serving the payload back, so it names no refusal. Registered in
+/// `stozher_kernel::codes::REGISTER`; the wording of §02 §4 should be narrowed to match.
+pub const MEDIA_TYPE_NOT_ALLOWED: &str = "x-payload-media-type-not-allowed";
+
 /// Outcome of validating an ingest record.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct IngestOk {
@@ -56,6 +90,12 @@ pub fn verify_ingest(envelope: &Value, payloads: &[Value]) -> Result<IngestOk> {
             .get("media-type")
             .and_then(Value::as_str)
             .ok_or_else(|| err!("schema-missing-member", "payloads[].media-type"))?;
+        if !ALLOWED_MEDIA_TYPES.contains(&media_type) {
+            return Err(err!(
+                MEDIA_TYPE_NOT_ALLOWED,
+                "media-type {media_type:?} is not one an evidence payload may declare"
+            ));
+        }
         let body = payload
             .get("payload")
             .ok_or_else(|| err!("schema-missing-member", "payloads[].payload"))?;

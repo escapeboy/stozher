@@ -77,10 +77,22 @@ class BackgroundLoop:
 
         The bound is not optional: a sync tool blocks the MCP server's own loop while it waits, so an
         unbounded wait here stalls every concurrent call including Harbormaster's.
+
+        Timing out abandons the *wait*, not the work: without the cancel below the coroutine goes on
+        running, and in the default non-persistent mode it is holding an `AsyncExitStack` around a
+        freshly spawned `stdio_client` — so a downstream that accepts a call and never answers leaves
+        a task, a child process and its pipes behind on every call, accumulating for the life of the
+        connection.
         """
         self.start()
         future = asyncio.run_coroutine_threadsafe(coroutine, self.loop)
-        return future.result(timeout=timeout)
+        try:
+            return future.result(timeout=timeout)
+        except TimeoutError:
+            # The future is still pending, so this succeeds and propagates to the task, which
+            # unwinds the exit stack and reaps the child.
+            future.cancel()
+            raise
 
     def submit(self, coroutine: Coroutine[Any, Any, Any]) -> None:
         """Schedule `coroutine` and do not wait for it."""
