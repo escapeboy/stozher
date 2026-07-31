@@ -74,6 +74,10 @@ A manifest is a signed object (§01 §5), signed by the component's own key, sub
 | `conformance` | MUST | §4 |
 | `sig` | MUST | component key |
 
+A manifest that fails any rule of this section for which no more specific code is given is refused
+`manifest-malformed`. §3.2 names codes for the conditions a *registration* can fail; this is the
+one for a document that is not a well-formed manifest in the first place.
+
 ### 1.2 Action declarations
 
 - `action` (MUST): `^<name>\.[a-z][a-z0-9_]{0,63}$` where `<name>` is the manifest's `name`. A

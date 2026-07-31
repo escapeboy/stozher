@@ -121,8 +121,10 @@ is not immunity, and §07 says so in the same words.
   (console doc) so a decision is possible in seconds without being blind.
 - Approval fatigue is an availability attack: an adversary that generates many gate-worthy actions can
   train an approver to click through. Requirements: the kernel MUST rate-limit gate requests per
-  subject per interval (policy-configured) and MUST surface a spike as a finding rather than as a
-  longer queue.
+  subject per interval (`gate-rate-limited`) and MUST surface a spike as a finding rather than as a
+  longer queue. Refusing a *request* is not refusing an *action*: the call is still gated and still
+  blocked, and what the flooding subject loses is the ability to keep growing the queue a human has
+  to read.
 - A malicious approver acting within scope is not an attack the audit prevents — it is an attack the
   audit *records*, with a name, a timestamp, and a signature over the exact action. That is the
   designed outcome, and it is also why `single-use` and short `not-after` matter: the blast radius of

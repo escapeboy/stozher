@@ -307,6 +307,11 @@ Normative codes for structural validation, in addition to the encoding codes of 
 | `aggregate-class-not-read` | an `aggregate` envelope whose `classification` is not `read` |
 | `aggregate-count-mismatch` | `counts.total` ≠ sum of `counts.by-action` |
 | `aggregate-sample-bounds` | `sample-hashes` is empty or holds more than 16 entries |
+| `aggregate-count-negative` | a value in `counts` is negative — §7.3's sum is otherwise satisfiable by cancellation |
+| `aggregate-cardinality` | `counts.by-action` folds more than 1024 distinct actions; §7 bounds the samples and left the actions unbounded, so one envelope was unbounded work for every consumer that iterates it |
+| `aggregate-window-inverted` | `window.to` precedes `window.from` |
+| `aggregate-window-too-long` | the window exceeds the policy's `aggregate-max-window` (§7.5) |
+| `payload-media-type-not-allowed` | `evidence.media-type` is one the kernel will not serve back over the origin its console runs on (§4) |
 | `encoding-integer-out-of-range` | an integer outside [-(2^53 - 1), 2^53 - 1] (§01 §2.5) |
 | `chain-genesis-prev-not-null` | `seq` is 0 and `prev-hash` is not `null` |
 | `chain-prev-hash-missing` | `seq` > 0 and `prev-hash` is `null` |

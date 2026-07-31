@@ -37,7 +37,7 @@ async fn a_window_folding_more_actions_than_the_bound_is_refused_before_any_mand
 
     match world.submit(&envelope, &[]).await {
         Outcome::Rejected { reason, record, .. } => {
-            assert_eq!(reason, "x-aggregate-cardinality");
+            assert_eq!(reason, "aggregate-cardinality");
             assert!(record.is_some(), "the refusal must itself be recorded");
         }
         Outcome::Accepted(appended) => panic!(
@@ -61,7 +61,7 @@ async fn a_window_at_the_bound_is_judged_on_its_merits_not_its_size() {
     // `stozher-core/tests/aggregate_arithmetic.rs`.
     match world.submit(&envelope, &[]).await {
         Outcome::Rejected { reason, .. } => assert_ne!(
-            reason, "x-aggregate-cardinality",
+            reason, "aggregate-cardinality",
             "a window at the bound must not be refused by the bound"
         ),
         Outcome::Accepted(_) => {}

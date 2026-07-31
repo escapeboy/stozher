@@ -717,7 +717,7 @@ async fn one_request_gets_one_answer() {
     );
     assert_eq!(
         answer.json()["reason-code"].as_str(),
-        Some("x-gate-decision-already-recorded")
+        Some("gate-decision-already-recorded")
     );
     let fetched = get(&world, &format!("/v1/gate/requests/{request_hash}")).await;
     assert_eq!(
@@ -993,7 +993,7 @@ async fn one_subject_cannot_grow_the_queue_without_bound() {
     );
     assert_eq!(
         answer.json()["reason-code"].as_str(),
-        Some("x-gate-rate-limited")
+        Some("gate-rate-limited")
     );
 
     // Refusing the request refused nobody's action: nothing was applied, and the call the request

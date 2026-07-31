@@ -64,5 +64,5 @@ fn a_range_of_the_attested_length_must_still_begin_where_it_is_attested_to() {
 
     let error = chain::verify_checkpoint(&attested, &all, None)
         .expect_err("a range beginning at seq 0 does not attest seq 100..=103");
-    assert_eq!(error.code(), "x-checkpoint-range-mismatch", "got {error}");
+    assert_eq!(error.code(), "checkpoint-range-mismatch", "got {error}");
 }

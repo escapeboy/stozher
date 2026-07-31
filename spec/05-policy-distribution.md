@@ -170,14 +170,16 @@ There is no privileged path by which policy changes. Publishing a policy version
 Normative:
 
 1. `policy-version` on a `policy-change` envelope is the version **in force while the change was
-   made** (the outgoing one). The new version is identified by `execution.target` and committed to by
-   `execution.args-hash`.
+   made** (the outgoing one). The new version is identified by `execution.target`, which MUST be
+   `policy:<policy-version>` of the document `execution.args-hash` commits to
+   (`policy-change-target-mismatch`).
 2. `classification` MUST be `consequential` and `authorization` MUST be present and valid (§06),
    signed by an enrolled human root. A policy change without an approval signature is rejected
    `gate-authorization-missing` like any other gated effect. Policy is audited by the mechanism it
    enforces — there is no bootstrap exception except the ceremony's first policy, which MUST be
    `seq` 1 of `kernel:core`, signed by the first root, and MUST be recorded as such.
-3. `execution.args-hash` MUST equal `object-hash` of the new policy document, so the approval
+3. `execution.args-hash` MUST equal `object-hash` of the new policy document
+   (`policy-change-document-unbound`), so the approval
    signature binds the exact bytes of the policy that took effect. Approving "a policy change" in the
    abstract is not representable.
 4. A policy version becomes effective only once its `policy-change` envelope is appended. A document
@@ -213,7 +215,8 @@ Normative:
 - `degrade`: perform a policy-declared reduced form of the action (declared per action type in the
   manifest, §08) and record the reduced form as the effect.
 - The default profile MUST set `consequential: "block"` and MUST NOT allow `consequential` while a
-  gate rule applies to it: an action requiring a human signature cannot acquire one offline.
+  gate rule applies to it (`policy-offline-allows-gated`): an action requiring a human signature
+  cannot acquire one offline.
 - **Silently proceeding is never permitted** for any class. Every path terminates in either an
   applied effect with an envelope, or a refusal with an envelope (§06 §6).
 

@@ -122,14 +122,14 @@ pub trait Channel: Send + Sync + std::fmt::Debug {
     ///
     /// # Errors
     ///
-    /// `x-notify-failed` with a detail an operator can act on. The detail is written to the
+    /// `notify-failed` with a detail an operator can act on. The detail is written to the
     /// notification record, so it must never contain a credential.
     fn deliver(&self, ping: &Ping) -> Result<()>;
 }
 
 /// The failure code every channel reports. Not normative: `spec/06 §4.3` requires the notification
 /// and says nothing about how a failed one is named.
-pub const NOTIFY_FAILED: &str = "x-notify-failed";
+pub const NOTIFY_FAILED: &str = "notify-failed";
 
 fn failed(detail: impl std::fmt::Display) -> Error {
     Error::new(NOTIFY_FAILED, detail.to_string())
@@ -143,7 +143,7 @@ const CHANNEL_TIMEOUT: Duration = Duration::from_secs(10);
 ///
 /// # Errors
 ///
-/// `x-notify-failed` when the variable is unset or empty — which is an operator error worth a loud
+/// `notify-failed` when the variable is unset or empty — which is an operator error worth a loud
 /// record rather than a channel that silently sends nothing.
 fn secret(variable: &str) -> Result<String> {
     match std::env::var(variable) {
@@ -248,7 +248,7 @@ impl Channel for Webhook {
 /// secrets in config".
 ///
 /// Where a credential *is* configured, this channel sends `AUTH PLAIN` **only** to a loopback
-/// address, and otherwise refuses (`x-notify-failed`) rather than putting a password on the wire in
+/// address, and otherwise refuses (`notify-failed`) rather than putting a password on the wire in
 /// the clear. Refusing loudly is the honest failure; silently downgrading is the dishonest one.
 #[derive(Debug, Clone)]
 pub struct Smtp {

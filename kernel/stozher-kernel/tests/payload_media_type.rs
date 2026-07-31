@@ -71,7 +71,7 @@ async fn a_payload_declaring_html_is_refused_at_ingest() {
     let (envelope, payload) = effect_with_payload(&world, "text/html", SCRIPT).await;
 
     match world.submit(&envelope, &[payload]).await {
-        Outcome::Rejected { reason, .. } => assert_eq!(reason, "x-payload-media-type-not-allowed"),
+        Outcome::Rejected { reason, .. } => assert_eq!(reason, "payload-media-type-not-allowed"),
         Outcome::Accepted(appended) => {
             panic!("an HTML evidence payload was accepted as {}", appended.id)
         }

@@ -71,7 +71,7 @@ fn a_window_whose_counts_wrap_onto_the_declared_total_is_refused() {
     assert!(
         matches!(
             error.code(),
-            "x-aggregate-cardinality" | "aggregate-count-mismatch"
+            "aggregate-cardinality" | "aggregate-count-mismatch"
         ),
         "unexpected code {}",
         error.code()
@@ -85,7 +85,7 @@ fn the_cardinality_bound_is_1024_distinct_actions() {
 
     let over_bound = aggregate(1025, counts(&vec![1; 1025]));
     let error = envelope::validate(&over_bound).expect_err("1025 distinct actions exceeds it");
-    assert_eq!(error.code(), "x-aggregate-cardinality");
+    assert_eq!(error.code(), "aggregate-cardinality");
 }
 
 /// The bound is chosen so that `i64` accumulation cannot leave its range even in principle:
@@ -159,14 +159,14 @@ fn counts_cannot_cancel_each_other_out() {
     by_action.insert("github.get_file".to_owned(), json!(-999_999));
     let error = envelope::validate(&aggregate(1, by_action))
         .expect_err("a million exports must not record as one read");
-    assert_eq!(error.code(), "x-aggregate-count-negative");
+    assert_eq!(error.code(), "aggregate-count-negative");
 }
 
 #[test]
 fn a_negative_total_is_refused_too() {
     let error = envelope::validate(&aggregate(-1, counts(&[-1])))
         .expect_err("a window cannot have folded a negative number of calls");
-    assert_eq!(error.code(), "x-aggregate-count-negative");
+    assert_eq!(error.code(), "aggregate-count-negative");
 }
 
 #[test]

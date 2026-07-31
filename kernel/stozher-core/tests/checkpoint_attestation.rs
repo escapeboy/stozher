@@ -118,7 +118,7 @@ fn a_checkpoint_over_the_whole_stream_is_not_satisfied_by_a_suffix_of_it() {
     assert!(
         matches!(
             error.code(),
-            "checkpoint-count-mismatch" | "x-checkpoint-range-mismatch"
+            "checkpoint-count-mismatch" | "checkpoint-range-mismatch"
         ),
         "unexpected code {error}"
     );

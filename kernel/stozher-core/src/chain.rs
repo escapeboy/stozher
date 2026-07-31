@@ -139,7 +139,7 @@ fn attach(error: crate::error::Error, seq: Option<u64>) -> crate::error::Error {
 /// Implementation-local, hence the `x-` prefix: §04 §4 names `checkpoint-count-mismatch` for
 /// `count != to-seq - from-seq + 1` and `checkpoint-head-mismatch` for the head, but names nothing
 /// for a range that simply begins somewhere else. Registered in `stozher_kernel::codes::REGISTER`.
-pub const CHECKPOINT_RANGE_MISMATCH: &str = "x-checkpoint-range-mismatch";
+pub const CHECKPOINT_RANGE_MISMATCH: &str = "checkpoint-range-mismatch";
 
 /// Verify a signed checkpoint against the chain range it attests (§04 §4).
 ///

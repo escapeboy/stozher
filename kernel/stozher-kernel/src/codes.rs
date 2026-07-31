@@ -1,58 +1,68 @@
-//! Rejection codes that the specification requires but does not name.
+//! Reason codes this crate names, and the small set that is still its own.
 //!
-//! Every code the specification defines is used **verbatim** from `spec/` — this module holds none
-//! of them. What it holds is the small set of conditions the specification states as a MUST while
-//! giving no machine-readable identifier for the refusal. Skipping such a check to avoid naming it
-//! would trade a documented gap for an undocumented hole, so the checks are implemented and their
-//! names are quarantined here, in one list, clearly marked as **not normative**.
+//! # What this module was, and what happened to it
 //!
-//! Each entry cites the requirement it enforces. They are candidates for the next specification
-//! revision; an ADR should either adopt them into §02 §9.1's table or replace them. Until then a
-//! reader can tell at a glance which codes are part of the wire contract (everywhere else) and
-//! which are this implementation's own (here).
+//! It held the conditions the specification states as a MUST while giving no machine-readable
+//! identifier for the refusal. Skipping such a check to avoid naming it would trade a documented gap
+//! for an undocumented hole, so the checks were implemented and their names quarantined here under
+//! an `x-` prefix, clearly marked as not normative and explicitly a candidate for the next
+//! specification revision.
 //!
-//! [`REGISTER`] exists so a test can assert that the set has not grown silently.
+//! v0.9 is that revision. Fifteen of them were adopted into `spec/` and dropped the prefix; each one
+//! still cites the requirement it enforces, because that citation is what earned it a place in the
+//! wire contract. ADR-0018 records the adoption and, more importantly, the rule for the rejection
+//! records already chained under the old names: **renaming does not rewrite a chained past**, and
+//! `spec/00 §1` says what a reader must do with an `x-` code it finds in a historical record.
+//!
+//! # What [`REGISTER`] means now
+//!
+//! Not "codes the specification forgot" — those are gone. It is the set of codes that are **not
+//! refusals of an object at all**: a store that could not answer, a caller that presented no
+//! credential, a schema newer than this build, a component that would not speak the conformance
+//! protocol. None of them says "what you sent is invalid", so none of them belongs in a wire
+//! contract about objects, and each keeps the `x-` prefix to say so. A test asserts on the set, so
+//! it cannot grow without the growth being a visible, reviewed diff.
 
 /// §05 §7 — "The default profile MUST set `consequential: "block"` and MUST NOT allow
 /// `consequential` while a gate rule applies to it." No code is given for the refusal.
-pub const POLICY_OFFLINE_ALLOWS_GATED: &str = "x-policy-offline-allows-gated";
+pub const POLICY_OFFLINE_ALLOWS_GATED: &str = "policy-offline-allows-gated";
 
 /// §05 §5.1 — `policy-change` identifies the new version by `execution.target`, which must be
 /// `policy:<policy-version>` of the document `execution.args-hash` commits to. No code is given.
-pub const POLICY_CHANGE_TARGET_MISMATCH: &str = "x-policy-change-target-mismatch";
+pub const POLICY_CHANGE_TARGET_MISMATCH: &str = "policy-change-target-mismatch";
 
 /// §05 §5.3 — "`execution.args-hash` MUST equal `object-hash` of the new policy document, so the
 /// approval signature binds the exact bytes of the policy that took effect." No code is given.
-pub const POLICY_CHANGE_DOCUMENT_UNBOUND: &str = "x-policy-change-document-unbound";
+pub const POLICY_CHANGE_DOCUMENT_UNBOUND: &str = "policy-change-document-unbound";
 
 /// §02 §7.5 — "A window MUST be closed and emitted within the policy's `aggregate-max-window`."
 /// No code is given.
-pub const AGGREGATE_WINDOW_TOO_LONG: &str = "x-aggregate-window-too-long";
+pub const AGGREGATE_WINDOW_TOO_LONG: &str = "aggregate-window-too-long";
 
 /// §02 §7.2 — "All aggregated actions MUST share one `identity`, one `mandate-ref` and one
 /// `policy-version`", which requires the window itself to be well formed (`from <= to`). No code is
 /// given for an inverted window.
-pub const AGGREGATE_WINDOW_INVERTED: &str = "x-aggregate-window-inverted";
+pub const AGGREGATE_WINDOW_INVERTED: &str = "aggregate-window-inverted";
 
 /// §04 §4.1 — a checkpoint "MUST be signed by a key derived at role `3'` and enrolled as the
 /// kernel's checkpoint key"; §04 §4 gives `checkpoint-signer-not-kernel` for that, but gives no
 /// code for a checkpoint whose `checkpoint.stream` is unknown to the store.
-pub const CHECKPOINT_STREAM_UNKNOWN: &str = "x-checkpoint-stream-unknown";
+pub const CHECKPOINT_STREAM_UNKNOWN: &str = "checkpoint-stream-unknown";
 
 /// §08 §1.2 — an action identifier must be `<manifest name>.<action>`; §08 gives
 /// `manifest-action-namespace` for a manifest declaring outside its namespace, but gives no code
 /// for a registration whose embedded manifest object is not a well-formed manifest at all.
-pub const MANIFEST_MALFORMED: &str = "x-manifest-malformed";
+pub const MANIFEST_MALFORMED: &str = "manifest-malformed";
 
 /// §03 §6 — the root set "is changed only by an envelope of `kind: "effect"`,
 /// `action: "kernel.enroll_root"` / `kernel.retire_root`". No code is given for such an envelope
 /// whose evidence does not identify a well-formed key to enrol or retire.
-pub const ROOT_ENROLLMENT_MALFORMED: &str = "x-root-enrollment-malformed";
+pub const ROOT_ENROLLMENT_MALFORMED: &str = "root-enrollment-malformed";
 
 /// §06 §5 — "Approval decisions MUST themselves be recorded as envelopes … so the approval history
 /// is chained". It does not name the refusal for a *second* decision over a request a named human
 /// has already answered, which must not be representable: one request, one answer.
-pub const GATE_DECISION_ALREADY_RECORDED: &str = "x-gate-decision-already-recorded";
+pub const GATE_DECISION_ALREADY_RECORDED: &str = "gate-decision-already-recorded";
 
 /// An infrastructure failure — the database is unreachable or corrupt.
 ///
@@ -77,7 +87,7 @@ pub const STORE_UNAVAILABLE: &str = "x-store-unavailable";
 /// Refusing a *request* is not refusing an *action*. The call the request was for is still
 /// gated, and still blocked; what the flooding subject loses is the ability to keep growing the
 /// queue an approver has to read.
-pub const GATE_RATE_LIMITED: &str = "x-gate-rate-limited";
+pub const GATE_RATE_LIMITED: &str = "gate-rate-limited";
 
 /// §02 §7 — `sample-hashes` is bounded at 16 but `counts.by-action` is left unbounded, so one
 /// envelope is an unbounded amount of work for every consumer that iterates it. Defined in
@@ -141,14 +151,27 @@ pub const CONFORMANCE_DRIVER_FAILED: &str = "x-conformance-driver-failed";
 /// component would not talk to us" send an operator to opposite ends of the problem.
 pub const CONFORMANCE_HARNESS_FAILED: &str = "x-conformance-harness-failed";
 
-/// The complete register. A test asserts on this so the list cannot grow without the growth being
-/// a visible, reviewed diff.
-pub const REGISTER: [&str; 15] = [
-    GATE_RATE_LIMITED,
-    AGGREGATE_COUNT_NEGATIVE,
-    MEDIA_TYPE_NOT_ALLOWED,
-    CHECKPOINT_RANGE_MISMATCH,
-    AGGREGATE_CARDINALITY,
+/// The codes that are this implementation's own, because they refuse nothing.
+///
+/// See the module documentation: every entry here reports a condition of the *kernel*, not a verdict
+/// about a submitted object, so none of them is part of the wire contract and every one keeps its
+/// `x-` prefix.
+pub const REGISTER: [&str; 7] = [
+    STORE_UNAVAILABLE,
+    CALLER_UNAUTHENTICATED,
+    BUDGET_EXCEEDED_APPLIED,
+    SCHEMA_VERSION_AHEAD,
+    SCHEMA_MIGRATION_FAILED,
+    CONFORMANCE_DRIVER_FAILED,
+    CONFORMANCE_HARNESS_FAILED,
+];
+
+/// The codes v0.9 adopted into `spec/`, in the order the module declares them.
+///
+/// Listed so a test can assert they did **not** keep the `x-` prefix. A code that is in the
+/// specification and still marked as this implementation's own would tell a reader of a rejection
+/// record the opposite of the truth.
+pub const ADOPTED: [&str; 15] = [
     POLICY_OFFLINE_ALLOWS_GATED,
     POLICY_CHANGE_TARGET_MISMATCH,
     POLICY_CHANGE_DOCUMENT_UNBOUND,
@@ -158,12 +181,17 @@ pub const REGISTER: [&str; 15] = [
     MANIFEST_MALFORMED,
     ROOT_ENROLLMENT_MALFORMED,
     GATE_DECISION_ALREADY_RECORDED,
+    GATE_RATE_LIMITED,
+    AGGREGATE_CARDINALITY,
+    AGGREGATE_COUNT_NEGATIVE,
+    CHECKPOINT_RANGE_MISMATCH,
+    MEDIA_TYPE_NOT_ALLOWED,
     crate::notify::NOTIFY_FAILED,
 ];
 
 #[cfg(test)]
 mod tests {
-    use super::REGISTER;
+    use super::{ADOPTED, REGISTER};
 
     #[test]
     fn every_local_code_is_marked_as_non_normative() {
@@ -178,11 +206,28 @@ mod tests {
     }
 
     #[test]
-    fn the_register_has_no_duplicates() {
-        let mut seen = REGISTER.to_vec();
-        seen.sort_unstable();
+    fn no_adopted_code_still_claims_to_be_local() {
+        // The other half of the same marker, and the half a rename forgets. A code the
+        // specification now names, still carrying `x-`, tells a reader of a rejection record the
+        // opposite of the truth.
+        for code in ADOPTED {
+            assert!(
+                !code.starts_with("x-"),
+                "{code} was adopted into spec/ and still carries the local prefix"
+            );
+        }
+    }
+
+    #[test]
+    fn the_two_sets_are_disjoint_and_have_no_duplicates() {
+        let mut seen: Vec<&str> = REGISTER.iter().chain(ADOPTED.iter()).copied().collect();
         let before = seen.len();
+        seen.sort_unstable();
         seen.dedup();
-        assert_eq!(before, seen.len(), "the register lists a code twice");
+        assert_eq!(
+            before,
+            seen.len(),
+            "a code appears twice, or is claimed as both adopted and local"
+        );
     }
 }

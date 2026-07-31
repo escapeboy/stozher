@@ -214,7 +214,9 @@ attempting it.
 2. Parking is synchronous from the caller's perspective. The kernel is synchronous **only** for
    gates (enforcement-topology doc): everything else is async emission.
 3. The kernel MUST record the parked request, notify the approvers (notification adapter — the only
-   outbound Stozher owns), and expose it in the console pending queue.
+   outbound Stozher owns), and expose it in the console pending queue. A notification that could not
+   be delivered MUST be recorded as such (`notify-failed`) rather than silently dropped: an approver
+   who was never told is indistinguishable from one who has not answered yet.
 4. On approval the component applies the effect and emits the envelope with `authorization`.
 5. On denial the component MUST NOT apply the effect and MUST emit an envelope with
    `outcome: "denied"` carrying the *denial* `authorization` — a signed denial is as much a record as
@@ -265,6 +267,8 @@ gateway's wire format, §10 §6):
   subject MUST NOT be the subject that requested the action (`gate-self-approval`). This holds even
   when a human acts directly through a tool — a human's own consequential action under a gate rule
   requires another named human's signature, or the rule should not have been written.
+- A request a named human has already answered MUST NOT be answered a second time
+  (`gate-decision-already-recorded`): one request, one answer.
 - Approval decisions MUST themselves be recorded as envelopes (`kind: "gate-decision"`, member
   `decision-of` = `request-hash`) on `kernel:core`, so the approval history is chained and
   checkpointed independently of the effects that consume it.

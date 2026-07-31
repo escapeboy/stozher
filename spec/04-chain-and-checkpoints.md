@@ -103,7 +103,9 @@ Rules:
 3. `head-hash` MUST equal `id()` of envelope `to-seq` of `checkpoint.stream`
    (`checkpoint-head-mismatch`).
 4. Checkpoints of a given stream MUST be non-overlapping and contiguous: the next checkpoint's
-   `from-seq` MUST equal the previous checkpoint's `to-seq + 1` (`checkpoint-range-discontinuous`).
+   `from-seq` MUST equal the previous checkpoint's `to-seq + 1` (`checkpoint-range-discontinuous`),
+   and a checkpoint verified against a range it does not begin at is `checkpoint-range-mismatch`.
+   A checkpoint naming a stream the store has never seen is `checkpoint-stream-unknown`.
 5. Checkpoints themselves live in a chained stream (`kernel:checkpoints`), so the checkpoint history
    is as tamper-evident as the data it attests.
 6. The kernel MUST emit a checkpoint per stream at least every `policy.checkpoint-interval`

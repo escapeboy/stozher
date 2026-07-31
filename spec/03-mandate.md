@@ -232,7 +232,8 @@ Notes:
 `roots` is the set of enrolled human root keys of the organization. It is established by the
 operator bootstrap ceremony (build plan S5) and changed only by an envelope of
 `kind: "effect"`, `action: "kernel.enroll_root"` / `kernel.retire_root`, classification
-`consequential`, which MUST itself be gated and MUST be signed by an existing root. The first root
+`consequential`, which MUST itself be gated and MUST be signed by an existing root. Its evidence
+MUST identify a well-formed key to enrol or retire (`root-enrollment-malformed`). The first root
 is the ceremony's trust anchor: it is self-asserted at initialization and MUST be recorded as
 `seq: 0` of the kernel's own stream.
 

@@ -46,7 +46,7 @@ pub const ALLOWED_MEDIA_TYPES: [&str; 12] = [
 /// Implementation-local, hence the `x-` prefix: §02 §4's "any other IANA media type" does not
 /// contemplate the kernel serving the payload back, so it names no refusal. Registered in
 /// `stozher_kernel::codes::REGISTER`; the wording of §02 §4 should be narrowed to match.
-pub const MEDIA_TYPE_NOT_ALLOWED: &str = "x-payload-media-type-not-allowed";
+pub const MEDIA_TYPE_NOT_ALLOWED: &str = "payload-media-type-not-allowed";
 
 /// Outcome of validating an ingest record.
 #[derive(Debug, Clone, PartialEq, Eq)]

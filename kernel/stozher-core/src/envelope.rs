@@ -56,14 +56,14 @@ pub const AGGREGATE_MAX_ACTIONS: usize = 1024;
 /// of 1000000 and one of -999999 sum to 1 — so `aggregate-count-mismatch` becomes a check an
 /// emitter passes while recording a window of a million reads as one. Registered in
 /// `stozher_kernel::codes::REGISTER`.
-pub const AGGREGATE_COUNT_NEGATIVE: &str = "x-aggregate-count-negative";
+pub const AGGREGATE_COUNT_NEGATIVE: &str = "aggregate-count-negative";
 
 /// `counts.by-action` folds more than [`AGGREGATE_MAX_ACTIONS`] distinct actions.
 ///
 /// Implementation-local, hence the `x-` prefix: `spec/02 §9.1` tabulates no code for this because
 /// it states no bound. It is registered alongside the kernel's other local codes in
 /// `stozher_kernel::codes::REGISTER` so the set stays reviewable in one place.
-pub const AGGREGATE_CARDINALITY: &str = "x-aggregate-cardinality";
+pub const AGGREGATE_CARDINALITY: &str = "aggregate-cardinality";
 
 const COMMON: [&str; 8] = [
     "v",

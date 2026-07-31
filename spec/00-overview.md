@@ -21,6 +21,24 @@ Error identifiers written as `snake-case-in-backticks` (for example `chain-prev-
 are **normative machine-readable codes**. An implementation MUST use exactly these codes when
 reporting the corresponding condition. Test vectors (`spec/vectors/`) assert on them.
 
+A code prefixed `x-` is **not** normative: it is an implementation's own name for a condition this
+specification does not name, and a reader of a rejection record can tell the two apart at a glance.
+An implementation MAY define such codes; it MUST NOT emit one for a condition this specification
+does name.
+
+**A code adopted into this specification does not rewrite the past.** Fifteen `x-` codes were adopted
+in the `stozher/0.1` revision that added this paragraph, dropping the prefix. Rejection records
+already chained under the old name keep it forever — the store is append-only and a rename is not a
+migration. So:
+
+- an implementation MUST emit only the adopted name;
+- an implementation reading historical rejection records MUST treat `x-<name>` and `<name>` as the
+  same condition, for any `<name>` the specification has adopted;
+- an implementation MUST NOT rewrite, re-sign or re-emit a historical record to carry the new name.
+
+The list of adopted names is in the revision's ADR (`docs/adr/ADR-0018`), because it is a fact about
+one transition rather than a rule that keeps applying.
+
 ## 2. Constitutional maxims
 
 These are inherited from the project README and are **constitutional**: an implementation that
