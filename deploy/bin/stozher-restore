@@ -150,7 +150,14 @@ roll_back() {
 }
 
 echo "== starting the kernel"
-docker compose up -d kernel
+# Every failure from here on rolls back, this one included: an archive whose configuration is
+# missing or malformed fails at `up`, and `set -e` would otherwise walk out leaving the archive's
+# material installed and the previous state renamed away under it.
+if ! docker compose up -d kernel; then
+  echo "the restored state did not come up" >&2
+  roll_back
+  exit 1
+fi
 set -a; . ./.env; set +a
 # Asked of docker, not assumed from the project name: `COMPOSE_PROJECT_NAME` exists precisely so
 # that two installs on one host get separate networks, and a hardcoded one would await the health
