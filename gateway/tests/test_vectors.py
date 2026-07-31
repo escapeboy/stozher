@@ -34,7 +34,7 @@ from stozher_gateway.canonical import (
 )
 from stozher_gateway.envelope import EnvelopeError
 from stozher_gateway.envelope import validate as validate_shape
-from stozher_gateway.gate import GateRefusedError, verify_authorization
+from stozher_gateway.gate import Approver, GateRefusedError, verify_authorization
 from stozher_gateway.signing import object_id, signing_input, verify_signed_object
 
 VECTORS = Path(__file__).resolve().parents[2] / "spec" / "vectors"
@@ -207,13 +207,27 @@ def handle_mandate_chain(doc: dict[str, Any], vector: dict[str, Any], label: str
     equal(ok.depth, expected["depth"], f"{label}/depth")
 
 
-def handle_authorization(doc: dict[str, Any], vector: dict[str, Any], label: str) -> None:
-    expected = vector["expected"]
+def _approvers(entries: list[Any]) -> list[Approver]:
+    """`authorization.json` lists bare key strings; `parity.json` lists `{key, subject}` objects.
+
+    A bare string is a key whose subject the deployment cannot name, which is exactly what
+    `Approver.subject is None` means — so the older corpus keeps its meaning rather than acquiring
+    a subject it never stated.
+    """
+    return [
+        Approver(entry["key"], entry.get("subject"))
+        if isinstance(entry, dict)
+        else Approver(entry, None)
+        for entry in entries
+    ]
+
+
+def _verify_authorization(vector: dict[str, Any], expected: dict[str, Any], label: str) -> None:
     try:
         ok = verify_authorization(
             vector["envelope"],
             vector["requires-gate"],
-            vector["approvers"],
+            _approvers(vector["approvers"]),
             set(vector.get("seen-request-hashes", [])),
         )
     except GateRefusedError as e:
@@ -225,6 +239,40 @@ def handle_authorization(doc: dict[str, Any], vector: dict[str, Any], label: str
         assert ok is not None
         equal(ok.request_hash, expected["request-hash"], f"{label}/request-hash")
         equal(ok.decided_by, expected["decided-by"], f"{label}/decided-by")
+    if "single-use" in expected:
+        assert ok is not None
+        equal(ok.single_use, expected["single-use"], f"{label}/single-use")
+
+
+def handle_authorization(doc: dict[str, Any], vector: dict[str, Any], label: str) -> None:
+    _verify_authorization(vector, vector["expected"], label)
+
+
+def handle_parity(doc: dict[str, Any], vector: dict[str, Any], label: str) -> None:
+    """Branches on which two independent implementations of this specification disagreed.
+
+    Dispatch is on the vector's own `algorithm`, and an unrecognised one fails rather than being
+    skipped — the same anti-vacuity rule the file-level dispatch uses, applied one level down.
+    `divergence` is documentation and is deliberately not asserted on.
+    """
+    expected = vector["expected"]
+    algorithm = vector["algorithm"]
+    if algorithm == "verify-authorization":
+        _verify_authorization(vector["input"], expected, label)
+        return
+    assert algorithm == "verify-chain", f"{label}: no handler for algorithm {algorithm!r}"
+    supplied = vector["input"]
+    try:
+        report = chain_module.verify_chain(
+            supplied["envelopes"], supplied["stream"], supplied.get("expected-first-prev")
+        )
+    except chain_module.ChainError as e:
+        check(not expected["valid"], f"{label}/valid", f"unexpected refusal {e.code}")
+        equal(e.code, expected["error"], f"{label}/error")
+        equal(e.seq, expected.get("failed-at-seq"), f"{label}/failed-at-seq")
+        return
+    check(expected["valid"], f"{label}/valid", "expected a refusal")
+    equal(report.head_hash, expected["head-hash"], f"{label}/head-hash")
 
 
 def handle_payload_binding(doc: dict[str, Any], vector: dict[str, Any], label: str) -> None:
@@ -260,6 +308,7 @@ HANDLERS: dict[str, Callable[[dict[str, Any], dict[str, Any], str], None]] = {
     "mandate-chain": handle_mandate_chain,
     "authorization": handle_authorization,
     "payload-binding": handle_payload_binding,
+    "parity": handle_parity,
 }
 
 
@@ -279,6 +328,6 @@ def test_vector_file(entry: dict[str, Any]) -> None:
 
 def test_the_run_asserted_something() -> None:
     """The whole suite is vacuous if the handlers stopped asserting; this is the guard."""
-    assert len(INDEX["files"]) >= 12, "index.json lost vector files"
+    assert len(INDEX["files"]) >= 13, "index.json lost vector files"
     assert len(ASSERTIONS) > 200, f"only {len(ASSERTIONS)} vector assertions ran"
     assert len(set(ASSERTIONS)) == len(ASSERTIONS), "an assertion label was reused"

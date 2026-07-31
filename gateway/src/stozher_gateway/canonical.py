@@ -91,10 +91,21 @@ def parse(text: str) -> Any:
 
 
 def canonicalize(value: Any) -> str:
-    """Return ``JCS(value)`` as text."""
-    _reject_lone_surrogates(value)
-    out: list[str] = []
-    _write(value, out)
+    """Return ``JCS(value)`` as text.
+
+    Refuses with :class:`CanonicalizationError` and never with a bare interpreter exception: a
+    caller that hands this foreign input is entitled to a reason code it can put in a record.
+    Nesting deeper than the recursion here can carry is reported as malformed — RFC 8259 §9 leaves
+    depth limits to the implementation, and a document past this one's is not one it can represent.
+    """
+    try:
+        _reject_lone_surrogates(value)
+        out: list[str] = []
+        _write(value, out)
+    except RecursionError as e:
+        raise CanonicalizationError(
+            "jcs-malformed-json", "nesting exceeds what this canonicalizer can represent"
+        ) from e
     return "".join(out)
 
 
@@ -140,8 +151,17 @@ def _write(value: Any, out: list[str]) -> None:
         out.append(_string(value))
     elif isinstance(value, int):
         # An integer literal is still a binary64 value in JCS: 9007199254740993 canonicalizes to
-        # 9007199254740992 because that is the value the literal denotes.
-        _write_number(float(value), out)
+        # 9007199254740992 because that is the value the literal denotes. An integer too large to
+        # convert at all denotes no binary64 value, which is §01 §3.1's `jcs-non-finite-number` —
+        # the code that exists for exactly this entry point, where an already-parsed in-memory value
+        # arrives rather than text (`parse` reaches the same condition as `jcs-malformed-json`).
+        try:
+            number = float(value)
+        except OverflowError as e:
+            raise CanonicalizationError(
+                "jcs-non-finite-number", f"{value} has no binary64 representation"
+            ) from e
+        _write_number(number, out)
     elif isinstance(value, float):
         _write_number(value, out)
     elif isinstance(value, list):

@@ -45,8 +45,8 @@ def verify_chain(
         raise ChainError("chain-empty-range", "a range must hold at least one envelope", None)
     anchored = records[0].get("seq") == 0 or expected_prev is not None
     previous_id = expected_prev
-    previous_seq: int | None = None
-    for record in records:
+    first_seq: int | None = None
+    for index, record in enumerate(records):
         seq = record.get("seq") if isinstance(record.get("seq"), int) else None
         if verify_signed_object(record) is None:
             raise ChainError("sig-invalid", "the signature does not verify", seq)
@@ -57,14 +57,21 @@ def verify_chain(
         if record["stream"] != stream:
             raise ChainError("chain-stream-mismatch", record["stream"], seq)
         seq = int(record["seq"])
-        if previous_seq is not None:
-            if seq == previous_seq:
-                raise ChainError("chain-seq-duplicate", f"seq {seq} appears twice", seq)
-            if seq != previous_seq + 1:
-                raise ChainError("chain-seq-gap", f"{previous_seq} then {seq}", seq)
+        if first_seq is None:
+            first_seq = seq
+        else:
+            # A contiguous range occupies `first + index`, so that is what each position is
+            # compared against rather than the seq before it. Comparing to the predecessor makes
+            # the duplicate branch fire only on exact equality: a range that steps *backwards* to a
+            # position already occupied earlier — 0, 1, 2, 1 — is a second envelope at seq 1, and
+            # reporting it as a gap describes the wrong fault.
+            occupies = first_seq + index
+            if seq < occupies:
+                raise ChainError("chain-seq-duplicate", f"seq {seq} is already occupied", seq)
+            if seq > occupies:
+                raise ChainError("chain-seq-gap", f"expected seq {occupies}, found {seq}", seq)
         if seq > 0 and previous_id is not None and record["prev-hash"] != previous_id:
             raise ChainError("chain-prev-hash-mismatch", str(record["prev-hash"]), seq)
-        previous_seq = seq
         previous_id = object_id(record)
     assert previous_id is not None
     return ChainReport(previous_id, len(records), anchored)

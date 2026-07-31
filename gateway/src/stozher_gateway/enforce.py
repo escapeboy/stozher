@@ -26,11 +26,11 @@ from collections.abc import Callable
 from typing import Any, NamedTuple
 
 from . import clock as clock_module
-from .canonical import object_hash
+from .canonical import CanonicalizationError, object_hash
 from .classify import Classification, Classifier
 from .config import GatewayConfig
 from .emitter import Emitter, WindowKey
-from .gate import ActionRequest, GateRefusedError, action_request, verify_authorization
+from .gate import ActionRequest, Approver, GateRefusedError, action_request, verify_authorization
 from .kernel_client import KernelClient, KernelUnreachableError
 from .mandate import MandateRefusedError, MandateRequest, verify_mandate_chain
 from .policy import Policy
@@ -122,7 +122,7 @@ class Enforcer:
         policy, fresh = self._policy(call)
         classification = self._classify(session, call, policy)
         target = self._target(call)
-        args_hash = object_hash(call.arguments)
+        args_hash = self._args_hash(session, call, classification, target, policy)
         # The revocation set is resolved *here*, before the mandate walk and therefore before
         # anything is forwarded. A feed that could not be re-pulled when `revoke-cached` demanded
         # it makes the gateway not-fresh, which is what turns a stale revocation set into an
@@ -281,7 +281,7 @@ class Enforcer:
         """
         applied = 0
         policy, _ = self._policy_of()
-        approvers = [root.key for root in self._config.org.roots]
+        approvers = self._config.org.root_approvers()
         for parked in self._store.seeded_pending():
             if self._store.catalog_entry(parked.server, parked.tool) is not None:
                 continue
@@ -319,6 +319,52 @@ class Enforcer:
             session.subject, proposed.action, self._target(call), proposed.classification
         )
         return Classification(proposed.action, effective, proposed.tier)
+
+    def _args_hash(
+        self,
+        session: Session,
+        call: Call,
+        classification: Classification,
+        target: str,
+        policy: Policy,
+    ) -> str:
+        """`object-hash` of the arguments, or a recorded refusal if they have no canonical form.
+
+        These arguments are foreign-agent input and this is the first thing done with them, so it
+        is the first place the gateway can be handed a value the canonicalizer cannot represent —
+        an integer outside binary64, a structure nested past what the recursion can carry. That
+        fails closed, so it is not a bypass; what it was, before this, was an *unrecorded* refusal.
+        The agent got an opaque MCP error, no envelope was emitted, and the attempt was absent from
+        the audit — and §06 §6 has no row in which an action is silently skipped.
+
+        The blocked record cannot carry the arguments (hashing them is what failed) nor their
+        `args-hash` (they have none). It carries a stand-in naming the reason instead, because
+        inventing a digest for a value with no canonical form would put a false statement in the
+        chain.
+        """
+        try:
+            return object_hash(call.arguments)
+        except (CanonicalizationError, OverflowError, RecursionError, TypeError, ValueError) as e:
+            code = e.code if isinstance(e, CanonicalizationError) else "jcs-malformed-json"
+            stand_in = call._replace(arguments={"uncanonicalizable-arguments": code})
+            envelope_id = self._emit_effect(
+                session,
+                stand_in,
+                classification,
+                target,
+                object_hash(stand_in.arguments),
+                "blocked",
+                policy,
+            )
+            raise refusal(
+                "blocked",
+                code,
+                "the arguments of this call have no canonical form, so no approval could bind them",
+                action=classification.action,
+                classification=classification.classification,
+                classification_tier=classification.tier,
+                envelope_id=envelope_id,
+            ) from e
 
     def _target(self, call: Call) -> str:
         """The thing acted upon, in the gateway's namespace.
@@ -437,9 +483,7 @@ class Enforcer:
             "target": ask.target,
             "args-hash": ask.args_hash,
         }
-        approvers = self._config.org.approver_keys(approver_subjects) or [
-            root.key for root in self._config.org.roots
-        ]
+        approvers = self._approvers(session, call, classification, target, args_hash, policy, approver_subjects)
         # An answer a human gave in the console lands in the kernel, not here, so the queue is
         # consulted before the local rows: otherwise a call would park a second time against a
         # request that has already been decided.
@@ -484,6 +528,49 @@ class Enforcer:
                 if queued
                 else f"pending request {request_hash} (held locally; the kernel was unreachable)"
             ),
+        )
+
+    def _approvers(
+        self,
+        session: Session,
+        call: Call,
+        classification: Classification,
+        target: str,
+        args_hash: str,
+        policy: Policy,
+        approver_subjects: list[str],
+    ) -> list[Approver]:
+        """The approvers this component can verify a signature against, or a refusal (§06 §5, §6).
+
+        Two cases that look alike and are not. An **empty** `approver_subjects` is first-call gating
+        (§10 §4): no rule named anyone, and every enrolled root is a legitimate approver of "what
+        class is this tool". A **non-empty** list that resolves to nothing is a rule the gateway
+        cannot enforce — §06 §5's other kind of approver is a human holding a mandate, which the
+        kernel resolves from its mandate store and this component has no equivalent of.
+
+        Widening the second case to "any root" is the ADR-0008 inversion in miniature: the gateway
+        would accept a root's signature, forward the call, the effect would happen, and the kernel
+        would then refuse the envelope `gate-approver-not-permitted` — prevention turned into
+        detection, and per ADR-0007 §6 the caller's stream wedged as well. A resolution failure
+        refuses.
+        """
+        if not approver_subjects:
+            return self._config.org.root_approvers()
+        approvers = self._config.org.approvers(approver_subjects)
+        if approvers:
+            return approvers
+        envelope_id = self._emit_effect(
+            session, call, classification, target, args_hash, "blocked", policy
+        )
+        raise refusal(
+            "blocked",
+            "gate-approver-unresolvable",
+            "policy names an approver this component cannot resolve to an enrolled key, so no "
+            "signature it could check would satisfy the rule",
+            action=classification.action,
+            classification=classification.classification,
+            classification_tier=classification.tier,
+            envelope_id=envelope_id,
         )
 
     def _queue_with_kernel(self, request: dict[str, Any]) -> bool:
@@ -536,7 +623,7 @@ class Enforcer:
         call: Call,
         classification: Classification,
         parked: Any,
-        approvers: list[str],
+        approvers: list[Approver],
         policy: Policy,
     ) -> dict[str, Any]:
         """Verify a decision through §06 §2 and, if it approves, put its catalog seed in force."""
@@ -611,7 +698,7 @@ class Enforcer:
         return authorization
 
     def _seed_catalog(
-        self, session: Session, parked: Any, policy: Policy, approvers: list[str]
+        self, session: Session, parked: Any, policy: Policy, approvers: list[Approver]
     ) -> bool:
         """Put an org-seeded catalog entry in force — its own gated, chained envelope (§10 §4.3)."""
         if parked.catalog_class is None or parked.seed is None:
