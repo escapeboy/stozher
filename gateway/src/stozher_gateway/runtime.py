@@ -20,12 +20,14 @@ from typing import Any
 from . import clock as clock_module
 from . import crypto
 from .background import BackgroundLoop
+from .budget import BudgetFeed
 from .canonical import sha256_hex
 from .classify import Classifier
 from .config import CallerConfig, GatewayConfig
 from .emitter import Emitter
 from .enforce import Call, Enforcer, Session
 from .kernel_client import KernelClient, KernelUnreachableError
+from .manifests import ManifestFeed
 from .policy import Policy, PolicyError
 from .proxy import Downstream
 from .refusal import refusal
@@ -164,8 +166,17 @@ class Gateway:
             max_events=config.gateway.aggregate_max_events,
             max_samples=config.gateway.aggregate_max_samples,
         )
+        # Tier A, at last. The classifier has consulted manifests since S2 and nothing ever loaded
+        # one, so a component we did not write always fell through to the shape heuristic — the
+        # tier the taxonomy is least confident about, and precisely the case registering a manifest
+        # exists to leave. A callable rather than a snapshot: registration is a gated action a human
+        # signs mid-session, and a classifier that read this once would not see it until a restart.
+        self.manifests = ManifestFeed(
+            self.kernel, config.kernel.policy_refresh_seconds, self._clock
+        )
         self.classifier = Classifier(
             scopes={server.name: server.scope for server in config.servers},
+            manifests=self.manifests.current,
             org_seeded=self.store.catalog_entry,
         )
         # The feed shares the policy pull interval: both are versioned pulls of the same kind, and
@@ -173,6 +184,9 @@ class Gateway:
         self.revocations = RevocationFeed(
             self.kernel, self.store, config.kernel.policy_refresh_seconds, self._clock
         )
+        # §03 §4.3's blocking half. The kernel records an over-budget effect; only the emitter can
+        # decline to make it, so without this a budget is detection rather than prevention.
+        self.budgets = BudgetFeed(self.kernel, config.kernel.policy_refresh_seconds, self._clock)
         self.enforcer = Enforcer(
             config,
             self.store,
@@ -186,6 +200,7 @@ class Gateway:
             # a component must keep enforcing while the kernel is unreachable (maxim 5) — but it is
             # now a cache of a fact the kernel holds, not the only place the fact exists.
             self.kernel,
+            self.budgets,
         )
         self.session: Session | None = None
         self._downstream: dict[str, Downstream] = {}
@@ -340,6 +355,62 @@ class Gateway:
         }
         self.emitter.append(session.key, session.stream, body)
 
+    def _record_downstream_unavailable(self, session: Session, server: str, detail: str) -> None:
+        """A declared server that could not be enumerated is a record, not a shorter tool list.
+
+        Without this, a downstream that is down produces exactly one observable: some tools are
+        missing from `tools/list`. An agent cannot tell that from a server that was never configured,
+        an operator has to be reading the gateway's stderr at the moment it started, and the audit
+        says nothing at all — so a period when a governed capability was simply absent leaves no
+        trace. The envelope carries `outcome: "failed"`, which is what puts it in the console's
+        failed view and in the `outcome` index rather than leaving it to be noticed.
+
+        Startup continues. One dead downstream must not take the gateway with it, and a refusal here
+        would trade a partial proxy for no proxy at all.
+        """
+        policy, _ = self.policy_provider.current()
+        action = "gateway.downstream_unavailable"
+        classification = policy.classify(session.subject, action, server, "benign")
+        if policy.decision_for(classification).kind != "allow":
+            # Deliberately not a startup refusal, unlike `gateway.session_open`. This path is already
+            # the degraded one, and an org whose policy gates the *reporting* of a fault should not
+            # thereby lose the working half of its gateway. It is loud instead, and `config check`
+            # reports the same thing before it can happen.
+            logger.error(
+                "policy classifies %s as %s, which is not allowed without an approval — "
+                "the unreachable downstream %s cannot be recorded",
+                action,
+                classification,
+                server,
+            )
+            return
+        now = self._clock.now()
+        body = {
+            "v": "stozher/0.1",
+            "kind": "effect",
+            "emitted-at": now,
+            "identity": {
+                "subject": session.subject,
+                "key": session.key.id,
+                "component": self.config.gateway.component,
+            },
+            "mandate-ref": session.mandate_ref,
+            "policy-version": policy.version,
+            "classification": classification,
+            "execution": {
+                "action": action,
+                "target": server,
+                # The server's name, not the exception text: `args-hash` is a commitment, and an
+                # error message carries paths, ports and sometimes a token.
+                "args-hash": sha256_hex(server.encode("utf-8")),
+                "outcome": "failed",
+                "started-at": now,
+                "finished-at": now,
+            },
+        }
+        self.emitter.append(session.key, session.stream, body)
+        logger.error("recorded %s as unreachable: %s", server, detail)
+
     # -- registration -------------------------------------------------------------------------
 
     def register(self, mcp: Any) -> int:
@@ -360,6 +431,7 @@ class Gateway:
                 tools = downstream.list_tools()
             except Exception as e:  # noqa: BLE001 - a dead downstream must not break startup
                 logger.error("could not enumerate %s: %s", server.name, e)
+                self._record_downstream_unavailable(session, server.name, str(e))
                 continue
             for tool in tools:
                 mcp._tool_manager._tools[f"{server.name}__{tool.name}"] = proxy_tool(

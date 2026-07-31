@@ -178,6 +178,68 @@ The harness MUST emit its result as an envelope (`action: "kernel.conformance_ru
 full result), so "it passed conformance" is itself an audited claim with a date and a manifest hash,
 not a sentence in a README.
 
+### 4.8 The driver protocol
+
+Four of the seven groups cannot be decided by reading a manifest: §4.1, §4.3, §4.4 and §4.5 require
+the component to *act*. §4.4 in particular requires refusals **of envelopes the component signed** —
+which the harness cannot construct, because the component's signing key is the one thing it must not
+have. A harness holding a component key could emit envelopes indistinguishable from that component's
+own, which would destroy the attribution the run exists to certify.
+
+So the component drives itself, through the action its manifest already declares at
+`conformance.self-test` (§1.1). This protocol is how that action is invoked.
+
+1. **Transport.** The harness starts the component's self-test as a subprocess and exchanges
+   **line-delimited JSON**: one request object per line on the child's stdin, one response object per
+   line on its stdout. Anything the component writes to stderr is diagnostic and MUST NOT be parsed.
+   A fresh process per run is what makes "no component-side state" structural rather than promised.
+2. **Every request carries its own context.** A request MUST be answerable without reference to an
+   earlier one, except that the component chains its own stream across a run as it would in
+   production. There is no session, no handshake ordering and no negotiated state.
+3. **Requests carry inputs only.** For §4.1 the harness MUST strip every expected value from the
+   vector before sending it. A component that received the expected output could pass by echoing it,
+   which would make the group certify nothing. Where an expected value is itself an object, the
+   corpus states which of its members must match and the harness compares those; a component
+   answering with more than was asked is not thereby failing.
+4. **Cases.** `case` names the request. A component MUST answer every case its manifest's declared
+   actions make applicable, and MUST answer `{"error": "<reason>"}` rather than a malformed body when
+   it cannot.
+
+| `case` | Request members | Response members | Serves |
+|---|---|---|---|
+| `hello` | — | `subject`, `key`, `stream` | identifies the key the harness must mandate |
+| `vectors` | `vectors[]` (inputs only) | `answers` — vector `id` → the expected members, computed | §4.1 |
+| `emit` | `context`, `action`, `count` | `submissions[]` — `{envelope, payloads}` | §4.2, §4.3 |
+| `negative` | `context`, `negative`, `expect`, plus what the case needs | `submissions[]` | §4.4 |
+| `offline` | `context`, `actions[]` | `submissions[]`, `blocked[]` | §4.5 |
+
+5. **`context`** is `{ at, mandate-ref, policy-version }`, minted by the harness for the run. The
+   harness grants the mandate to the key the component returned from `hello`, so a run needs no
+   pre-existing relationship between the two — which is what makes it re-runnable by an operator who
+   has just received a manifest from a stranger. `at` is the instant the component MUST stamp its
+   envelopes with: §4 requires a run to be deterministic, and an envelope stamped from the
+   component's own clock would make every run produce different bytes and different signatures.
+6. **The harness supplies the authorizations.** For the gated negative cases the harness signs the
+   approval, because it holds the run's root key and the component must not. The component's part is
+   to emit exactly the envelope it was asked for and sign it; deciding whether that envelope should
+   have been refused is the kernel's part, and reading the refusal is the harness's.
+7. **`negative` names the case, not the reason code.** The eight cases of §4.4 are named
+   `gate-authorization-missing`, `gate-authorization-action-mismatch`, `gate-authorization-replayed`,
+   `mandate-expired`, `mandate-root-not-human`, `prohibited-attempted`, `cognition-with-evidence` and
+   `administrative-path`. The last is the harness's own attempt against the kernel (§06 §2) and takes
+   no component involvement; the other seven MUST be attempted by the component under test.
+8. **`expect` says what becomes of the last submission** — `"refused"` or `"accepted"`. Every earlier
+   submission of a case is setup and lands. A component MUST advance its local chain for every
+   submission that lands and MUST NOT for one that is refused: a refused envelope never occupied a
+   position, and a component that counted it would leave a gap its next real envelope falls into.
+   The harness states this rather than expecting the component to know which of §4.4's cases the
+   kernel records — the self-test emits what it is told.
+9. **A component that refuses to attempt a negative case fails the group.** Declining to emit an
+   envelope one knows to be invalid is the behaviour of a well-written component and it is
+   nevertheless a conformance failure, because the group's subject is what the *kernel* does with
+   such an envelope. A component MUST NOT substitute its own judgment for the kernel's here; the
+   self-test is a mode in which it emits what it is told.
+
 ## 5. Classification catalog entries (Tier B)
 
 For foreign MCP servers with no manifest, the shipped catalog (§10 §3) uses a reduced entry:

@@ -24,7 +24,7 @@ from typing import Any
 import pytest
 
 from stozher_gateway import chain as chain_module
-from stozher_gateway import crypto, mandate, payload
+from stozher_gateway import crypto, mandate, money, payload
 from stozher_gateway.canonical import (
     CanonicalizationError,
     canonicalize,
@@ -295,6 +295,26 @@ def handle_payload_binding(doc: dict[str, Any], vector: dict[str, Any], label: s
         equal(True, expected["chain-valid"], f"{label}/chain-valid")
 
 
+def handle_money_compare(doc: dict[str, Any], vector: dict[str, Any], label: str) -> None:
+    """Exact monetary comparison (§01 §2.5, §03 §4.3).
+
+    The expected values are computed in `generate_vectors.py` by a third technique — integer tuples,
+    no `Decimal` and no float — so agreement here is three implementations agreeing rather than this
+    one checking itself. Answering these through `float()` fails the boundary vectors, which is why
+    they are in the corpus at all.
+    """
+    try:
+        observed = {-1: "less", 0: "equal", 1: "greater"}[
+            money.compare(vector["left"], vector["right"])
+        ]
+    except money.MoneyFormatError:
+        observed = "refused"
+    assert observed == vector["expected"], (
+        f"{label}: compare({vector['left']!r}, {vector['right']!r}) is {observed}, "
+        f"the corpus says {vector['expected']}"
+    )
+
+
 HANDLERS: dict[str, Callable[[dict[str, Any], dict[str, Any], str], None]] = {
     "jcs": handle_jcs,
     "jcs-invalid": handle_jcs_invalid,
@@ -308,6 +328,7 @@ HANDLERS: dict[str, Callable[[dict[str, Any], dict[str, Any], str], None]] = {
     "mandate-chain": handle_mandate_chain,
     "authorization": handle_authorization,
     "payload-binding": handle_payload_binding,
+    "money-compare": handle_money_compare,
     "parity": handle_parity,
 }
 

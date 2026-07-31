@@ -87,6 +87,12 @@
       "description": "Evidence payload binding and decay (spec 04 section 5). Validate the ingest record: every submitted payload MUST hash to the value the envelope committed to, and MUST be referenced by it. An empty `payloads` array is always valid. Where a vector carries `chain`, verifying that chain with no payloads MUST produce `expected.chain-head-hash`."
     },
     {
+      "path": "money-compare.json",
+      "kind": "money-compare",
+      "count": 31,
+      "description": "Exact comparison of monetary decimal strings. `expected` is one of less, equal, greater, refused. A harness MUST compare by value without converting to a binary floating-point number, and MUST refuse every form outside `digits [ '.' digits ]`."
+    },
+    {
       "path": "parity.json",
       "kind": "parity",
       "count": 16,

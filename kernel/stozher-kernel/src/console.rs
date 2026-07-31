@@ -55,7 +55,7 @@ use axum::routing::{get, post};
 use serde_json::Value;
 
 use crate::http::Caller;
-use crate::store::{EnvelopeQuery, Store};
+use crate::store::{self, EnvelopeQuery, OwnedCursor, Store};
 use crate::{Kernel, checkpoint};
 
 /// How far ahead of expiry a standing rule is worth surfacing.
@@ -340,6 +340,10 @@ pub struct Filters {
     pub limit: String,
     /// Only records that confess a violation.
     pub violations_only: bool,
+    /// Resume position, as [`stozher_kernel_cursor`] writes it.
+    ///
+    /// [`stozher_kernel_cursor`]: crate::store::Cursor::encode
+    pub after: String,
 }
 
 // -- templates --------------------------------------------------------------------------------
@@ -373,6 +377,10 @@ struct AuditPage {
     matched: String,
     /// Whether the two differ, so the page can say so rather than leave it to be noticed.
     truncated: bool,
+    /// Whether this is a later page, so "showing N" cannot be misread as "there are N".
+    paged: bool,
+    /// The link to the next page, absent when this one is the last.
+    next: Option<String>,
     /// The closed vocabularies the three enumerated filters range over, offered rather than recalled.
     classes: &'static [&'static str],
     kinds: &'static [&'static str],
@@ -562,16 +570,47 @@ async fn audit(
         return response;
     }
     let filters = Filters::from_params(&params);
+    let Ok(resume) = filters.cursor() else {
+        // A malformed cursor is refused rather than ignored. Silently starting over would answer a
+        // request for a later page with the first one, and an auditor reading rows they had already
+        // read has no way to tell that from rows they had not.
+        return notice(
+            StatusCode::BAD_REQUEST,
+            "That page cursor is not one this console wrote",
+            "`after` must name a row this console handed out. Follow the paging links rather than \
+             editing the parameter, or drop it to start from the newest record.",
+        );
+    };
     let store = kernel.ingest.store();
-    let records = match store.query(&filters.query()).await {
+    let query = filters.query_from(resume.as_ref());
+    let records = match store.query(&query).await {
         Ok(records) => records,
         Err(e) => return unavailable(&e),
     };
     // Matched and shown are different numbers and the page says both. Rendering only the second as
     // "N record(s)" made a filter that matched five thousand look like one that matched two hundred.
+    // `matched` is the whole filtered set, not the remainder after the cursor: a count that shrank
+    // as the reader paged would make page three of five read like the end.
     let matched = match store.query_count(&filters.query()).await {
         Ok(matched) => matched,
         Err(e) => return unavailable(&e),
+    };
+    // A full page is the signal that there may be more. It can be one page early — a set whose size
+    // is an exact multiple of the cap offers a link to an empty page — and that is the direction to
+    // be wrong in: an auditor who follows it sees "no further records", whereas the reverse hides
+    // evidence behind a link that was never drawn.
+    let next = if i64::try_from(records.len()).unwrap_or(i64::MAX) == query.limit.clamp(1, 10_000) {
+        store::cursor_after(&records).map(|cursor| {
+            let filters = filters.to_query_string();
+            let after = percent_encode(&cursor.encode());
+            if filters.is_empty() {
+                format!("/console/audit?after={after}")
+            } else {
+                format!("/console/audit?{filters}&after={after}")
+            }
+        })
+    } else {
+        None
     };
     render(&AuditPage {
         title: "Audit explorer",
@@ -579,6 +618,8 @@ async fn audit(
         shown: records.len().to_string(),
         matched: matched.to_string(),
         truncated: matched > records.len() as u64,
+        paged: resume.is_some(),
+        next,
         classes: &stozher_core::envelope::CLASSES,
         kinds: &stozher_core::envelope::KINDS,
         outcomes: &stozher_core::envelope::OUTCOMES,
@@ -616,10 +657,10 @@ async fn export(
     let store = kernel.ingest.store();
     let mut body = String::new();
     let mut exported: u64 = 0;
+    let mut resume: Option<store::OwnedCursor> = None;
     loop {
-        let mut page = filters.query();
+        let mut page = filters.query_from(resume.as_ref());
         page.limit = EXPORT_PAGE_ROWS;
-        page.offset = i64::try_from(exported).unwrap_or(i64::MAX);
         let records = match store.query(&page).await {
             Ok(records) => records,
             Err(e) => return unavailable(&e),
@@ -627,6 +668,13 @@ async fn export(
         if records.is_empty() {
             break;
         }
+        // Keyset, not `OFFSET`. The log has a live writer and `emitted-at` is the emitter's clock,
+        // so a record can land ahead of a batch this loop has already walked past; under `OFFSET`
+        // every later row shifted down and the next batch began one row early, putting the same
+        // signed envelope in the file twice. The store is append-only, so nothing was ever *lost* —
+        // but a regulator cannot tell a paging artefact from a genuine repeat without re-deriving
+        // `id()` across the whole file, and this export exists so they do not have to.
+        resume = store::cursor_after(&records);
         for record in &records {
             match stozher_core::jcs::canonicalize(record) {
                 Ok(line) => {
@@ -1610,10 +1658,28 @@ impl Filters {
                 given => given,
             },
             violations_only: get("violations-only") == "true",
+            after: get("after"),
         }
     }
 
+    /// The resume position, or `None` when this is the first page.
+    ///
+    /// `Err` when the parameter is present and does not parse. That distinction is the point: a
+    /// console that fell back to "no cursor" would answer a request for page four with page one and
+    /// look like it had succeeded, which for an audit surface is the same class of defect as a
+    /// truncated export.
+    fn cursor(&self) -> std::result::Result<Option<OwnedCursor>, ()> {
+        if self.after.is_empty() {
+            return Ok(None);
+        }
+        OwnedCursor::decode(&self.after).map(Some).ok_or(())
+    }
+
     fn query(&self) -> EnvelopeQuery<'_> {
+        self.query_from(None)
+    }
+
+    fn query_from<'a>(&'a self, after: Option<&'a OwnedCursor>) -> EnvelopeQuery<'a> {
         fn set(value: &str) -> Option<&str> {
             if value.is_empty() { None } else { Some(value) }
         }
@@ -1635,19 +1701,21 @@ impl Filters {
             human_root: set(&self.human_root),
             violations_only: self.violations_only,
             limit: self.limit.parse().unwrap_or(200),
-            offset: 0,
+            after: after.map(OwnedCursor::borrowed),
         }
     }
 
     /// The filter query string for the regulator export.
     ///
-    /// `limit` is deliberately absent. It is the page's row cap and has nothing to do with what a
-    /// regulator asked for; carrying it into the export is what made the export silently drop
-    /// evidence while `Content-Disposition` presented the result as a finished file.
+    /// `limit` and `after` are deliberately absent. They are the *page's* position and row cap and
+    /// have nothing to do with what a regulator asked for; carrying `limit` into the export is what
+    /// made the export silently drop evidence while `Content-Disposition` presented the result as a
+    /// finished file, and `after` would do the same thing one page further in — an export taken from
+    /// page four would begin at page four and still call itself the audit trail.
     fn to_export_query_string(&self) -> String {
         self.to_query_string()
             .split('&')
-            .filter(|part| !part.starts_with("limit="))
+            .filter(|part| !part.starts_with("limit=") && !part.starts_with("after="))
             .collect::<Vec<_>>()
             .join("&")
     }

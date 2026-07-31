@@ -652,6 +652,12 @@ pub fn baseline_conservative(version: &str, issued_at: &str, approver: &str) -> 
     // first call (ADR-0007 §4). A shipped baseline that cannot run the shipped gateway is not a
     // baseline, so the classification lives here rather than in every operator's first edit.
     by_action.insert("gateway.session_open", "benign");
+    // Same reasoning, for the record a gateway writes when a downstream it was configured to front
+    // cannot be reached. Left to `default-unknown` it would be `consequential`, so the one moment
+    // the gateway most needs to be able to say something is the moment it would be gated — and the
+    // failure that produces is the original defect exactly: a declared server silently absent from
+    // `tools/list` with nothing in the audit to say so.
+    by_action.insert("gateway.downstream_unavailable", "benign");
     serde_json::json!({
         "v": stozher_core::VERSION,
         "kind": "policy",

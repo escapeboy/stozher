@@ -42,11 +42,6 @@ use stozher_core::signed::KeyId;
 use crate::codes;
 use crate::keys::SigningKey;
 
-/// The DDL every dialect shares.
-const SCHEMA: &str = include_str!("sql/schema.sql");
-/// The append-only enforcement, SQLite dialect. The one file to port to Postgres.
-const APPEND_ONLY_SQLITE: &str = include_str!("sql/append_only.sqlite.sql");
-
 /// What a stream carries. Effect streams and signal streams never mix (§07 §2.5).
 pub const STREAM_KIND_EFFECT: &str = "effect";
 /// A stream of inbound signal records.
@@ -115,6 +110,16 @@ pub struct Projections {
     pub checkpoint: Option<CheckpointRow>,
     /// A gate decision recorded by this envelope (§06 §5).
     pub gate_decision: Option<GateDecisionRow>,
+}
+
+/// What one envelope adds to the running totals.
+#[derive(Debug, Clone, Default)]
+pub struct SpendAccrual {
+    /// The citing mandate and its ancestors, all charged the same amounts.
+    pub mandates: Vec<String>,
+    /// Dimension to amount, as decimal strings — integers included, because a running total is
+    /// exact arithmetic either way and one representation is fewer things to get wrong.
+    pub amounts: BTreeMap<String, String>,
 }
 
 /// A decision folded out of a `gate-decision` envelope (§06 §5).
@@ -200,6 +205,13 @@ pub struct AppendPlan {
     pub gate_use: Option<GateUse>,
     /// Folds to maintain.
     pub projections: Projections,
+    /// Spend to accrue: the mandates to charge, and the amounts per dimension (§03 §4.3).
+    ///
+    /// The mandate list is the citing mandate **and every ancestor**, because a budget caps "this
+    /// mandate and everything delegated beneath it" — so a delegated agent's spend has to reach the
+    /// human root's cap, or a chain of delegations would be a way to multiply an org's limit by its
+    /// own depth. Ingest computes both halves; the store only adds.
+    pub spend: Option<SpendAccrual>,
 }
 
 /// The outcome of an append.
@@ -261,6 +273,24 @@ impl Store {
     ///
     /// [`codes::STORE_UNAVAILABLE`] on any database failure.
     pub async fn open(path: &Path, rejection_stream: &str) -> Result<Self> {
+        Self::open_with_migrations(path, rejection_stream, crate::migrate::MIGRATIONS).await
+    }
+
+    /// [`Self::open`], against a caller-supplied migration registry.
+    ///
+    /// Exists so a test can drive a real store from schema version N to N+1 with a real step, which
+    /// is the v0.3 gate. The production path calls it with [`crate::migrate::MIGRATIONS`] and
+    /// nothing else does.
+    ///
+    /// # Errors
+    ///
+    /// [`codes::STORE_UNAVAILABLE`] on any database failure, or any code from
+    /// [`crate::migrate::run`].
+    pub async fn open_with_migrations(
+        path: &Path,
+        rejection_stream: &str,
+        migrations: &[crate::migrate::Migration],
+    ) -> Result<Self> {
         // SQLite creates the file but not the directory holding it, and the failure it reports for a
         // missing directory ("unable to open database file") sends an operator looking at
         // permissions. Create the directory instead of explaining the error.
@@ -279,7 +309,7 @@ impl Store {
             .synchronous(SqliteSynchronous::Full)
             .foreign_keys(true)
             .busy_timeout(Duration::from_secs(30));
-        Self::connect(options, rejection_stream).await
+        Self::connect(options, rejection_stream, migrations).await
     }
 
     /// Open an in-memory store, for tests.
@@ -302,10 +332,14 @@ impl Store {
             .map_err(db)?
             .busy_timeout(Duration::from_secs(30))
             .foreign_keys(true);
-        Self::connect(options, rejection_stream).await
+        Self::connect(options, rejection_stream, crate::migrate::MIGRATIONS).await
     }
 
-    async fn connect(options: SqliteConnectOptions, rejection_stream: &str) -> Result<Self> {
+    async fn connect(
+        options: SqliteConnectOptions,
+        rejection_stream: &str,
+        migrations: &[crate::migrate::Migration],
+    ) -> Result<Self> {
         let pool = SqlitePoolOptions::new()
             .max_connections(8)
             // An in-memory database lives only as long as a connection to it does.
@@ -315,15 +349,51 @@ impl Store {
             .connect_with(options)
             .await
             .map_err(db)?;
-        sqlx::raw_sql(SCHEMA).execute(&pool).await.map_err(db)?;
-        sqlx::raw_sql(APPEND_ONLY_SQLITE)
-            .execute(&pool)
-            .await
-            .map_err(db)?;
-        Ok(Self {
+        let applied = crate::migrate::run(&pool, migrations).await?;
+        let store = Self {
             pool,
             rejection_stream: rejection_stream.to_owned(),
-        })
+        };
+        // §4.1: a migration verifies the chain after applying, before reporting success. Anything
+        // else discovers a corrupting upgrade at audit time, which is the one time it must not be
+        // discovered. Nothing is verified when nothing was applied — a boot that changed no schema
+        // has nothing new to be wrong about, and re-reading every stream on every start would turn
+        // a startup into a full scan.
+        if !applied.is_empty() {
+            store.verify_every_chain().await?;
+            tracing::info!(
+                versions = ?applied,
+                schema_version = crate::migrate::SCHEMA_VERSION,
+                "schema migrated; every chain re-verified"
+            );
+        }
+        Ok(store)
+    }
+
+    /// Re-verify every stream the store holds, and the rejection chain.
+    ///
+    /// An empty store passes vacuously. That is the right answer *here* and the wrong answer at the
+    /// CLI, where `stozher-kernel verify` refuses an empty store outright: this runs on the boot
+    /// that creates the store, where holding no records is the expected state, whereas an operator
+    /// asking whether their audit trail verifies is asking a question an empty box must not answer
+    /// with a green line.
+    ///
+    /// # Errors
+    ///
+    /// Any chain code, or [`codes::STORE_UNAVAILABLE`].
+    async fn verify_every_chain(&self) -> Result<()> {
+        for stream in self.streams().await? {
+            let Some(name) = stream["stream"].as_str() else {
+                continue;
+            };
+            let Some((head_seq, _)) = self.stream_head(name).await? else {
+                continue;
+            };
+            let envelopes = self.range(name, 0, head_seq).await?;
+            stozher_core::chain::verify_chain(&envelopes, name, None)?;
+        }
+        verify_rejection_chain(&self.rejection_chain().await?, &self.rejection_stream)?;
+        Ok(())
     }
 
     /// The kernel's rejection stream name.
@@ -1092,6 +1162,55 @@ impl Store {
             .transpose()
     }
 
+    /// Accrued spend under one mandate, per dimension.
+    ///
+    /// This is the mandate's **own** accrual. A budget is a cap on "this mandate and everything
+    /// delegated beneath it" (§03 §4.3), and that is honoured by accruing each cost to the citing
+    /// mandate *and to every ancestor* at append time — so the figure a cap is compared against is
+    /// read here directly rather than by walking the subtree on every check.
+    ///
+    /// # Errors
+    ///
+    /// [`codes::STORE_UNAVAILABLE`].
+    pub async fn spend(&self, mandate_id: &str) -> Result<BTreeMap<String, String>> {
+        let rows = sqlx::query("SELECT dimension, amount FROM spend WHERE mandate_id = ?1")
+            .bind(mandate_id)
+            .fetch_all(&self.pool)
+            .await
+            .map_err(db)?;
+        Ok(rows
+            .iter()
+            .map(|r| {
+                (
+                    r.get::<String, _>("dimension"),
+                    r.get::<String, _>("amount"),
+                )
+            })
+            .collect())
+    }
+
+    /// The latest registered manifest of every component, for tier-A classification (§08, §10 §3).
+    ///
+    /// One row per component name, so a component that has registered three versions appears once,
+    /// as its newest. Earlier versions are retained forever (§08 §3.5) and are still readable by
+    /// version; what a classifier wants is what the component *is* now.
+    ///
+    /// # Errors
+    ///
+    /// [`codes::STORE_UNAVAILABLE`], or `jcs-malformed-json` on stored corruption.
+    pub async fn registered_manifests(&self) -> Result<Vec<Value>> {
+        let rows = sqlx::query(
+            "SELECT document_json FROM manifests AS m WHERE ordinal = \
+             (SELECT MAX(ordinal) FROM manifests WHERE name = m.name) ORDER BY name",
+        )
+        .fetch_all(&self.pool)
+        .await
+        .map_err(db)?;
+        rows.iter()
+            .map(|r| stozher_core::jcs::parse(&r.get::<String, _>("document_json")))
+            .collect()
+    }
+
     /// The key a component name is already bound to (`manifest-name-key-conflict`).
     ///
     /// # Errors
@@ -1226,20 +1345,44 @@ impl Store {
     ///
     /// [`codes::STORE_UNAVAILABLE`].
     pub async fn query(&self, filter: &EnvelopeQuery<'_>) -> Result<Vec<Value>> {
-        let (predicate, binds) = self.predicate(filter).await?;
+        let (mut predicate, mut binds) = self.predicate(filter).await?;
+        if let Some(after) = filter.after {
+            // Deliberately not in `predicate()`, which `query_count` shares: the count answers "how
+            // many match these filters", and narrowing it by the cursor would make it shrink as the
+            // reader pages, so page three of five would report two records left and read as the end.
+            binds.push(after.emitted_at.to_owned());
+            let emitted = binds.len();
+            binds.push(after.stream.to_owned());
+            let stream = binds.len();
+            // `seq` is inlined rather than bound because the surrounding binds are all `String` and
+            // `seq` is compared against a `BIGINT`; it is a `u64` this crate parsed, so it renders
+            // as digits and nothing else.
+            predicate.push_str(if predicate.is_empty() {
+                " WHERE "
+            } else {
+                " AND "
+            });
+            predicate.push_str(&format!(
+                "(emitted_at < ?{emitted} \
+                 OR (emitted_at = ?{emitted} AND stream > ?{stream}) \
+                 OR (emitted_at = ?{emitted} AND stream = ?{stream} AND seq < {}))",
+                after.seq
+            ));
+        }
         let mut sql = String::from(
             "SELECT id, stream, seq, canonical_json, received_at, human_root, effective_class, \
              policy_violation FROM envelopes",
         );
         sql.push_str(&predicate);
+        // `ORDER BY emitted_at DESC, stream ASC, seq DESC`, and `envelopes_by_cursor` is the index
+        // that shape was added for. The three columns are a total order (`PRIMARY KEY (stream,
+        // seq)`), which is what lets the cursor below resume without skipping or repeating a tie.
         sql.push_str(" ORDER BY emitted_at DESC, stream, seq DESC LIMIT ");
         sql.push_str(&filter.limit.clamp(1, 10_000).to_string());
-        sql.push_str(" OFFSET ");
-        sql.push_str(&filter.offset.max(0).to_string());
 
         // Audited for injection as `SqlSafeStr` requires: every fragment appended above is a
         // literal, and every value reaches the statement through `bind`. The only interpolated
-        // non-literals are `?n` placeholder indices and two clamped integers.
+        // non-literals are `?n` placeholder indices and one clamped integer.
         let mut statement = sqlx::query(sqlx::AssertSqlSafe(sql));
         for bind in &binds {
             statement = statement.bind(bind);
@@ -1826,8 +1969,128 @@ impl Store {
                 });
             }
         }
+        if let Some(accrual) = &plan.spend {
+            // Inside the same transaction as the append. Spend that was committed separately could
+            // be lost while the effect it belongs to survived, and a budget whose total is quietly
+            // below the log it was folded from is worse than no budget at all: it reads as headroom.
+            for mandate in &accrual.mandates {
+                for (dimension, amount) in &accrual.amounts {
+                    let held: Option<String> = sqlx::query(
+                        "SELECT amount FROM spend WHERE mandate_id = ?1 AND dimension = ?2",
+                    )
+                    .bind(mandate)
+                    .bind(dimension)
+                    .fetch_optional(&mut **tx)
+                    .await
+                    .map_err(db)?
+                    .map(|r| r.get::<String, _>("amount"));
+                    let total = match held {
+                        Some(held) => stozher_core::decimal::add(&held, amount)?,
+                        None => amount.to_owned(),
+                    };
+                    sqlx::query(
+                        "INSERT INTO spend (mandate_id, dimension, amount) VALUES (?1, ?2, ?3) \
+                         ON CONFLICT (mandate_id, dimension) DO UPDATE SET amount = ?3",
+                    )
+                    .bind(mandate)
+                    .bind(dimension)
+                    .bind(&total)
+                    .execute(&mut **tx)
+                    .await
+                    .map_err(db)?;
+                }
+            }
+        }
         let _ = (stream, seq);
         Ok(())
+    }
+
+    /// Recompute the spend projection from the envelope stream.
+    ///
+    /// The projection is a fold and this is the proof: drop the table, replay the log, get the same
+    /// figures. It exists so the claim in [`crate::migrate::REBUILDABLE_TABLES`] is something a test
+    /// can execute rather than something a comment asserts — and so an operator who suspects the
+    /// figures has a way to settle it that does not involve trusting them.
+    ///
+    /// # Errors
+    ///
+    /// [`codes::STORE_UNAVAILABLE`], or `schema-type-mismatch` on a cost that is not a decimal.
+    pub async fn rebuild_spend(&self) -> Result<u64> {
+        let mut tx = self.pool.begin_with("BEGIN IMMEDIATE").await.map_err(db)?;
+        sqlx::query("DELETE FROM spend")
+            .execute(&mut *tx)
+            .await
+            .map_err(db)?;
+        let rows = sqlx::query(
+            "SELECT canonical_json, mandate_ref FROM envelopes \
+             WHERE mandate_ref IS NOT NULL ORDER BY stream, seq",
+        )
+        .fetch_all(&mut *tx)
+        .await
+        .map_err(db)?;
+
+        let mut folded = 0u64;
+        let mut totals: BTreeMap<(String, String), String> = BTreeMap::new();
+        for row in &rows {
+            let envelope = stozher_core::jcs::parse(&row.get::<String, _>("canonical_json"))?;
+            let mandate_ref: String = row.get("mandate_ref");
+            let amounts = crate::budget::accrual_of(&envelope);
+            if amounts.is_empty() {
+                continue;
+            }
+            folded += 1;
+            for mandate in self.mandate_line(&mandate_ref).await? {
+                for (dimension, amount) in &amounts {
+                    let key = (mandate.clone(), dimension.clone());
+                    let total = match totals.get(&key) {
+                        Some(held) => stozher_core::decimal::add(held, amount)?,
+                        None => amount.to_owned(),
+                    };
+                    totals.insert(key, total);
+                }
+            }
+        }
+        for ((mandate, dimension), amount) in totals {
+            sqlx::query("INSERT INTO spend (mandate_id, dimension, amount) VALUES (?1, ?2, ?3)")
+                .bind(&mandate)
+                .bind(&dimension)
+                .bind(&amount)
+                .execute(&mut *tx)
+                .await
+                .map_err(db)?;
+        }
+        tx.commit().await.map_err(db)?;
+        Ok(folded)
+    }
+
+    /// A mandate and every ancestor of it, for accrual.
+    ///
+    /// # Errors
+    ///
+    /// [`codes::STORE_UNAVAILABLE`].
+    pub async fn mandate_line(&self, mandate_id: &str) -> Result<Vec<String>> {
+        let mut line = vec![mandate_id.to_owned()];
+        let mut current = mandate_id.to_owned();
+        // Bounded by the same depth policy bounds delegation to, so a cycle written by a future
+        // defect cannot make this walk forever. `mandate_ancestry` enforces the real limit; this is
+        // the belt to its braces, because an unbounded loop inside a write transaction is an outage.
+        for _ in 0..64 {
+            let parent: Option<String> =
+                sqlx::query("SELECT parent FROM mandates WHERE mandate_id = ?1")
+                    .bind(&current)
+                    .fetch_optional(&self.pool)
+                    .await
+                    .map_err(db)?
+                    .and_then(|r| r.get::<Option<String>, _>("parent"));
+            match parent {
+                Some(parent) if !line.contains(&parent) => {
+                    line.push(parent.clone());
+                    current = parent;
+                }
+                _ => break,
+            }
+        }
+        Ok(line)
     }
 
     /// Record a rejection in the kernel's own chained rejection stream (§04 §7).
@@ -2030,9 +2293,126 @@ pub struct EnvelopeQuery<'a> {
     pub violations_only: bool,
     /// Row cap.
     pub limit: i64,
-    /// Rows to skip, so a caller that needs *all* matches can page through them rather than
-    /// silently receiving the first [`Store::query`]'s worth.
-    pub offset: i64,
+    /// Resume after this row, so a caller that needs *all* matches can page through them rather
+    /// than silently receiving the first [`Store::query`]'s worth.
+    pub after: Option<Cursor<'a>>,
+}
+
+/// A position in the audit ordering, so the next page starts exactly where the last one stopped.
+///
+/// # Why not `OFFSET`
+///
+/// `OFFSET n` means "re-run the query and throw away the first n rows", which is only stable if
+/// nothing sorts into the discarded region between one page and the next. This is a log under a live
+/// writer and `emitted-at` is the *emitter's* clock, not arrival order, so a record can land ahead of
+/// rows a reader has already passed. Every later row then shifts down by one and the next page begins
+/// one row early: the reader is handed an envelope they have already seen.
+///
+/// Being precise about what that costs, because the opposite failure would be worse and is not the
+/// one here: **nothing is lost.** The store is append-only and enforced so by triggers, so no row can
+/// vanish from under an offset — the defect is duplication, not truncation. It still matters. A
+/// regulator's export containing one signed envelope twice is a file somebody has to reconcile, and
+/// neither they nor the operator who sent it can tell a paging artefact from a genuine repeat
+/// without re-deriving `id()` across the whole file.
+///
+/// A keyset cursor has no such window at all. It names the last row seen and asks for what sorts
+/// strictly after it, so a concurrent append can add rows but can never renumber the ones already
+/// read.
+///
+/// # Why these three columns
+///
+/// The audit ordering is `emitted_at DESC, stream ASC, seq DESC`, and `PRIMARY KEY (stream, seq)`
+/// makes the last two unique on their own — so the triple is a **total** order. That matters: a
+/// cursor over a non-unique key either skips the rest of a tie or repeats it, and there is no third
+/// option.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Cursor<'a> {
+    /// `emitted-at` of the last row of the previous page.
+    pub emitted_at: &'a str,
+    /// Its stream.
+    pub stream: &'a str,
+    /// Its position in that stream.
+    pub seq: u64,
+}
+
+impl Cursor<'_> {
+    /// Render a cursor for a URL.
+    ///
+    /// The stream comes last and is not escaped, because it is the only field whose alphabet this
+    /// module does not fix: `emitted-at` is §01 §2.3's single timestamp form and `seq` is digits, so
+    /// neither can contain a `/`, and everything after the second one is the stream whatever it
+    /// holds. That is a parsing rule rather than a convention, so no stream name can be constructed
+    /// that splits into a different cursor than the one written.
+    #[must_use]
+    pub fn encode(&self) -> String {
+        format!("{}/{}/{}", self.emitted_at, self.seq, self.stream)
+    }
+}
+
+/// The cursor naming the last row of `records`, or `None` when the page is empty.
+///
+/// Reads the three ordering columns back out of a [`Store::query`] result, so a caller can ask for
+/// the next page without re-deriving what the ordering is.
+#[must_use]
+pub fn cursor_after(records: &[Value]) -> Option<OwnedCursor> {
+    let last = records.last()?;
+    let envelope = last.get("envelope")?;
+    Some(OwnedCursor {
+        emitted_at: envelope.get("emitted-at")?.as_str()?.to_owned(),
+        stream: envelope.get("stream")?.as_str()?.to_owned(),
+        seq: envelope.get("seq")?.as_u64()?,
+    })
+}
+
+/// A [`Cursor`] that owns its strings, for a caller that parsed one out of a request.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OwnedCursor {
+    /// `emitted-at` of the last row of the previous page.
+    pub emitted_at: String,
+    /// Its stream.
+    pub stream: String,
+    /// Its position in that stream.
+    pub seq: u64,
+}
+
+impl OwnedCursor {
+    /// Parse the form [`Cursor::encode`] writes.
+    ///
+    /// Returns `None` rather than a partial cursor: a caller that fell back to "no cursor" on a
+    /// malformed one would answer a request for page four with page one, and look like it had
+    /// succeeded. The console refuses instead.
+    #[must_use]
+    pub fn decode(value: &str) -> Option<Self> {
+        let mut parts = value.splitn(3, '/');
+        let emitted_at = parts.next()?;
+        let seq = parts.next()?.parse().ok()?;
+        let stream = parts.next()?;
+        if emitted_at.is_empty() || stream.is_empty() {
+            return None;
+        }
+        crate::clock::parse_timestamp(emitted_at).ok()?;
+        Some(Self {
+            emitted_at: emitted_at.to_owned(),
+            stream: stream.to_owned(),
+            seq,
+        })
+    }
+
+    /// Borrow it for an [`EnvelopeQuery`].
+    #[must_use]
+    pub fn borrowed(&self) -> Cursor<'_> {
+        Cursor {
+            emitted_at: &self.emitted_at,
+            stream: &self.stream,
+            seq: self.seq,
+        }
+    }
+
+    /// Render it for a URL.
+    #[must_use]
+    pub fn encode(&self) -> String {
+        self.borrowed().encode()
+    }
 }
 
 fn stored_from_row(row: &sqlx::sqlite::SqliteRow) -> StoredEnvelope {

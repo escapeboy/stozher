@@ -162,6 +162,43 @@ pub async fn run_interval(ingest: Ingest, checkpoint_stream: String) {
     }
 }
 
+/// Run [`decay_with_checkpoints`] forever, once per `decay-interval`.
+///
+/// The root README sells "closed loops decay to signed hashes" as a property of the system. It was
+/// implemented, authenticated and working, and **nothing called it** — so until this loop existed the
+/// property was one the operator was providing, not one they were receiving, and a deployment nobody
+/// wrote a crontab entry for kept every payload for ever.
+///
+/// The kernel is the right owner for the same reasons it owns [`run_interval`]: decay checkpoints
+/// streams as part of its own work, the endpoint takes the kernel's own credential, and every
+/// external scheduler is a second place on the host where that credential has to live for nothing
+/// gained. ADR-0003 fixes the compose service count at two, so a cron sidecar was never available
+/// either.
+///
+/// The interval comes from the kernel's configuration rather than from policy — see
+/// [`crate::config::Config::decay_interval_seconds`]. Failures are logged and the loop continues: a
+/// sweep that could not run now must not stop every later sweep, and the payloads it would have
+/// deleted are still past their `retain-until` on the next pass.
+pub async fn run_decay_interval(ingest: Ingest, checkpoint_stream: String, interval_seconds: i64) {
+    let period =
+        std::time::Duration::from_secs(u64::try_from(interval_seconds).unwrap_or(86_400).max(1));
+    loop {
+        tokio::time::sleep(period).await;
+        match decay_with_checkpoints(&ingest, &checkpoint_stream).await {
+            Ok(report) => {
+                if report.payloads_deleted > 0 {
+                    tracing::info!(
+                        payloads_deleted = report.payloads_deleted,
+                        streams_checkpointed = report.streams_checkpointed.len(),
+                        "payloads decayed to their hashes"
+                    );
+                }
+            }
+            Err(e) => tracing::error!(error = %e, "the decay sweep failed"),
+        }
+    }
+}
+
 /// Payload decay, with the checkpoint that must precede it (§04 §4.6, §5.4).
 ///
 /// "Deletion MUST be preceded by a checkpoint of every affected stream", so the pre-deletion head is

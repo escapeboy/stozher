@@ -45,6 +45,33 @@ def test_config_check_names_every_missing_prerequisite(
         assert expected in findings, findings
 
 
+def test_config_check_names_a_downstream_it_cannot_reach(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A declared server that is down must not look like a server nobody configured.
+
+    Its only other observable is that some tools are missing from `tools/list`, which an agent
+    cannot distinguish from "never configured" and an operator sees only if they were reading the
+    gateway's stderr at the moment it started.
+    """
+    config = write_config(
+        tmp_path,
+        '[gateway]\nenabled = true\n\n[kernel]\nurl = "http://127.0.0.1:1"\n\n'
+        "[[servers]]\n"
+        'name = "notes"\n'
+        'transport = "stdio"\n'
+        # A command that cannot start, so the failure is the enumeration and not a slow server.
+        f'command = "{tmp_path / "there-is-no-such-binary"}"\n'
+        "args = []\n",
+    )
+    assert cli(["--config", str(config), "config", "check"]) == 1
+    findings = capsys.readouterr().out
+    assert "downstream 'notes' cannot be enumerated" in findings, findings
+    # And the "nothing is configured" finding is *not* raised: one server is declared. The two
+    # conditions read almost identically to an operator and must not be reported interchangeably.
+    assert "no downstream servers" not in findings, findings
+
+
 def test_keygen_writes_owner_only_key_material_and_refuses_to_overwrite(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:

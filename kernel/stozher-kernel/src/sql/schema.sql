@@ -1,5 +1,15 @@
 -- Stozher event store — spec/04-chain-and-checkpoints.md §8.
 --
+-- FROZEN. This file is migration step 1 (`src/migrate.rs`), and step 1 runs **only against a store
+-- that has never been stamped**. A store an earlier binary already stamped will never see an edit
+-- made here, so changing this file changes the schema of new installs and of nothing else — which is
+-- the worst of both, because the two then diverge silently and every later step has to guess which
+-- shape it is running against.
+--
+-- So: every schema change after v0.2 is a new numbered step in the registry, never an edit here.
+-- `the_baseline_schema_is_frozen` pins this file's digest so that rule fails a test rather than
+-- depending on somebody reading this comment.
+--
 -- PORTABILITY: this DDL is the Postgres-compatible subset. SQLite-only statements (the
 -- append-only triggers) live in `append_only.sqlite.sql` so the dialect seam is one file, not a
 -- scatter of conditionals. Rules observed here:

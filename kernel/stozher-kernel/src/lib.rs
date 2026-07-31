@@ -11,6 +11,11 @@
 //! | Module | Specification section |
 //! |---|---|
 //! | [`store`] | 04 — append-only chained store, payload store, checkpoints, rejections |
+//! | [`budget`] | 03 §4.3 — spend accrual and the cap check |
+//! | [`conformance`] | 08 §4 — what a conformance run must have checked to be green |
+//! | [`driver`] | 08 §4.8 — how the harness invokes the component's declared self-test |
+//! | [`harness`] | 08 §4 — the run itself, against a throwaway kernel it builds and discards |
+//! | [`migrate`] | `docs/product-completion-design.md` §4.1 — forward-only, additive-only schema |
 //! | [`ingest`] | 02 §9.2, 03, 05 §3, 06 §2, 07 — the one validating write path |
 //! | [`policy`] | 05 — policy document, evaluation order, retention ceiling |
 //! | [`manifest`] | 08 — extension manifest and durable-object transitions |
@@ -43,17 +48,22 @@ use std::sync::Arc;
 
 use stozher_core::error::Result;
 
+pub mod budget;
 pub mod checkpoint;
 pub mod clock;
 pub mod codes;
 pub mod config;
+pub mod conformance;
 pub mod console;
+pub mod driver;
 pub mod gatequeue;
 pub mod genesis;
+pub mod harness;
 pub mod http;
 pub mod ingest;
 pub mod keys;
 pub mod manifest;
+pub mod migrate;
 pub mod notify;
 pub mod operator;
 pub mod policy;
@@ -77,7 +87,47 @@ pub struct Kernel {
     console_nonce: [u8; 32],
 }
 
+/// The background loops the service owns, and the handles to stop them.
+///
+/// Both are the kernel's own work rather than an operator's: §04 §4.6 obliges the kernel to emit a
+/// checkpoint per stream on an interval, and payload decay is a property the product advertises,
+/// which should not depend on a crontab line somebody remembered to write (ADR-0014 §3).
+#[derive(Debug)]
+pub struct Maintenance {
+    checkpointer: tokio::task::JoinHandle<()>,
+    decayer: tokio::task::JoinHandle<()>,
+}
+
+impl Maintenance {
+    /// Stop both loops.
+    pub fn abort(&self) {
+        self.checkpointer.abort();
+        self.decayer.abort();
+    }
+}
+
 impl Kernel {
+    /// Start the loops the running service owns.
+    ///
+    /// This exists as a function rather than as two `tokio::spawn` calls inside `main` so that the
+    /// wiring — *these* loops, at *these* intervals, from this configuration — is something a test
+    /// can drive. Written inline in `main`, the only thing binding "the service actually starts the
+    /// sweep" would have been someone reading it, which is how the sweep came to be missing.
+    #[must_use]
+    pub fn spawn_maintenance(&self) -> Maintenance {
+        Maintenance {
+            checkpointer: tokio::spawn(checkpoint::run_interval(
+                self.ingest.clone(),
+                self.config.checkpoint_stream.clone(),
+            )),
+            decayer: tokio::spawn(checkpoint::run_decay_interval(
+                self.ingest.clone(),
+                self.config.checkpoint_stream.clone(),
+                self.config.decay_interval_seconds,
+            )),
+        }
+    }
+
     /// Open the store, load key material, seed the configured root set, and assemble the pipeline.
     ///
     /// # Errors

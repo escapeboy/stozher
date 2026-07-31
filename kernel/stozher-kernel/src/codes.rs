@@ -104,6 +104,43 @@ pub use stozher_core::payload::MEDIA_TYPE_NOT_ALLOWED;
 /// Also not a rejection: there is no authenticated subject to attribute one to.
 pub const CALLER_UNAUTHENTICATED: &str = "x-caller-unauthenticated";
 
+/// An effect reported as `applied` whose accrual exceeds a budget in its mandate chain (§03 §4.3).
+///
+/// A `policy_violation` marker rather than a rejection reason, and deliberately so: §03 §4.3 puts
+/// the blocking on the emitter ("outcome: blocked, envelope still emitted"), so an envelope that
+/// arrives here claiming `applied` past a cap is a component confessing that it acted anyway. The
+/// effect has already happened, and refusing the record would delete the only evidence of it — the
+/// same reasoning as `prohibited-applied`. See [`crate::budget`] and ADR-0015.
+pub const BUDGET_EXCEEDED_APPLIED: &str = "x-budget-exceeded-applied";
+
+/// The store's schema is newer than this build understands.
+///
+/// Not a rejection either — nothing was submitted. It is a startup refusal, and it is deliberately
+/// distinct from [`SCHEMA_MIGRATION_FAILED`]: "you are running an old kernel against a new store"
+/// and "the upgrade did not work" send an operator to different places, and only one of them is
+/// fixed by putting the previous binary back.
+pub const SCHEMA_VERSION_AHEAD: &str = "x-schema-version-ahead";
+
+/// A migration step failed, or the append-only enforcement was not intact once the steps had run.
+///
+/// The run is one transaction, so this is reported over a store that is still at the version it
+/// started at. See [`crate::migrate`].
+pub const SCHEMA_MIGRATION_FAILED: &str = "x-schema-migration-failed";
+
+/// The component under test could not be driven — §08 §4.8's transport failed.
+///
+/// Not a rejection: nothing was submitted, and the component may be perfectly correct in every way
+/// this run failed to observe. It is nevertheless a conformance failure and is recorded as one,
+/// because a component that cannot be certified has not been certified. See [`crate::driver`].
+pub const CONFORMANCE_DRIVER_FAILED: &str = "x-conformance-driver-failed";
+
+/// The harness could not build the throwaway kernel a run is performed against.
+///
+/// Never a statement about the component: nothing had been asked of it yet. It is deliberately
+/// distinct from [`CONFORMANCE_DRIVER_FAILED`], because "our own bootstrap is broken" and "the
+/// component would not talk to us" send an operator to opposite ends of the problem.
+pub const CONFORMANCE_HARNESS_FAILED: &str = "x-conformance-harness-failed";
+
 /// The complete register. A test asserts on this so the list cannot grow without the growth being
 /// a visible, reviewed diff.
 pub const REGISTER: [&str; 15] = [

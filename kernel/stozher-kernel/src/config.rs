@@ -66,6 +66,19 @@ pub struct Config {
     pub console_base_url: Option<String>,
     /// The approver-flood bound of §09 §7.
     pub gate_rate_limit: RateLimit,
+    /// How often the kernel runs payload decay, in seconds (`decay-interval`).
+    ///
+    /// It lives here rather than in policy for ADR-0010's reason: `spec/05 §1`'s member set is
+    /// closed and every member is required, so a new policy member is a breaking wire change that
+    /// invalidates every existing document and every vector at once. A sweep frequency also
+    /// authorizes nothing and changes nobody's rights — *what* may be deleted and *when* is already
+    /// policy's `retention` ceiling, and this only decides how often the kernel gets round to acting
+    /// on what policy already decided.
+    ///
+    /// There is deliberately no way to switch it off. Turning the timer off would not retain
+    /// anything longer — retention is policy's — it would only stop the product doing what it
+    /// advertises, which is the failure `deploy/README.md` §5 was written about.
+    pub decay_interval_seconds: i64,
 }
 
 /// How many gate requests one subject may park in one window (§09 §7).
@@ -132,7 +145,7 @@ pub enum ConfiguredChannel {
     },
 }
 
-const MEMBERS: [&str; 13] = [
+const MEMBERS: [&str; 14] = [
     "bind",
     "database",
     "kernel-seed",
@@ -146,7 +159,14 @@ const MEMBERS: [&str; 13] = [
     "notifications",
     "console-base-url",
     "gate-rate-limit",
+    "decay-interval",
 ];
+
+/// Once a day. Retention deadlines in this system are expressed in days (§05 §6), so a sweep an
+/// order of magnitude finer than the thing it enforces buys nothing, and one coarser than a day
+/// would let a payload outlive its `retain-until` by longer than the shortest retention a policy can
+/// express.
+const DEFAULT_DECAY_INTERVAL_SECONDS: i64 = 86_400;
 
 /// Members of a `notifications[]` entry, per channel. Closed, so a misspelled key is a startup
 /// failure rather than a channel that silently never fires.
@@ -304,6 +324,7 @@ impl Config {
                 .and_then(Value::as_str)
                 .map(str::to_owned),
             gate_rate_limit: parse_rate_limit(map.get("gate-rate-limit"))?,
+            decay_interval_seconds: parse_decay_interval(map.get("decay-interval"))?,
         })
     }
 
@@ -438,6 +459,34 @@ fn parse_rate_limit(entry: Option<&Value>) -> Result<RateLimit> {
     })
 }
 
+/// Parse `decay-interval`, an ISO 8601 duration.
+///
+/// A non-positive interval is refused at startup rather than becoming a loop that spins, and the
+/// absence of the member is the default rather than "no timer": a deployment that says nothing about
+/// decay gets decay, because the alternative — silence meaning "never" — is exactly the defect this
+/// timer exists to close.
+fn parse_decay_interval(entry: Option<&Value>) -> Result<i64> {
+    let Some(entry) = entry else {
+        return Ok(DEFAULT_DECAY_INTERVAL_SECONDS);
+    };
+    let duration = entry.as_str().ok_or_else(|| {
+        Error::new(
+            "config-malformed",
+            "decay-interval must be an ISO 8601 duration",
+        )
+    })?;
+    let seconds = crate::clock::parse_duration_seconds(duration)?;
+    if seconds <= 0 {
+        return Err(Error::new(
+            "config-malformed",
+            "decay-interval must be a positive duration. There is no way to switch decay off: \
+             retention is policy's to decide, and a kernel that never sweeps does not extend it, \
+             it only stops enforcing it",
+        ));
+    }
+    Ok(seconds)
+}
+
 /// Parse one `notifications[]` entry.
 ///
 /// A member ending in `-env` names an environment variable. A member that *looked* like a secret —
@@ -565,6 +614,50 @@ mod tests {
         assert_eq!(
             config.authenticate("wrong").unwrap_err().code(),
             crate::codes::CALLER_UNAUTHENTICATED
+        );
+    }
+
+    #[test]
+    fn a_deployment_that_says_nothing_about_decay_still_gets_it() {
+        // The defect this closes was a property nobody had switched on. Silence must therefore mean
+        // "sweep daily", not "never sweep" — the reading that produced the original defect.
+        assert_eq!(
+            Config::parse(&document()).unwrap().decay_interval_seconds,
+            DEFAULT_DECAY_INTERVAL_SECONDS
+        );
+    }
+
+    #[test]
+    fn a_decay_interval_is_a_duration_and_must_be_positive() {
+        let mut document = document();
+        document["decay-interval"] = Value::from("PT6H");
+        assert_eq!(
+            Config::parse(&document).unwrap().decay_interval_seconds,
+            6 * 60 * 60
+        );
+
+        // The two ways to ask for a timer that never fires, both refused at startup rather than
+        // becoming a loop that spins or one that never runs. They refuse under different codes and
+        // that is not an inconsistency: a negative duration is not a duration at all and never
+        // reaches this member's own rule, so §01 §2.4's parser turns it away first — the same split
+        // `gate-rate-limit.window` already has.
+        document["decay-interval"] = Value::from("-PT1H");
+        assert_eq!(
+            Config::parse(&document).unwrap_err().code(),
+            "encoding-bad-duration",
+            "a negative decay interval was accepted"
+        );
+        document["decay-interval"] = Value::from("PT0S");
+        assert_eq!(
+            Config::parse(&document).unwrap_err().code(),
+            "config-malformed",
+            "a zero decay interval was accepted"
+        );
+        document["decay-interval"] = Value::from(3600);
+        assert_eq!(
+            Config::parse(&document).unwrap_err().code(),
+            "config-malformed",
+            "a bare number was accepted where an ISO 8601 duration is required"
         );
     }
 

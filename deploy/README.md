@@ -360,59 +360,102 @@ back a header and left the data behind, not that you succeeded.
 
 ---
 
-## 5. Retention — and the one thing this install does not do for you
+## 5. Retention — which this install does do for you
 
-The root README sells "closed loops decay to signed hashes" as a property of the system. It is
-implemented, it is authenticated, and it works:
+The root README sells "closed loops decay to signed hashes" as a property of the system. The kernel
+owns the schedule: it sweeps once every `decay-interval`, and a deployment that configures nothing
+sweeps **daily**. There is nothing for you to schedule and no credential to copy anywhere.
+
+Until v0.3 that was not true — the endpoint existed and nothing called it, so an install nobody
+wrote a crontab entry for kept every payload for ever, and the property the pitch claims was one the
+operator was providing rather than one they were receiving. If you followed the previous edition of
+this section and wrote a `bin/stozher-decay` wrapper and a cron entry, **delete both.** They are now
+a second copy of the kernel's bearer credential on the host, doing work the kernel already does.
+Nothing breaks if you leave them: decay is idempotent, so an extra caller deletes nothing extra.
+
+To sweep more often than daily, put a duration in `config/kernel-config.json`:
+
+```json
+{
+  "decay-interval": "PT6H"
+}
+```
+
+It is an ISO 8601 duration and it must be positive. There is no way to switch decay off, and that is
+deliberate: **retention is policy's to decide, not the timer's.** How long a payload may be kept is
+the `retention` ceiling in the published policy document; the timer only decides how often the kernel
+gets round to acting on what policy already said. A kernel that never swept would not retain anything
+longer — it would only stop enforcing the retention its own policy promises.
+
+The endpoint is still there, and running it by hand is still the way to force a sweep now rather than
+at the next tick — after tightening a retention ceiling, say:
 
 ```sh
 # from deploy/, with the kernel up
 set -a; . ./.env; set +a
-curl -s -X POST -H "Authorization: Bearer $STOZHER_KERNEL_TOKEN" \
+curl -fsS -X POST -H "Authorization: Bearer $STOZHER_KERNEL_TOKEN" \
      "http://127.0.0.1:${STOZHER_KERNEL_PORT}/v1/maintenance/decay"
 # -> {"at":"...","decayed-hashes":[],"payloads-deleted":0,"streams-checkpointed":[]}
 ```
 
-**Nothing calls it.** Not compose, not a timer in the kernel, not a cron entry this install writes.
-Until that changes it is an operator duty, and it is stated here rather than left to be discovered:
-a deployment nobody schedules decay on keeps every payload for ever, and the property the pitch
-claims is one you are providing, not one you are receiving.
+`curl -f` matters: without it curl exits zero on a `401`, and a retention job that has silently
+stopped authenticating is the failure you would least like to be quiet.
 
-Schedule it however you already schedule things. A two-line script beside the deployment, and one
-cron entry — a wrapper rather than an inline command because crontab has no line continuation, and
-because `$` in a crontab is the shell's only after cron has finished with the line:
+A sweep checkpoints every affected stream *before* it deletes anything (§04 §4.6, §5.4), so the
+pre-deletion head is publicly fixed first. Deleting a payload changes no signed byte: the hash stays
+in the envelope that committed to it, chain verification never reads a payload, and an auditor
+holding the content independently can still prove it is what was recorded. That is why decay is safe
+to run on a timer at all.
+
+---
+
+## 5a. Upgrading
+
+The store carries a schema version (`PRAGMA user_version`), and the kernel migrates it forward on
+start. The procedure is:
 
 ```sh
-cat > bin/stozher-decay <<'SH'
-#!/usr/bin/env sh
-# Reads deploy/.env for the credential rather than keeping a second copy of it.
-set -eu
-cd "$(dirname "$0")/.."
-set -a; . ./.env; set +a
-exec curl -fsS -X POST -H "Authorization: Bearer $STOZHER_KERNEL_TOKEN" \
-     "http://127.0.0.1:${STOZHER_KERNEL_PORT}/v1/maintenance/decay"
-SH
-chmod 700 bin/stozher-decay
+# from deploy/
+bin/stozher-backup                      # 1. a consistent copy, before anything changes
+git pull && docker compose build kernel # 2. the new image
+docker compose up -d kernel             # 3. it migrates on start
+docker compose logs kernel | tail -20   # 4. read what it did
+docker compose exec -T kernel stozher-kernel verify --config /etc/stozher/kernel-config.json
 ```
 
-```cron
-# Nightly at 04:17, as the operator whose uid the deployment was installed with.
-17 4 * * * /path/to/stozher/deploy/bin/stozher-decay >/dev/null
-```
+**Step 1 is not optional.** A migration is forward-only — there is no downgrade, because a downgrade
+would have to discard records — so the backup is the only way back to the previous version.
 
-`curl -f` matters: without it curl exits zero on a `401`, and a retention job that has silently
-stopped authenticating is the failure you would least like to be quiet. `set -e` in the wrapper
-means cron gets a non-zero status and mails you, which is the point of running it under cron at all.
+Step 3 does the work, and the properties it holds to are worth knowing because they decide what a
+failure means:
 
-**This is an interim measure and should be read as one.** The right owner of that schedule is the
-kernel: it already owns a periodic interval for checkpoints, decay checkpoints streams as part of
-its own work, and the endpoint takes the kernel's own bearer credential — so every external
-scheduler is a second place on the host where that credential has to live, for nothing gained.
-A third compose service to hold a cron daemon is not available either; ADR-0003 fixes the count at
-two, deliberately. A property the product advertises should not depend on a crontab line, and the
-recommendation from this side of the repository is a kernel-owned timer with the interval in
-`kernel-config.json`, next to the checkpoint interval that is already there. Until it exists, the
-cron entry above is the whole of the mechanism.
+* **The whole migration is one transaction.** If any step fails, nothing is applied and the store is
+  still at the version it started at. A failed upgrade leaves a store the previous image can serve.
+* **The chain is re-verified after applying, before the kernel serves anything.** If the records do
+  not verify, the kernel refuses to start rather than serving an audit trail an upgrade damaged.
+  This is why the first start after an upgrade is slower than a restart: it reads every stream. Later
+  restarts apply nothing and verify nothing.
+* **Chain-bearing tables are additive-only.** A migration may add a nullable column or an index; it
+  may not rewrite `canonical_json`, `id`, `prev_hash` or `seq`, and a migration that dropped one of
+  the append-only triggers is refused and rolled back rather than committed.
+
+Step 4 tells you which of the two happened. A migration prints one line naming the versions applied;
+a start that applied nothing prints none, which is the normal case for a restart.
+
+### Version compatibility
+
+**Newer kernel over an older store: supported.** That is the upgrade above.
+
+**Older kernel over a newer store: refused, deliberately.** The kernel exits with
+`x-schema-version-ahead` and does not touch the database. A build that does not know what a column
+means must not serve the chain that has it, and rolling the binary back is not a rollback — the
+store has already moved. If you need the previous version, restore the backup from step 1 with
+`bin/stozher-restore`, which verifies the restored chain and walks the whole restore back if it does
+not verify — so a refused restore never leaves a kernel serving a chain it rejected.
+
+A store the current kernel has never opened reports version 0 and is adopted at first start: every
+statement in the baseline schema is `CREATE ... IF NOT EXISTS`, so an install that predates schema
+versioning is stamped and re-verified rather than rebuilt.
 
 ---
 
@@ -483,6 +526,30 @@ is deliberately not on it: nothing in there can affect the measured install, and
 past what it is measuring is not a cleaner wipe. Everything else in that list is gone, though, so if
 this directory is also a real deployment, take a backup and put it somewhere else first.
 
+### The conformance gate
+
+```sh
+./gate/conformance.sh
+```
+
+`spec/08 §3.3` is "no green conformance run, no registration". This performs one: the Rust harness
+certifying the Python gateway's self-test, cross-language, all seven groups of `spec/08 §4`.
+
+It is a **second** gate rather than a step inside the first, and deliberately. `clean-install.sh`
+lives entirely in Docker; the harness spawns its component as a local subprocess, so folding them
+together would produce a step whose failures were about container plumbing rather than about
+conformance. This one needs only `cargo` and a Python interpreter with the gateway installed
+(`--python <path>` if it is not `gateway/.venv/bin/python`).
+
+It touches no deployment. Every run builds its own kernel in memory, performs its own ceremony,
+mints its own mandate, and discards all of it — which is what makes it safe to point at a manifest
+that arrived by e-mail from a stranger, and what makes the run re-runnable and deterministic as §4
+requires.
+
+**A green run is evidence, not a registration.** It prints a manifest hash and stops. `spec/08 §3.1`
+wants a human signature over that hash, and a harness that submitted its own result would be a
+program deciding that a third party's code may run here.
+
 ---
 
 ## 8. Files
@@ -498,6 +565,7 @@ deploy/
   bin/stozher-backup        VACUUM INTO snapshot + keys + config, mode 0600
   bin/stozher-restore       restore, then refuse to call it restored until the chain verifies
   gate/clean-install.sh     THE GATE
+  gate/conformance.sh       spec 08 section 4, across both implementations
   gate/mcp_probe.py         a stdlib MCP client, so the gate drives the documented command
   demo/notes_server.py      an ordinary downstream MCP server, so the first session has a target
   config/                   written by the ceremony; git-ignored

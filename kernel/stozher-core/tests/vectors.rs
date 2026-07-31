@@ -132,6 +132,7 @@ fn every_vector_validates_against_the_reference_implementation() {
                 "mandate-chain" => check_mandate_chain(&mut report, &id, &doc, vector),
                 "authorization" => check_authorization(&mut report, &id, vector),
                 "payload-binding" => check_payload_binding(&mut report, &id, vector),
+                "money-compare" => check_money_compare(&mut report, &id, vector),
                 "parity" => check_parity(&mut report, &id, vector),
                 unknown => panic!(
                     "{path}: unsupported vector kind {unknown:?}. Vectors are never skipped: \
@@ -516,6 +517,29 @@ fn check_authorization(report: &mut Report, id: &str, vector: &Value) {
             }
         }
     }
+}
+
+/// Exact monetary comparison (§01 §2.5, §03 §4.3).
+///
+/// The expected values come from a third implementation in `generate_vectors.py` — integer tuples,
+/// no `Decimal` and no float — so agreement here is three techniques agreeing rather than one
+/// checking itself. A harness that converted to `f64` to answer these would fail the boundary
+/// vectors, which is the whole reason they are in the corpus.
+fn check_money_compare(report: &mut Report, id: &str, vector: &Value) {
+    let left = vector["left"].as_str().expect("left");
+    let right = vector["right"].as_str().expect("right");
+    let observed = match stozher_core::decimal::compare(left, right) {
+        Ok(std::cmp::Ordering::Less) => "less",
+        Ok(std::cmp::Ordering::Equal) => "equal",
+        Ok(std::cmp::Ordering::Greater) => "greater",
+        Err(_) => "refused",
+    };
+    report.check(
+        id,
+        "comparison",
+        &observed,
+        &vector["expected"].as_str().expect("expected"),
+    );
 }
 
 fn check_payload_binding(report: &mut Report, id: &str, vector: &Value) {

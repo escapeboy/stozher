@@ -359,6 +359,7 @@ impl Ingest {
             payloads: Vec::new(),
             gate_use: None,
             projections: Projections::default(),
+            spend: None,
         };
 
         // (7)-(11) Kind-specific validation, in §05 §3's order for the kinds that carry authority.
@@ -387,6 +388,9 @@ impl Ingest {
                         .walk_mandate(env, &roots, &subject_key, &emitted_at, &policy, None)
                         .await?;
                     plan.human_root = Some(chain_ok);
+                    // Cognition is where money is spent, so this is the path a monetary cap is
+                    // actually reached through (§02 §6, §03 §4.3).
+                    self.accrue_budget(env, &mut plan).await?;
                 }
                 "signal" => {
                     // Signal streams are separate from effect streams so a flood of inbound traffic
@@ -670,6 +674,11 @@ impl Ingest {
         }
         plan.human_root = human_root;
 
+        // §05 §3 step 5 — budget. Shared with the cognition path below rather than written here:
+        // `cost` lives on cognition envelopes (§02 §6), and a budget step that only ran for effects
+        // would never once compare a monetary cap to anything.
+        self.accrue_budget(env, plan).await?;
+
         // A triggered effect cites the standing rule that authorized it (§07 §4).
         self.validate_trigger(env).await?;
 
@@ -801,6 +810,51 @@ impl Ingest {
             .as_str()
             .ok_or_else(|| Error::new("schema-missing-member", "execution.target"))?;
         Ok(vec![(action.to_owned(), target.to_owned())])
+    }
+
+    /// §03 §4.3 — accrue what this envelope consumed, and flag it if a cap in its chain has no room.
+    ///
+    /// **Flags and appends; never refuses.** The consumption has already happened, and refusing the
+    /// envelope would delete the only record that it happened — the same reasoning `ingest` already
+    /// follows for `prohibited-applied` and `policy-denied-applied`. `spec/03 §4.3` puts the
+    /// *blocking* on the emitter ("outcome: blocked, envelope still emitted"); what arrives here
+    /// past a cap is a component confessing that it acted anyway. `docs/product-completion-design.md`
+    /// §4.2 proposed refusing outright, and ADR-0015 records why that was not followed.
+    ///
+    /// The charge reaches the citing mandate **and every ancestor**, because a budget caps "this
+    /// mandate and everything delegated beneath it". Without the ancestry half a delegation chain
+    /// would multiply an organisation's limit by its own depth.
+    async fn accrue_budget(&self, env: &Value, plan: &mut AppendPlan) -> Result<()> {
+        // Only what was actually consumed: `accrual_of` charges an applied effect and a cost-bearing
+        // cognition, and nothing else. Charging a blocked or denied effect would turn a working gate
+        // into a budget leak — an agent refused a thousand times would exhaust the cap having done
+        // nothing at all.
+        let adding = crate::budget::accrual_of(env);
+        if adding.is_empty() {
+            return Ok(());
+        }
+        let Some(mandate_ref) = env["mandate-ref"].as_str() else {
+            return Ok(());
+        };
+        let line = self.store.mandate_line(mandate_ref).await?;
+        for mandate_id in &line {
+            let Some(mandate) = self.store.mandate(mandate_id).await? else {
+                continue;
+            };
+            let Some(cap) = mandate.get("budget") else {
+                continue;
+            };
+            let accrued = self.store.spend(mandate_id).await?;
+            if !crate::budget::would_exceed(cap, &accrued, &adding).is_empty() {
+                plan.policy_violation
+                    .get_or_insert_with(|| codes::BUDGET_EXCEEDED_APPLIED.to_owned());
+            }
+        }
+        plan.spend = Some(crate::store::SpendAccrual {
+            mandates: line,
+            amounts: adding,
+        });
+        Ok(())
     }
 
     async fn walk_mandate(

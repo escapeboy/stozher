@@ -1,0 +1,256 @@
+{
+  "v": "stozher/0.1",
+  "kind": "money-compare",
+  "description": "Exact comparison of monetary decimal strings. `expected` is one of less, equal, greater, refused. A harness MUST compare by value without converting to a binary floating-point number, and MUST refuse every form outside `digits [ '.' digits ]`.",
+  "max-length": 32,
+  "vectors": [
+    {
+      "name": "equal-across-scale",
+      "spec": "01 §2.5, 03 §4.3",
+      "note": "trailing zeros are not a different amount",
+      "left": "25",
+      "right": "25.00",
+      "expected": "equal"
+    },
+    {
+      "name": "equal-across-leading-zeros",
+      "spec": "01 §2.5, 03 §4.3",
+      "note": "leading zeros are not a different amount",
+      "left": "025.00",
+      "right": "25",
+      "expected": "equal"
+    },
+    {
+      "name": "equal-zero",
+      "spec": "01 §2.5, 03 §4.3",
+      "note": "zero written two ways",
+      "left": "0",
+      "right": "0.0",
+      "expected": "equal"
+    },
+    {
+      "name": "nine-is-less-than-ten",
+      "spec": "01 §2.5, 03 §4.3",
+      "note": "the bug lexical comparison always is",
+      "left": "9",
+      "right": "10",
+      "expected": "less"
+    },
+    {
+      "name": "fraction-below-one",
+      "spec": "01 §2.5, 03 §4.3",
+      "note": "",
+      "left": "0.9",
+      "right": "1",
+      "expected": "less"
+    },
+    {
+      "name": "fraction-digit-alignment",
+      "spec": "01 §2.5, 03 §4.3",
+      "note": "compares '09' against '1' if aligned wrongly",
+      "left": "1.09",
+      "right": "1.1",
+      "expected": "less"
+    },
+    {
+      "name": "small-fractions",
+      "spec": "01 §2.5, 03 §4.3",
+      "note": "",
+      "left": "0.0001",
+      "right": "0.001",
+      "expected": "less"
+    },
+    {
+      "name": "one-above-parent-beyond-binary64",
+      "spec": "01 §2.5, 03 §4.3",
+      "note": "2^53 + 1 and 2^53 are the same f64: a child one unit over its parent compared equal",
+      "left": "9007199254740993",
+      "right": "9007199254740992",
+      "expected": "greater"
+    },
+    {
+      "name": "one-below-parent-beyond-binary64",
+      "spec": "01 §2.5, 03 §4.3",
+      "note": "the same boundary from the other side, so a fix cannot be 'refuse everything here'",
+      "left": "9007199254740991",
+      "right": "9007199254740992",
+      "expected": "less"
+    },
+    {
+      "name": "fraction-beyond-binary64",
+      "spec": "01 §2.5, 03 §4.3",
+      "note": "0.1 is not representable in binary64; through a float these compare equal",
+      "left": "0.1000000000000000055511151231",
+      "right": "0.1",
+      "expected": "greater"
+    },
+    {
+      "name": "leading-space",
+      "spec": "01 §2.5, 03 §4.3",
+      "note": "float(' 25') is 25.0; Rust's parse is an error",
+      "left": " 25",
+      "right": "25",
+      "expected": "refused"
+    },
+    {
+      "name": "trailing-space",
+      "spec": "01 §2.5, 03 §4.3",
+      "note": "",
+      "left": "25 ",
+      "right": "25",
+      "expected": "refused"
+    },
+    {
+      "name": "trailing-newline",
+      "spec": "01 §2.5, 03 §4.3",
+      "note": "a `$`-anchored regex would admit this",
+      "left": "25\n",
+      "right": "25",
+      "expected": "refused"
+    },
+    {
+      "name": "exponent-lowercase",
+      "spec": "01 §2.5, 03 §4.3",
+      "note": "an exponent is not a way to write money",
+      "left": "1e5",
+      "right": "100000",
+      "expected": "refused"
+    },
+    {
+      "name": "exponent-uppercase",
+      "spec": "01 §2.5, 03 §4.3",
+      "note": "",
+      "left": "1E5",
+      "right": "100000",
+      "expected": "refused"
+    },
+    {
+      "name": "positive-sign",
+      "spec": "01 §2.5, 03 §4.3",
+      "note": "",
+      "left": "+25",
+      "right": "25",
+      "expected": "refused"
+    },
+    {
+      "name": "negative",
+      "spec": "01 §2.5, 03 §4.3",
+      "note": "a budget is a cap; a negative cap is not a narrower one",
+      "left": "-25",
+      "right": "25",
+      "expected": "refused"
+    },
+    {
+      "name": "infinity",
+      "spec": "01 §2.5, 03 §4.3",
+      "note": "both float parsers accept this and it is not an amount",
+      "left": "inf",
+      "right": "25",
+      "expected": "refused"
+    },
+    {
+      "name": "infinity-spelled-out",
+      "spec": "01 §2.5, 03 §4.3",
+      "note": "",
+      "left": "infinity",
+      "right": "25",
+      "expected": "refused"
+    },
+    {
+      "name": "not-a-number",
+      "spec": "01 §2.5, 03 §4.3",
+      "note": "comparisons against NaN are all false, so it passed",
+      "left": "NaN",
+      "right": "25",
+      "expected": "refused"
+    },
+    {
+      "name": "bare-fraction",
+      "spec": "01 §2.5, 03 §4.3",
+      "note": "the grammar requires a digit before the point",
+      "left": ".5",
+      "right": "1",
+      "expected": "refused"
+    },
+    {
+      "name": "trailing-point",
+      "spec": "01 §2.5, 03 §4.3",
+      "note": "",
+      "left": "5.",
+      "right": "1",
+      "expected": "refused"
+    },
+    {
+      "name": "underscore-separator",
+      "spec": "01 §2.5, 03 §4.3",
+      "note": "",
+      "left": "1_000",
+      "right": "2000",
+      "expected": "refused"
+    },
+    {
+      "name": "comma-separator",
+      "spec": "01 §2.5, 03 §4.3",
+      "note": "",
+      "left": "1,000",
+      "right": "2000",
+      "expected": "refused"
+    },
+    {
+      "name": "two-points",
+      "spec": "01 §2.5, 03 §4.3",
+      "note": "",
+      "left": "1.2.3",
+      "right": "2",
+      "expected": "refused"
+    },
+    {
+      "name": "hexadecimal",
+      "spec": "01 §2.5, 03 §4.3",
+      "note": "",
+      "left": "0x19",
+      "right": "25",
+      "expected": "refused"
+    },
+    {
+      "name": "full-width-digits",
+      "spec": "01 §2.5, 03 §4.3",
+      "note": "numeric to `str.isnumeric`, but not ASCII digits",
+      "left": "２５",
+      "right": "25",
+      "expected": "refused"
+    },
+    {
+      "name": "empty",
+      "spec": "01 §2.5, 03 §4.3",
+      "note": "",
+      "left": "",
+      "right": "1",
+      "expected": "refused"
+    },
+    {
+      "name": "at-the-length-bound",
+      "spec": "01 §2.5, 03 §4.3",
+      "note": "the longest value that is still compared",
+      "left": "11111111111111111111111111111111",
+      "right": "1",
+      "expected": "greater"
+    },
+    {
+      "name": "over-the-length-bound",
+      "spec": "01 §2.5, 03 §4.3",
+      "note": "unbounded input is unbounded work",
+      "left": "111111111111111111111111111111111",
+      "right": "1",
+      "expected": "refused"
+    },
+    {
+      "name": "over-the-length-bound-on-the-right",
+      "spec": "01 §2.5, 03 §4.3",
+      "note": "",
+      "left": "1",
+      "right": "111111111111111111111111111111111",
+      "expected": "refused"
+    }
+  ]
+}
