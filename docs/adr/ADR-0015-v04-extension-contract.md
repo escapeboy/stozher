@@ -139,12 +139,39 @@ defect — it is stated here rather than left to be discovered.
 
 | Item | State |
 |---|---|
-| Conformance harness | **Open.** `spec/08 §3.3`'s "no green conformance run, no registration" is enforced — `store.rs` checks for an applied `kernel.conformance_run` committing to the manifest hash — and the harness that would *produce* such a run does not exist. So the gate is real and the evidence behind it is currently whatever an operator asserts. §4.3 specifies the shape, including that it must attempt the negative cases and be mutation-tested against a deliberately non-conformant component |
+| Conformance harness | **Open**, with the hazard closed first — see §8 |
 | Gateway pre-spend budget check | **Open**, see §6 |
 
 v0.4's gate — "a component not written by us registers through the documented path, its manifest
 governs its classification, and its budget is enforced at spend time" — has its second clause and
 most of its third. The first stands on a harness that has not been built.
+
+## 8. The conformance harness: the result document was built before the checks, deliberately
+
+`spec/08 §3.3` is "no green conformance run, no registration", and the kernel enforces it by looking
+for an applied `kernel.conformance_run` envelope committing to the manifest's hash. **The existence
+of that envelope is the whole gate** — nothing downstream re-derives what the run checked.
+
+That makes a partially-built harness *worse than none*. One that ran two of §08 §4's seven groups and
+emitted its result would unlock registration on the strength of five checks that never happened, and
+would be indistinguishable from a harness that ran them all. The failure would surface as a
+third-party component in production that nobody had certified.
+
+So the order was inverted: `conformance.rs` is the **result document and the rule about it**, and it
+exists before any group does. A run starts red, `REQUIRED_GROUPS` is fixed from §08 §4 rather than
+assembled from whatever executed, an unrecorded group is `NotRun` — which is not an outcome — and
+only `durable-objects` may ever be `NotApplicable`, because a harness able to opt out of §4.4's
+negative cases would certify a component exactly where certification matters. The evidence names all
+seven whatever happened to them, so a red run tells an operator *which* checks are missing.
+→ `a_run_is_green_only_when_every_group_is_satisfied` removes each group in turn and asserts the run
+goes red; `the_negative_cases_cannot_be_declared_inapplicable` and
+`a_group_the_specification_does_not_define_is_refused` are the two panics.
+
+**None of the seven groups is implemented.** Several need machinery this release did not build: a
+live component to drive, N > `max-samples` calls for §4.3, a kernel that can be made unreachable for
+§4.5, and the eight refusals of §4.4. What is closed is the hazard — from here, adding a check can
+only move a group from red to green, and no amount of half-finishing can produce a green run that was
+not earned.
 
 ## Related
 

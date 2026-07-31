@@ -12,6 +12,7 @@
 //! |---|---|
 //! | [`store`] | 04 — append-only chained store, payload store, checkpoints, rejections |
 //! | [`budget`] | 03 §4.3 — spend accrual and the cap check |
+//! | [`conformance`] | 08 §4 — what a conformance run must have checked to be green |
 //! | [`migrate`] | `docs/product-completion-design.md` §4.1 — forward-only, additive-only schema |
 //! | [`ingest`] | 02 §9.2, 03, 05 §3, 06 §2, 07 — the one validating write path |
 //! | [`policy`] | 05 — policy document, evaluation order, retention ceiling |
@@ -50,6 +51,7 @@ pub mod checkpoint;
 pub mod clock;
 pub mod codes;
 pub mod config;
+pub mod conformance;
 pub mod console;
 pub mod gatequeue;
 pub mod genesis;
