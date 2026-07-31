@@ -25,6 +25,7 @@ import secrets
 from collections.abc import Callable
 from typing import Any, NamedTuple
 
+from . import budget as budget_module
 from . import clock as clock_module
 from .canonical import CanonicalizationError, object_hash
 from .classify import Classification, Classifier
@@ -87,6 +88,7 @@ class Enforcer:
         clock: clock_module.Clock | None = None,
         revocations_of: Callable[[Policy], tuple[list[dict[str, Any]], bool]] | None = None,
         kernel: KernelClient | None = None,
+        budgets: budget_module.BudgetFeed | None = None,
     ) -> None:
         self._config = config
         self._store = store
@@ -111,6 +113,15 @@ class Enforcer:
             # rather than a refusal to construct — but it must never be silent.
             logger.warning(
                 "no revocation feed is wired: mandate revocation will be detective, not preventive"
+            )
+        #: The mandate chain's caps and accrued spend (§03 §4.3). Without it a budget is enforced
+        #: only at ingest, after the spend — detection rather than prevention. Its absence is a
+        #: warning for the same reason the revocation feed's is: the enforcer still refuses
+        #: correctly on every other ground, and the gap must not be silent.
+        self._budgets = budgets
+        if budgets is None:
+            logger.warning(
+                "no budget feed is wired: mandate budgets will be detective, not preventive"
             )
         self._clock = clock or clock_module.Clock()
         self._component = config.gateway.component
@@ -151,6 +162,7 @@ class Enforcer:
             session, call, classification, target, args_hash, policy, revocations
         )
         self._require_online_enough(session, call, classification, target, args_hash, policy, fresh)
+        self._require_budget(session, call, classification, target, args_hash, policy)
 
         decision = policy.decision_for(classification.classification)
         first_call = not classification.known
@@ -413,6 +425,58 @@ class Enforcer:
                 classification_tier=classification.tier,
                 envelope_id=envelope_id,
             ) from e
+
+    def _require_budget(
+        self,
+        session: Session,
+        call: Call,
+        classification: Classification,
+        target: str,
+        args_hash: str,
+        policy: Policy,
+    ) -> None:
+        """§03 §4.3 — an exhausted budget blocks, like an expired mandate.
+
+        This is the *prevention* half. By the time an envelope reaches the kernel the spend has
+        already happened and all the kernel can do is flag it, so a budget enforced only there is
+        detection — which `docs/product-completion-design.md` §1 names a product defect rather than a
+        polish item. The envelope is still emitted, with `outcome: "blocked"`, exactly as §03 §4.3
+        says: a refusal is a record, and an action nobody can see refused is not governed.
+
+        The caps come from the whole mandate chain, because a budget bounds "this mandate and
+        everything delegated beneath it" — a delegate's own generous cap means nothing when its
+        grantor is exhausted.
+        """
+        if self._budgets is None:
+            return
+        # One request, decided before it is made. `cost` is not known until after the call, so what
+        # is checked here is what this call is *about* to add.
+        adding = {"requests": "1"}
+        chain = self._budgets.chain(session.mandate_ref)
+        if chain is None:
+            # Never read. Decide against the mandate the gateway is acting under, which it holds
+            # locally: one that declares no budget proceeds, one that does is refused until the
+            # figures are readable — acting under a cap whose spend is unknown is how a cap silently
+            # stops existing. An *ancestor's* cap is invisible here, which is the same residue every
+            # offline decision in this component carries.
+            declared = session.mandate.get("budget")
+            exceeded = sorted(declared) if isinstance(declared, dict) and declared else []
+        else:
+            exceeded = budget_module.exceeded_dimensions(chain, adding)
+        if not exceeded:
+            return
+        envelope_id = self._emit_effect(
+            session, call, classification, target, args_hash, "blocked", policy
+        )
+        raise refusal(
+            "blocked",
+            "mandate-budget-exhausted",
+            f"the mandate chain has no remaining budget for: {', '.join(exceeded)}",
+            action=classification.action,
+            classification=classification.classification,
+            classification_tier=classification.tier,
+            envelope_id=envelope_id,
+        )
 
     def _require_online_enough(
         self,

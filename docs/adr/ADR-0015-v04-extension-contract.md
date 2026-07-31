@@ -129,22 +129,17 @@ delegated mandate necessarily has a second grantee, and acting under this fixtur
 action and an approval — machinery that would make the test about the gate. The walk that produces
 the charge list is asserted directly; the two-level end-to-end spend is not.
 
-**No gateway-side pre-spend check yet.** §03 §4.3's blocking belongs to the emitter, and the kernel
-now exposes the figures it would need. The gateway does not yet consult them before acting, so today
-an over-budget action is *recorded* as a violation rather than *prevented*. That is the difference
-between detection and prevention, which `docs/product-completion-design.md` §1 names as a product
-defect — it is stated here rather than left to be discovered.
+**The pre-spend check is in — see §9.**
 
 ## 7. What v0.4 has not closed
 
 | Item | State |
 |---|---|
 | Conformance harness | **Open**, with the hazard closed first — see §8 |
-| Gateway pre-spend budget check | **Open**, see §6 |
 
 v0.4's gate — "a component not written by us registers through the documented path, its manifest
-governs its classification, and its budget is enforced at spend time" — has its second clause and
-most of its third. The first stands on a harness that has not been built.
+governs its classification, and its budget is enforced at spend time" — has its second and third
+clauses. The first stands on a harness that has not been built.
 
 ## 8. The conformance harness: the result document was built before the checks, deliberately
 
@@ -172,6 +167,36 @@ live component to drive, N > `max-samples` calls for §4.3, a kernel that can be
 §4.5, and the eight refusals of §4.4. What is closed is the hazard — from here, adding a check can
 only move a group from red to green, and no amount of half-finishing can produce a green run that was
 not earned.
+
+## 9. Budget prevention, and the outage the first version of it caused
+
+`GET /v1/mandates/{id}/budget` returns every mandate in the chain with its caps and its accrued
+spend, and the gateway consults it before anything is forwarded. An exhausted cap now **blocks** —
+`outcome: "blocked"`, envelope still emitted, exactly as §03 §4.3 says — instead of being flagged
+after the effect happened. The caps come from the whole ancestry, because otherwise delegation is a
+way to mint budget: a delegate hands itself a generous cap and its grantor's exhaustion never
+reaches it.
+
+**The first version of this check was an outage, and the shape of the mistake is worth keeping.** It
+treated a mandate the kernel could not resolve as "caps unknown, therefore no headroom" and refused.
+That reads as the safe direction and is not: refusing there is the *budget* check doing the
+`_require_mandate` walk's job, which already runs first and already refuses an unresolvable chain. The
+effect was that every proxied call in the end-to-end suite was blocked for a reason that had nothing
+to do with budgets. Five tests caught it immediately, which is the only reason it is a paragraph here
+rather than an incident.
+
+The rules that came out of it, each with a test that would fail without it:
+
+* a dimension no mandate names is genuinely unbounded — budgets are opt-in per dimension;
+* a mandate that does not resolve states no cap, and the mandate walk handles the rest;
+* a cap this build cannot *read* is not headroom, so a typo cannot become an unlimited budget;
+* an empty chain permits, so a deployment with no budgets is unaffected by the feature existing.
+
+**Offline, the check decides against the mandate the gateway holds.** When the chain has never been
+read, a mandate declaring no budget proceeds and one declaring a budget is refused until the figures
+are readable — acting under a cap whose spend is unknown is how a cap silently stops existing. An
+*ancestor's* cap is invisible in that state, which is the same residue every offline decision in this
+component carries, and it is stated rather than papered over.
 
 ## Related
 

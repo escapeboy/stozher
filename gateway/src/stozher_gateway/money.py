@@ -26,7 +26,7 @@ from __future__ import annotations
 import re
 from decimal import Decimal
 
-__all__ = ["MAX_LEN", "MoneyFormatError", "at_most", "compare", "parse"]
+__all__ = ["MAX_LEN", "MoneyFormatError", "add", "at_most", "compare", "parse"]
 
 #: The longest monetary string this implementation will compare. Bounded for the reason
 #: `counts.by-action` is: an unbounded string is unbounded work for every consumer that compares it.
@@ -83,3 +83,24 @@ def at_most(left: object, right: object) -> bool:
         MoneyFormatError: if either value is not a decimal string.
     """
     return compare(left, right) <= 0
+
+
+def add(left: object, right: object) -> str:
+    """Add two monetary values exactly, keeping the wider of the two scales.
+
+    The Python half of `stozher_core::decimal::add`. A running total is what a budget is compared
+    against, so doing it in binary64 would make the total drift from the records it was folded from —
+    and `0.1 + 0.2` would not be `0.3`.
+
+    Raises:
+        MoneyFormatError: if either value is not a decimal string, or if the sum would exceed
+            `MAX_LEN`. A total that outgrew the type would otherwise be truncated, and a spend figure
+            that silently got smaller is the one direction a budget must never be wrong in.
+    """
+    a, b = parse(left), parse(right)
+    scale = max(-a.as_tuple().exponent, -b.as_tuple().exponent, 0)  # type: ignore[operator]
+    total = a + b
+    rendered = f"{total:.{scale}f}" if scale else str(total)
+    if len(rendered) > MAX_LEN:
+        raise MoneyFormatError(f"the sum of {left!r} and {right!r} exceeds {MAX_LEN} characters")
+    return rendered

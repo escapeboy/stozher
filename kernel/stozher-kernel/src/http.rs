@@ -52,6 +52,7 @@ pub fn router(kernel: Arc<Kernel>) -> Router {
         .route("/v1/envelopes/{id}", get(get_envelope))
         .route("/v1/envelopes/{id}/mandate", get(get_envelope_mandate))
         .route("/v1/manifests", get(get_manifests))
+        .route("/v1/mandates/{mandate_id}/budget", get(get_mandate_budget))
         .route("/v1/streams", get(get_streams))
         .route("/v1/streams/{stream}/verify", get(get_stream_verify))
         .route("/v1/rejections", get(get_rejections))
@@ -661,6 +662,57 @@ async fn get_streams(State(kernel): State<Arc<Kernel>>, headers: HeaderMap) -> R
         ),
         Err(e) => unavailable(&e),
     }
+}
+
+/// What a mandate has spent, and what its chain caps it at (§03 §4.3).
+///
+/// The emitter's half of budget enforcement. §03 §4.3 puts the blocking on the component — "exhausted
+/// budget blocks like an expired mandate: `outcome: "blocked"`, envelope still emitted" — and a
+/// component cannot block on a figure it has no way to read. Without this route the kernel could only
+/// *record* an over-budget effect after the fact, which is detection rather than prevention.
+///
+/// The caps come from the whole ancestry, because a budget bounds "this mandate and everything
+/// delegated beneath it": a delegate's own generous cap means nothing if its grantor is exhausted.
+async fn get_mandate_budget(
+    State(kernel): State<Arc<Kernel>>,
+    headers: HeaderMap,
+    Path(mandate_id): Path<String>,
+) -> Response {
+    if let Caller::Refused(response) = caller(&kernel, &headers) {
+        return response;
+    }
+    let store = kernel.ingest.store();
+    let line = match store.mandate_line(&mandate_id).await {
+        Ok(line) => line,
+        Err(e) => return unavailable(&e),
+    };
+    let mut entries = Vec::new();
+    for id in &line {
+        let mandate = match store.mandate(id).await {
+            Ok(Some(mandate)) => mandate,
+            // A mandate this build cannot resolve contributes no cap. It is reported rather than
+            // skipped silently, so a component can tell "no limit" from "we could not look".
+            Ok(None) => {
+                entries.push(serde_json::json!({ "mandate": id, "resolved": false }));
+                continue;
+            }
+            Err(e) => return unavailable(&e),
+        };
+        let spent = match store.spend(id).await {
+            Ok(spent) => spent,
+            Err(e) => return unavailable(&e),
+        };
+        entries.push(serde_json::json!({
+            "mandate": id,
+            "resolved": true,
+            "budget": mandate.get("budget").cloned().unwrap_or(Value::Null),
+            "spent": spent
+        }));
+    }
+    json(
+        StatusCode::OK,
+        &serde_json::json!({ "mandate": mandate_id, "chain": entries }),
+    )
 }
 
 /// Every registered component's current manifest — the tier-A classification source (§10 §3).

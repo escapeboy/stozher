@@ -226,3 +226,57 @@ async fn an_effect_within_budget_carries_no_violation() {
     let id = world.accept(&effect, &[]).await;
     assert_eq!(violation(&world, &id).await, None);
 }
+
+#[tokio::test]
+async fn the_budget_route_reports_the_whole_chain_so_a_component_can_block_before_it_spends() {
+    // §03 §4.3 puts the blocking on the emitter, and a component cannot block on a figure it has no
+    // way to read. Without this route the kernel could only *record* an over-budget effect after the
+    // fact, which is detection rather than prevention.
+    use axum::body::Body;
+    use axum::http::{Request, StatusCode};
+    use http_body_util::BodyExt;
+    use std::sync::Arc;
+    use stozher_kernel::http;
+    use stozher_testkit::TOKEN;
+    use tower::ServiceExt;
+
+    let world = world().await;
+    let mandate = world.budgeted_mandate.clone();
+    for _ in 0..3 {
+        let effect = world
+            .effect("github.get_file", "read", json!({ "mandate-ref": mandate }))
+            .await;
+        world.accept(&effect, &[]).await;
+    }
+
+    let response = http::router(Arc::clone(&world.kernel))
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri(format!("/v1/mandates/{mandate}/budget"))
+                .header("authorization", format!("Bearer {TOKEN}"))
+                .body(Body::empty())
+                .expect("a request"),
+        )
+        .await
+        .expect("the router responds");
+    assert_eq!(response.status(), StatusCode::OK);
+    let bytes = response
+        .into_body()
+        .collect()
+        .await
+        .expect("collecting")
+        .to_bytes();
+    let body: serde_json::Value = serde_json::from_slice(&bytes).expect("json");
+
+    let chain = body["chain"].as_array().expect("chain");
+    let entry = chain
+        .iter()
+        .find(|e| e["mandate"] == mandate.as_str())
+        .expect("the mandate itself is in its own chain");
+    assert_eq!(entry["resolved"].as_bool(), Some(true));
+    assert_eq!(entry["budget"]["requests"].as_i64(), Some(10));
+    // The accrued figure is what makes the cap actionable: a cap without a total is a number a
+    // component can do nothing with.
+    assert_eq!(entry["spent"]["requests"].as_str(), Some("3"));
+}

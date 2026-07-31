@@ -20,6 +20,7 @@ from typing import Any
 from . import clock as clock_module
 from . import crypto
 from .background import BackgroundLoop
+from .budget import BudgetFeed
 from .canonical import sha256_hex
 from .classify import Classifier
 from .config import CallerConfig, GatewayConfig
@@ -183,6 +184,9 @@ class Gateway:
         self.revocations = RevocationFeed(
             self.kernel, self.store, config.kernel.policy_refresh_seconds, self._clock
         )
+        # §03 §4.3's blocking half. The kernel records an over-budget effect; only the emitter can
+        # decline to make it, so without this a budget is detection rather than prevention.
+        self.budgets = BudgetFeed(self.kernel, config.kernel.policy_refresh_seconds, self._clock)
         self.enforcer = Enforcer(
             config,
             self.store,
@@ -196,6 +200,7 @@ class Gateway:
             # a component must keep enforcing while the kernel is unreachable (maxim 5) — but it is
             # now a cache of a fact the kernel holds, not the only place the fact exists.
             self.kernel,
+            self.budgets,
         )
         self.session: Session | None = None
         self._downstream: dict[str, Downstream] = {}
