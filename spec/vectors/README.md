@@ -32,7 +32,7 @@ other permission bits. Key material is excluded by `.gitignore` and `.dockerigno
 
 ```
 spec/vectors/
-  index.json               enumerates every vector file with its `kind`
+  index.json               enumerates every vector file with its `kind` and `role`
   <name>.json              one file per kind
   generate_vectors.py      the independent generator (see §6)
   README.md                this file
@@ -44,21 +44,22 @@ spec/vectors/
 {
   "v": "stozher/0.1",
   "encoding": { "binary": "lowercase-hex", … },
-  "files": [ { "path": "jcs-canonicalization.json", "kind": "jcs", "count": 22, "description": "…" } ]
+  "files": [ { "path": "jcs-canonicalization.json", "kind": "jcs", "role": "primitive",
+               "count": 22, "description": "…" } ]
 }
 ```
 
 A harness MUST read `index.json`, dispatch on `files[].kind`, and **fail on an unrecognised kind
-rather than skipping it**.
+rather than skipping it**. Adding a vector file of a known kind therefore extends coverage with no
+harness change; adding a new kind fails loudly until support is written, which is the intended
+behaviour — silently skipped vectors are worse than absent ones.
 
 Each file also carries a **`role`**. `primitive` is every implementation: canonicalization, hashing,
 signatures, envelope shape, the chain, the mandate walk, the gate algorithm, policy evaluation.
 `kernel` is an implementation playing the kernel's part — manifest validation, checkpoint
 attestation, trigger resolution. A harness that implements no kernel MAY decline the `kernel` files
-(§08 §4.1 scopes conformance to "the primitives it uses"), and MUST say which it declined. Declining
-is a statement; silence is a skip, and a skip is what this section exists to forbid. Adding a vector file of a known kind therefore extends coverage with no
-harness change; adding a new kind fails loudly until support is written, which is the intended
-behaviour — silently skipped vectors are worse than absent ones.
+(§08 §4.1 scopes conformance to "the primitives it uses"), and MUST say **which** it declined.
+Declining is a statement; silence is a skip, and a skip is the thing this section exists to forbid.
 
 Each vector file:
 
