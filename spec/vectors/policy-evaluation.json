@@ -1,0 +1,1224 @@
+{
+  "v": "stozher/0.1",
+  "kind": "policy-evaluation",
+  "description": "Classification and the gate rule (spec 05 section 3). Evaluate `request` against `policy`: the resulting class MUST equal `expected.class` and the gate rule's verdict MUST equal `expected.decision`. `request.manifest-class` is the class a registered manifest proposes, or null when the component has none.",
+  "keys": [
+    {
+      "label": "org:policy",
+      "secret-key": "60fc63a893fa7901ea5003fed97c2cba79d1b05f98942f5a6bcbc8829d1eac93",
+      "public-key": "4e05c3ea19acf2ece1ad5d7602ef4f563f09b08e10ea294006aa8b655aa38f29",
+      "key-id": "ed25519:4e05c3ea19acf2ece1ad5d7602ef4f563f09b08e10ea294006aa8b655aa38f29"
+    }
+  ],
+  "vectors": [
+    {
+      "name": "default-unknown-when-nobody-has-an-opinion",
+      "description": "no reclassification, no by-action entry and no manifest proposal: the default decides",
+      "policy": {
+        "v": "stozher/0.1",
+        "kind": "policy",
+        "policy-version": "2026.07.1",
+        "issued-at": "2026-07-26T08:00:00.000Z",
+        "classification": {
+          "by-action": {},
+          "reclassify": [],
+          "default-unknown": "consequential"
+        },
+        "gate-rules": [
+          {
+            "classes": [
+              "consequential"
+            ],
+            "decision": "gate",
+            "approvers": [
+              "human:ivan"
+            ]
+          },
+          {
+            "classes": [
+              "prohibited"
+            ],
+            "decision": "deny"
+          },
+          {
+            "classes": [
+              "read",
+              "benign"
+            ],
+            "decision": "allow"
+          }
+        ],
+        "evidence-ttl": {
+          "read": "P0D",
+          "benign": "P30D",
+          "consequential": "P365D",
+          "prohibited": "P3650D"
+        },
+        "budgets": {
+          "defaults": {
+            "requests": 10000,
+            "money-eur": "50.00"
+          }
+        },
+        "delegation": {
+          "max-depth": 3,
+          "max-standing-lifetime": "P90D"
+        },
+        "offline": {
+          "read": "allow",
+          "benign": "allow",
+          "consequential": "block",
+          "prohibited": "block"
+        },
+        "aggregate-max-window": "PT5M",
+        "revoke-cached": false,
+        "max-staleness-seconds": 300,
+        "checkpoint-interval": "PT1H",
+        "profile": "vector-fixture",
+        "sig": {
+          "alg": "ed25519",
+          "key": "ed25519:4e05c3ea19acf2ece1ad5d7602ef4f563f09b08e10ea294006aa8b655aa38f29",
+          "value": "db8447e3791ab30c82ec98331e67aaee5b2e7d3d3d2701a57511e205399438d43baa838e90e60400574f86e771994e1cedd17d1914e0bc553c4cdec5d77e8a08"
+        }
+      },
+      "request": {
+        "subject": "agent:claude-code/ivan-mbp",
+        "action": "github.delete_repo",
+        "resource": "repo:acme/backend",
+        "manifest-class": null
+      },
+      "expected": {
+        "class": "consequential",
+        "decision": "gate"
+      }
+    },
+    {
+      "name": "manifest-proposal-beats-default-unknown",
+      "description": "spec 05 section 3 step 1: a registered manifest's declared class is consulted before default-unknown",
+      "policy": {
+        "v": "stozher/0.1",
+        "kind": "policy",
+        "policy-version": "2026.07.1",
+        "issued-at": "2026-07-26T08:00:00.000Z",
+        "classification": {
+          "by-action": {},
+          "reclassify": [],
+          "default-unknown": "consequential"
+        },
+        "gate-rules": [
+          {
+            "classes": [
+              "consequential"
+            ],
+            "decision": "gate",
+            "approvers": [
+              "human:ivan"
+            ]
+          },
+          {
+            "classes": [
+              "prohibited"
+            ],
+            "decision": "deny"
+          },
+          {
+            "classes": [
+              "read",
+              "benign"
+            ],
+            "decision": "allow"
+          }
+        ],
+        "evidence-ttl": {
+          "read": "P0D",
+          "benign": "P30D",
+          "consequential": "P365D",
+          "prohibited": "P3650D"
+        },
+        "budgets": {
+          "defaults": {
+            "requests": 10000,
+            "money-eur": "50.00"
+          }
+        },
+        "delegation": {
+          "max-depth": 3,
+          "max-standing-lifetime": "P90D"
+        },
+        "offline": {
+          "read": "allow",
+          "benign": "allow",
+          "consequential": "block",
+          "prohibited": "block"
+        },
+        "aggregate-max-window": "PT5M",
+        "revoke-cached": false,
+        "max-staleness-seconds": 300,
+        "checkpoint-interval": "PT1H",
+        "profile": "vector-fixture",
+        "sig": {
+          "alg": "ed25519",
+          "key": "ed25519:4e05c3ea19acf2ece1ad5d7602ef4f563f09b08e10ea294006aa8b655aa38f29",
+          "value": "db8447e3791ab30c82ec98331e67aaee5b2e7d3d3d2701a57511e205399438d43baa838e90e60400574f86e771994e1cedd17d1914e0bc553c4cdec5d77e8a08"
+        }
+      },
+      "request": {
+        "subject": "agent:claude-code/ivan-mbp",
+        "action": "github.delete_repo",
+        "resource": "repo:acme/backend",
+        "manifest-class": "read"
+      },
+      "expected": {
+        "class": "read",
+        "decision": "allow"
+      }
+    },
+    {
+      "name": "by-action-beats-the-manifest-proposal",
+      "description": "the organization's table wins over the component's proposal, in either direction",
+      "policy": {
+        "v": "stozher/0.1",
+        "kind": "policy",
+        "policy-version": "2026.07.1",
+        "issued-at": "2026-07-26T08:00:00.000Z",
+        "classification": {
+          "by-action": {
+            "github.delete_repo": "prohibited"
+          },
+          "reclassify": [],
+          "default-unknown": "consequential"
+        },
+        "gate-rules": [
+          {
+            "classes": [
+              "consequential"
+            ],
+            "decision": "gate",
+            "approvers": [
+              "human:ivan"
+            ]
+          },
+          {
+            "classes": [
+              "prohibited"
+            ],
+            "decision": "deny"
+          },
+          {
+            "classes": [
+              "read",
+              "benign"
+            ],
+            "decision": "allow"
+          }
+        ],
+        "evidence-ttl": {
+          "read": "P0D",
+          "benign": "P30D",
+          "consequential": "P365D",
+          "prohibited": "P3650D"
+        },
+        "budgets": {
+          "defaults": {
+            "requests": 10000,
+            "money-eur": "50.00"
+          }
+        },
+        "delegation": {
+          "max-depth": 3,
+          "max-standing-lifetime": "P90D"
+        },
+        "offline": {
+          "read": "allow",
+          "benign": "allow",
+          "consequential": "block",
+          "prohibited": "block"
+        },
+        "aggregate-max-window": "PT5M",
+        "revoke-cached": false,
+        "max-staleness-seconds": 300,
+        "checkpoint-interval": "PT1H",
+        "profile": "vector-fixture",
+        "sig": {
+          "alg": "ed25519",
+          "key": "ed25519:4e05c3ea19acf2ece1ad5d7602ef4f563f09b08e10ea294006aa8b655aa38f29",
+          "value": "22ab903ed657e1fbc9d9a3930858ecbfef1b48b293004327b40db468e03cc250ef061be9c11d29ef5e6554f1f99f4158755ddaf0868875f9055a691373ef2c06"
+        }
+      },
+      "request": {
+        "subject": "agent:claude-code/ivan-mbp",
+        "action": "github.delete_repo",
+        "resource": "repo:acme/backend",
+        "manifest-class": "read"
+      },
+      "expected": {
+        "class": "prohibited",
+        "decision": "deny"
+      }
+    },
+    {
+      "name": "reclassify-beats-by-action",
+      "description": "reclassify is consulted first",
+      "policy": {
+        "v": "stozher/0.1",
+        "kind": "policy",
+        "policy-version": "2026.07.1",
+        "issued-at": "2026-07-26T08:00:00.000Z",
+        "classification": {
+          "by-action": {
+            "github.delete_repo": "read"
+          },
+          "reclassify": [
+            {
+              "subject": "*",
+              "action": "github.delete_repo",
+              "class": "prohibited"
+            }
+          ],
+          "default-unknown": "consequential"
+        },
+        "gate-rules": [
+          {
+            "classes": [
+              "consequential"
+            ],
+            "decision": "gate",
+            "approvers": [
+              "human:ivan"
+            ]
+          },
+          {
+            "classes": [
+              "prohibited"
+            ],
+            "decision": "deny"
+          },
+          {
+            "classes": [
+              "read",
+              "benign"
+            ],
+            "decision": "allow"
+          }
+        ],
+        "evidence-ttl": {
+          "read": "P0D",
+          "benign": "P30D",
+          "consequential": "P365D",
+          "prohibited": "P3650D"
+        },
+        "budgets": {
+          "defaults": {
+            "requests": 10000,
+            "money-eur": "50.00"
+          }
+        },
+        "delegation": {
+          "max-depth": 3,
+          "max-standing-lifetime": "P90D"
+        },
+        "offline": {
+          "read": "allow",
+          "benign": "allow",
+          "consequential": "block",
+          "prohibited": "block"
+        },
+        "aggregate-max-window": "PT5M",
+        "revoke-cached": false,
+        "max-staleness-seconds": 300,
+        "checkpoint-interval": "PT1H",
+        "profile": "vector-fixture",
+        "sig": {
+          "alg": "ed25519",
+          "key": "ed25519:4e05c3ea19acf2ece1ad5d7602ef4f563f09b08e10ea294006aa8b655aa38f29",
+          "value": "dcb8e23db758fb1c9c92172dd0585867afa463568aaef4d196b7466ffeab88f8400a66fd800db8f3cb4959a78d5a30696c4d6d8feee97d4adc8acd1ef68f150d"
+        }
+      },
+      "request": {
+        "subject": "agent:claude-code/ivan-mbp",
+        "action": "github.delete_repo",
+        "resource": "repo:acme/backend",
+        "manifest-class": null
+      },
+      "expected": {
+        "class": "prohibited",
+        "decision": "deny"
+      }
+    },
+    {
+      "name": "absent-resource-is-a-wildcard",
+      "description": "`resource` may be omitted and then matches every resource; `subject` and `action` may not, and say `*` instead (spec 05 section 3.1)",
+      "policy": {
+        "v": "stozher/0.1",
+        "kind": "policy",
+        "policy-version": "2026.07.1",
+        "issued-at": "2026-07-26T08:00:00.000Z",
+        "classification": {
+          "by-action": {},
+          "reclassify": [
+            {
+              "subject": "*",
+              "action": "github.delete_repo",
+              "class": "benign"
+            }
+          ],
+          "default-unknown": "consequential"
+        },
+        "gate-rules": [
+          {
+            "classes": [
+              "consequential"
+            ],
+            "decision": "gate",
+            "approvers": [
+              "human:ivan"
+            ]
+          },
+          {
+            "classes": [
+              "prohibited"
+            ],
+            "decision": "deny"
+          },
+          {
+            "classes": [
+              "read",
+              "benign"
+            ],
+            "decision": "allow"
+          }
+        ],
+        "evidence-ttl": {
+          "read": "P0D",
+          "benign": "P30D",
+          "consequential": "P365D",
+          "prohibited": "P3650D"
+        },
+        "budgets": {
+          "defaults": {
+            "requests": 10000,
+            "money-eur": "50.00"
+          }
+        },
+        "delegation": {
+          "max-depth": 3,
+          "max-standing-lifetime": "P90D"
+        },
+        "offline": {
+          "read": "allow",
+          "benign": "allow",
+          "consequential": "block",
+          "prohibited": "block"
+        },
+        "aggregate-max-window": "PT5M",
+        "revoke-cached": false,
+        "max-staleness-seconds": 300,
+        "checkpoint-interval": "PT1H",
+        "profile": "vector-fixture",
+        "sig": {
+          "alg": "ed25519",
+          "key": "ed25519:4e05c3ea19acf2ece1ad5d7602ef4f563f09b08e10ea294006aa8b655aa38f29",
+          "value": "8a16f7e59a4438aaaf4598573ce8d1da857ef1d898da1e3e5b426ebb98631969349bdd09a97e799a2eca2d9ca277e9c556d7b598c93062216b5ff31191b1c407"
+        }
+      },
+      "request": {
+        "subject": "agent:claude-code/ivan-mbp",
+        "action": "github.delete_repo",
+        "resource": "repo:acme/backend",
+        "manifest-class": null
+      },
+      "expected": {
+        "class": "benign",
+        "decision": "allow"
+      }
+    },
+    {
+      "name": "segment-prefix-matches-the-action",
+      "description": "a `<prefix>.*` pattern matches a longer dotted action",
+      "policy": {
+        "v": "stozher/0.1",
+        "kind": "policy",
+        "policy-version": "2026.07.1",
+        "issued-at": "2026-07-26T08:00:00.000Z",
+        "classification": {
+          "by-action": {},
+          "reclassify": [
+            {
+              "subject": "*",
+              "action": "github.*",
+              "class": "benign"
+            }
+          ],
+          "default-unknown": "consequential"
+        },
+        "gate-rules": [
+          {
+            "classes": [
+              "consequential"
+            ],
+            "decision": "gate",
+            "approvers": [
+              "human:ivan"
+            ]
+          },
+          {
+            "classes": [
+              "prohibited"
+            ],
+            "decision": "deny"
+          },
+          {
+            "classes": [
+              "read",
+              "benign"
+            ],
+            "decision": "allow"
+          }
+        ],
+        "evidence-ttl": {
+          "read": "P0D",
+          "benign": "P30D",
+          "consequential": "P365D",
+          "prohibited": "P3650D"
+        },
+        "budgets": {
+          "defaults": {
+            "requests": 10000,
+            "money-eur": "50.00"
+          }
+        },
+        "delegation": {
+          "max-depth": 3,
+          "max-standing-lifetime": "P90D"
+        },
+        "offline": {
+          "read": "allow",
+          "benign": "allow",
+          "consequential": "block",
+          "prohibited": "block"
+        },
+        "aggregate-max-window": "PT5M",
+        "revoke-cached": false,
+        "max-staleness-seconds": 300,
+        "checkpoint-interval": "PT1H",
+        "profile": "vector-fixture",
+        "sig": {
+          "alg": "ed25519",
+          "key": "ed25519:4e05c3ea19acf2ece1ad5d7602ef4f563f09b08e10ea294006aa8b655aa38f29",
+          "value": "197bd22234401f1c3e1a38d6429eb0a004a49f489801b05bd1823eb5bcc4f84b43f86ee24f71b6c2aa4fcb8babb02ecb0d2034b038e9c4b3fb756915d825df02"
+        }
+      },
+      "request": {
+        "subject": "agent:claude-code/ivan-mbp",
+        "action": "github.delete_repo",
+        "resource": "repo:acme/backend",
+        "manifest-class": null
+      },
+      "expected": {
+        "class": "benign",
+        "decision": "allow"
+      }
+    },
+    {
+      "name": "segment-prefix-does-not-match-the-prefix-itself",
+      "description": "`github.*` requires a further segment; the bare prefix is not a match",
+      "policy": {
+        "v": "stozher/0.1",
+        "kind": "policy",
+        "policy-version": "2026.07.1",
+        "issued-at": "2026-07-26T08:00:00.000Z",
+        "classification": {
+          "by-action": {},
+          "reclassify": [
+            {
+              "subject": "*",
+              "action": "github.*",
+              "class": "benign"
+            }
+          ],
+          "default-unknown": "consequential"
+        },
+        "gate-rules": [
+          {
+            "classes": [
+              "consequential"
+            ],
+            "decision": "gate",
+            "approvers": [
+              "human:ivan"
+            ]
+          },
+          {
+            "classes": [
+              "prohibited"
+            ],
+            "decision": "deny"
+          },
+          {
+            "classes": [
+              "read",
+              "benign"
+            ],
+            "decision": "allow"
+          }
+        ],
+        "evidence-ttl": {
+          "read": "P0D",
+          "benign": "P30D",
+          "consequential": "P365D",
+          "prohibited": "P3650D"
+        },
+        "budgets": {
+          "defaults": {
+            "requests": 10000,
+            "money-eur": "50.00"
+          }
+        },
+        "delegation": {
+          "max-depth": 3,
+          "max-standing-lifetime": "P90D"
+        },
+        "offline": {
+          "read": "allow",
+          "benign": "allow",
+          "consequential": "block",
+          "prohibited": "block"
+        },
+        "aggregate-max-window": "PT5M",
+        "revoke-cached": false,
+        "max-staleness-seconds": 300,
+        "checkpoint-interval": "PT1H",
+        "profile": "vector-fixture",
+        "sig": {
+          "alg": "ed25519",
+          "key": "ed25519:4e05c3ea19acf2ece1ad5d7602ef4f563f09b08e10ea294006aa8b655aa38f29",
+          "value": "197bd22234401f1c3e1a38d6429eb0a004a49f489801b05bd1823eb5bcc4f84b43f86ee24f71b6c2aa4fcb8babb02ecb0d2034b038e9c4b3fb756915d825df02"
+        }
+      },
+      "request": {
+        "subject": "agent:claude-code/ivan-mbp",
+        "action": "github",
+        "resource": "repo:acme/backend",
+        "manifest-class": null
+      },
+      "expected": {
+        "class": "consequential",
+        "decision": "gate"
+      }
+    },
+    {
+      "name": "colon-is-not-a-segment-separator",
+      "description": "spec 03 section 4.1's separator is `.`, so `agent:*` matches nothing but a subject literally named that",
+      "policy": {
+        "v": "stozher/0.1",
+        "kind": "policy",
+        "policy-version": "2026.07.1",
+        "issued-at": "2026-07-26T08:00:00.000Z",
+        "classification": {
+          "by-action": {},
+          "reclassify": [
+            {
+              "subject": "agent:*",
+              "action": "*",
+              "class": "benign"
+            }
+          ],
+          "default-unknown": "consequential"
+        },
+        "gate-rules": [
+          {
+            "classes": [
+              "consequential"
+            ],
+            "decision": "gate",
+            "approvers": [
+              "human:ivan"
+            ]
+          },
+          {
+            "classes": [
+              "prohibited"
+            ],
+            "decision": "deny"
+          },
+          {
+            "classes": [
+              "read",
+              "benign"
+            ],
+            "decision": "allow"
+          }
+        ],
+        "evidence-ttl": {
+          "read": "P0D",
+          "benign": "P30D",
+          "consequential": "P365D",
+          "prohibited": "P3650D"
+        },
+        "budgets": {
+          "defaults": {
+            "requests": 10000,
+            "money-eur": "50.00"
+          }
+        },
+        "delegation": {
+          "max-depth": 3,
+          "max-standing-lifetime": "P90D"
+        },
+        "offline": {
+          "read": "allow",
+          "benign": "allow",
+          "consequential": "block",
+          "prohibited": "block"
+        },
+        "aggregate-max-window": "PT5M",
+        "revoke-cached": false,
+        "max-staleness-seconds": 300,
+        "checkpoint-interval": "PT1H",
+        "profile": "vector-fixture",
+        "sig": {
+          "alg": "ed25519",
+          "key": "ed25519:4e05c3ea19acf2ece1ad5d7602ef4f563f09b08e10ea294006aa8b655aa38f29",
+          "value": "841cde71d6659cefc5f1a405386432db5eab131f78e6167264cd1ae030e26fd7b8a09059d4a60b903a33b733f3d3ee575df5a6cc1ad70236361c2db8a53af40b"
+        }
+      },
+      "request": {
+        "subject": "agent:claude-code/ivan-mbp",
+        "action": "github.delete_repo",
+        "resource": "repo:acme/backend",
+        "manifest-class": null
+      },
+      "expected": {
+        "class": "consequential",
+        "decision": "gate"
+      }
+    },
+    {
+      "name": "explicit-star-matches-and-scores-nothing",
+      "description": "an all-wildcard entry has specificity 0 and loses to any entry that names something",
+      "policy": {
+        "v": "stozher/0.1",
+        "kind": "policy",
+        "policy-version": "2026.07.1",
+        "issued-at": "2026-07-26T08:00:00.000Z",
+        "classification": {
+          "by-action": {},
+          "reclassify": [
+            {
+              "subject": "*",
+              "action": "*",
+              "resource": "*",
+              "class": "benign"
+            },
+            {
+              "subject": "*",
+              "action": "github.delete_repo",
+              "class": "prohibited"
+            }
+          ],
+          "default-unknown": "consequential"
+        },
+        "gate-rules": [
+          {
+            "classes": [
+              "consequential"
+            ],
+            "decision": "gate",
+            "approvers": [
+              "human:ivan"
+            ]
+          },
+          {
+            "classes": [
+              "prohibited"
+            ],
+            "decision": "deny"
+          },
+          {
+            "classes": [
+              "read",
+              "benign"
+            ],
+            "decision": "allow"
+          }
+        ],
+        "evidence-ttl": {
+          "read": "P0D",
+          "benign": "P30D",
+          "consequential": "P365D",
+          "prohibited": "P3650D"
+        },
+        "budgets": {
+          "defaults": {
+            "requests": 10000,
+            "money-eur": "50.00"
+          }
+        },
+        "delegation": {
+          "max-depth": 3,
+          "max-standing-lifetime": "P90D"
+        },
+        "offline": {
+          "read": "allow",
+          "benign": "allow",
+          "consequential": "block",
+          "prohibited": "block"
+        },
+        "aggregate-max-window": "PT5M",
+        "revoke-cached": false,
+        "max-staleness-seconds": 300,
+        "checkpoint-interval": "PT1H",
+        "profile": "vector-fixture",
+        "sig": {
+          "alg": "ed25519",
+          "key": "ed25519:4e05c3ea19acf2ece1ad5d7602ef4f563f09b08e10ea294006aa8b655aa38f29",
+          "value": "388aa9f1bd671b01d4949ff3aa8356d782c24be38ad6de367a9d945033848a1b4d1a9a2e9163cf5e970eb7312935bc5b089dc41ac4991d45aa5cb702b72e4b05"
+        }
+      },
+      "request": {
+        "subject": "agent:claude-code/ivan-mbp",
+        "action": "github.delete_repo",
+        "resource": "repo:acme/backend",
+        "manifest-class": null
+      },
+      "expected": {
+        "class": "prohibited",
+        "decision": "deny"
+      }
+    },
+    {
+      "name": "more-dimensions-named-wins",
+      "description": "two exact dimensions (4) beat one (2); no dimension is worth more than another",
+      "policy": {
+        "v": "stozher/0.1",
+        "kind": "policy",
+        "policy-version": "2026.07.1",
+        "issued-at": "2026-07-26T08:00:00.000Z",
+        "classification": {
+          "by-action": {},
+          "reclassify": [
+            {
+              "subject": "*",
+              "action": "*",
+              "resource": "repo:acme/backend",
+              "class": "benign"
+            },
+            {
+              "subject": "agent:claude-code/ivan-mbp",
+              "action": "github.delete_repo",
+              "class": "prohibited"
+            }
+          ],
+          "default-unknown": "consequential"
+        },
+        "gate-rules": [
+          {
+            "classes": [
+              "consequential"
+            ],
+            "decision": "gate",
+            "approvers": [
+              "human:ivan"
+            ]
+          },
+          {
+            "classes": [
+              "prohibited"
+            ],
+            "decision": "deny"
+          },
+          {
+            "classes": [
+              "read",
+              "benign"
+            ],
+            "decision": "allow"
+          }
+        ],
+        "evidence-ttl": {
+          "read": "P0D",
+          "benign": "P30D",
+          "consequential": "P365D",
+          "prohibited": "P3650D"
+        },
+        "budgets": {
+          "defaults": {
+            "requests": 10000,
+            "money-eur": "50.00"
+          }
+        },
+        "delegation": {
+          "max-depth": 3,
+          "max-standing-lifetime": "P90D"
+        },
+        "offline": {
+          "read": "allow",
+          "benign": "allow",
+          "consequential": "block",
+          "prohibited": "block"
+        },
+        "aggregate-max-window": "PT5M",
+        "revoke-cached": false,
+        "max-staleness-seconds": 300,
+        "checkpoint-interval": "PT1H",
+        "profile": "vector-fixture",
+        "sig": {
+          "alg": "ed25519",
+          "key": "ed25519:4e05c3ea19acf2ece1ad5d7602ef4f563f09b08e10ea294006aa8b655aa38f29",
+          "value": "650b97ceac1e5a9f158272a008a522ecee36a4afbf18848d97c98ae043638f70e7f425f6fbf128c177c2ea0e3f172e80ad27130d1b0c078e36b1d88a774ce20e"
+        }
+      },
+      "request": {
+        "subject": "agent:claude-code/ivan-mbp",
+        "action": "github.delete_repo",
+        "resource": "repo:acme/backend",
+        "manifest-class": null
+      },
+      "expected": {
+        "class": "prohibited",
+        "decision": "deny"
+      }
+    },
+    {
+      "name": "exact-beats-segment-prefix-on-the-same-dimension",
+      "description": "exact scores 2 and a segment prefix 1, whatever order they appear in",
+      "policy": {
+        "v": "stozher/0.1",
+        "kind": "policy",
+        "policy-version": "2026.07.1",
+        "issued-at": "2026-07-26T08:00:00.000Z",
+        "classification": {
+          "by-action": {},
+          "reclassify": [
+            {
+              "subject": "*",
+              "action": "github.delete_repo",
+              "class": "prohibited"
+            },
+            {
+              "subject": "*",
+              "action": "github.*",
+              "class": "benign"
+            }
+          ],
+          "default-unknown": "consequential"
+        },
+        "gate-rules": [
+          {
+            "classes": [
+              "consequential"
+            ],
+            "decision": "gate",
+            "approvers": [
+              "human:ivan"
+            ]
+          },
+          {
+            "classes": [
+              "prohibited"
+            ],
+            "decision": "deny"
+          },
+          {
+            "classes": [
+              "read",
+              "benign"
+            ],
+            "decision": "allow"
+          }
+        ],
+        "evidence-ttl": {
+          "read": "P0D",
+          "benign": "P30D",
+          "consequential": "P365D",
+          "prohibited": "P3650D"
+        },
+        "budgets": {
+          "defaults": {
+            "requests": 10000,
+            "money-eur": "50.00"
+          }
+        },
+        "delegation": {
+          "max-depth": 3,
+          "max-standing-lifetime": "P90D"
+        },
+        "offline": {
+          "read": "allow",
+          "benign": "allow",
+          "consequential": "block",
+          "prohibited": "block"
+        },
+        "aggregate-max-window": "PT5M",
+        "revoke-cached": false,
+        "max-staleness-seconds": 300,
+        "checkpoint-interval": "PT1H",
+        "profile": "vector-fixture",
+        "sig": {
+          "alg": "ed25519",
+          "key": "ed25519:4e05c3ea19acf2ece1ad5d7602ef4f563f09b08e10ea294006aa8b655aa38f29",
+          "value": "34936fa1c14c934b4f897c663c4ac42418b1e9fed688a1b07f6ca44d136ba5c816776c53221a6caf21af49dfd5db175fcb0240b0085dadfcc94198728ae8640f"
+        }
+      },
+      "request": {
+        "subject": "agent:claude-code/ivan-mbp",
+        "action": "github.delete_repo",
+        "resource": "repo:acme/backend",
+        "manifest-class": null
+      },
+      "expected": {
+        "class": "prohibited",
+        "decision": "deny"
+      }
+    },
+    {
+      "name": "document-order-breaks-a-tie",
+      "description": "equal specificity: the earliest entry wins",
+      "policy": {
+        "v": "stozher/0.1",
+        "kind": "policy",
+        "policy-version": "2026.07.1",
+        "issued-at": "2026-07-26T08:00:00.000Z",
+        "classification": {
+          "by-action": {},
+          "reclassify": [
+            {
+              "subject": "*",
+              "action": "github.delete_repo",
+              "class": "benign"
+            },
+            {
+              "subject": "*",
+              "action": "github.delete_repo",
+              "class": "prohibited"
+            }
+          ],
+          "default-unknown": "consequential"
+        },
+        "gate-rules": [
+          {
+            "classes": [
+              "consequential"
+            ],
+            "decision": "gate",
+            "approvers": [
+              "human:ivan"
+            ]
+          },
+          {
+            "classes": [
+              "prohibited"
+            ],
+            "decision": "deny"
+          },
+          {
+            "classes": [
+              "read",
+              "benign"
+            ],
+            "decision": "allow"
+          }
+        ],
+        "evidence-ttl": {
+          "read": "P0D",
+          "benign": "P30D",
+          "consequential": "P365D",
+          "prohibited": "P3650D"
+        },
+        "budgets": {
+          "defaults": {
+            "requests": 10000,
+            "money-eur": "50.00"
+          }
+        },
+        "delegation": {
+          "max-depth": 3,
+          "max-standing-lifetime": "P90D"
+        },
+        "offline": {
+          "read": "allow",
+          "benign": "allow",
+          "consequential": "block",
+          "prohibited": "block"
+        },
+        "aggregate-max-window": "PT5M",
+        "revoke-cached": false,
+        "max-staleness-seconds": 300,
+        "checkpoint-interval": "PT1H",
+        "profile": "vector-fixture",
+        "sig": {
+          "alg": "ed25519",
+          "key": "ed25519:4e05c3ea19acf2ece1ad5d7602ef4f563f09b08e10ea294006aa8b655aa38f29",
+          "value": "82a9369f07a0fa2882aa4b9c547ff52fdc40dd5313eabb2b189ca35abbe055de26f12fa636bd9a03388801fd23296bc591eab1d6c4fe391cd86f5893c8834806"
+        }
+      },
+      "request": {
+        "subject": "agent:claude-code/ivan-mbp",
+        "action": "github.delete_repo",
+        "resource": "repo:acme/backend",
+        "manifest-class": null
+      },
+      "expected": {
+        "class": "benign",
+        "decision": "allow"
+      }
+    },
+    {
+      "name": "an-entry-whose-subject-differs-does-not-match",
+      "description": "every dimension an entry states must match",
+      "policy": {
+        "v": "stozher/0.1",
+        "kind": "policy",
+        "policy-version": "2026.07.1",
+        "issued-at": "2026-07-26T08:00:00.000Z",
+        "classification": {
+          "by-action": {},
+          "reclassify": [
+            {
+              "subject": "agent:someone-else",
+              "action": "*",
+              "class": "benign"
+            }
+          ],
+          "default-unknown": "consequential"
+        },
+        "gate-rules": [
+          {
+            "classes": [
+              "consequential"
+            ],
+            "decision": "gate",
+            "approvers": [
+              "human:ivan"
+            ]
+          },
+          {
+            "classes": [
+              "prohibited"
+            ],
+            "decision": "deny"
+          },
+          {
+            "classes": [
+              "read",
+              "benign"
+            ],
+            "decision": "allow"
+          }
+        ],
+        "evidence-ttl": {
+          "read": "P0D",
+          "benign": "P30D",
+          "consequential": "P365D",
+          "prohibited": "P3650D"
+        },
+        "budgets": {
+          "defaults": {
+            "requests": 10000,
+            "money-eur": "50.00"
+          }
+        },
+        "delegation": {
+          "max-depth": 3,
+          "max-standing-lifetime": "P90D"
+        },
+        "offline": {
+          "read": "allow",
+          "benign": "allow",
+          "consequential": "block",
+          "prohibited": "block"
+        },
+        "aggregate-max-window": "PT5M",
+        "revoke-cached": false,
+        "max-staleness-seconds": 300,
+        "checkpoint-interval": "PT1H",
+        "profile": "vector-fixture",
+        "sig": {
+          "alg": "ed25519",
+          "key": "ed25519:4e05c3ea19acf2ece1ad5d7602ef4f563f09b08e10ea294006aa8b655aa38f29",
+          "value": "1a4a8564f5aaae17937e084fe8f27e72efafb7f2713ac5f15c88efb322091329953e66ac5b6b76d39934a8a85f631a7fde56dfca8cae89f1d744bbd339e5260a"
+        }
+      },
+      "request": {
+        "subject": "agent:claude-code/ivan-mbp",
+        "action": "github.delete_repo",
+        "resource": "repo:acme/backend",
+        "manifest-class": null
+      },
+      "expected": {
+        "class": "consequential",
+        "decision": "gate"
+      }
+    },
+    {
+      "name": "a-class-no-gate-rule-names-is-denied",
+      "description": "spec 05 section 3 step 4: the absence of a permission is not a permission",
+      "policy": {
+        "v": "stozher/0.1",
+        "kind": "policy",
+        "policy-version": "2026.07.1",
+        "issued-at": "2026-07-26T08:00:00.000Z",
+        "classification": {
+          "by-action": {
+            "github.delete_repo": "benign"
+          },
+          "reclassify": [],
+          "default-unknown": "consequential"
+        },
+        "gate-rules": [
+          {
+            "classes": [
+              "consequential"
+            ],
+            "decision": "gate",
+            "approvers": [
+              "human:ivan"
+            ]
+          }
+        ],
+        "evidence-ttl": {
+          "read": "P0D",
+          "benign": "P30D",
+          "consequential": "P365D",
+          "prohibited": "P3650D"
+        },
+        "budgets": {
+          "defaults": {
+            "requests": 10000,
+            "money-eur": "50.00"
+          }
+        },
+        "delegation": {
+          "max-depth": 3,
+          "max-standing-lifetime": "P90D"
+        },
+        "offline": {
+          "read": "allow",
+          "benign": "allow",
+          "consequential": "block",
+          "prohibited": "block"
+        },
+        "aggregate-max-window": "PT5M",
+        "revoke-cached": false,
+        "max-staleness-seconds": 300,
+        "checkpoint-interval": "PT1H",
+        "profile": "vector-fixture",
+        "sig": {
+          "alg": "ed25519",
+          "key": "ed25519:4e05c3ea19acf2ece1ad5d7602ef4f563f09b08e10ea294006aa8b655aa38f29",
+          "value": "14d4be6c26adcb9feab6a67f20d17df935374a18ea93e2edaecfa15ad82c08b5cb0a69ce44b6306ac05b0b536322e0da77dd4fdbac2409d783f4ad6847b3c80e"
+        }
+      },
+      "request": {
+        "subject": "agent:claude-code/ivan-mbp",
+        "action": "github.delete_repo",
+        "resource": "repo:acme/backend",
+        "manifest-class": null
+      },
+      "expected": {
+        "class": "benign",
+        "decision": "deny"
+      }
+    }
+  ]
+}

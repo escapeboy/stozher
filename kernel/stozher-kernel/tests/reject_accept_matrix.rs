@@ -218,6 +218,10 @@ fn replay_vectors(report: &mut Report) -> BTreeSet<String> {
                 // for ingest are reached through `mandate-chain`'s budget vectors, which this
                 // dispatcher does replay.
                 | "money-compare"
+                // Evaluation over a policy document, with no envelope to submit either. Run against
+                // the real `Policy` by `tests/policy_vectors.rs`; its consequences for ingest are
+                // reached through every row here that carries a `classification`.
+                | "policy-evaluation"
         ) {
             continue;
         }

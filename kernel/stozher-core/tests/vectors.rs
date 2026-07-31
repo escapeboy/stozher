@@ -134,6 +134,12 @@ fn every_vector_validates_against_the_reference_implementation() {
                 "payload-binding" => check_payload_binding(&mut report, &id, vector),
                 "money-compare" => check_money_compare(&mut report, &id, vector),
                 "parity" => check_parity(&mut report, &id, vector),
+                // Evaluated where the code being tested lives. `stozher-kernel` owns policy
+                // evaluation and depends on this crate, so it cannot be called from here;
+                // `stozher-kernel/tests/policy_vectors.rs` runs this file and asserts it ran every
+                // vector in it. Named rather than defaulted, so a kind nobody implemented still
+                // fails below.
+                "policy-evaluation" => {}
                 unknown => panic!(
                     "{path}: unsupported vector kind {unknown:?}. Vectors are never skipped: \
                      implement support or remove the file."

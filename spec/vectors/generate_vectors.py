@@ -890,6 +890,116 @@ def signal_env(seq: int, prev: str | None, key: Key, **over: Any) -> dict:
     return env
 
 
+def mandate_env(seq: int, prev: str | None, key: Key, **over: Any) -> dict:
+    env = {
+        "v": V,
+        "kind": "mandate",
+        "emitted-at": "2026-07-26T09:00:00.000Z",
+        "stream": "kernel:core",
+        "seq": seq,
+        "prev-hash": prev,
+        "identity": {"subject": key.label, "key": key.key_id, "component": "kernel"},
+        "mandate": mandate("standing", KEYS["human:ivan"], "human", key),
+    }
+    env.update(over)
+    return env
+
+
+def revocation_env(seq: int, prev: str | None, key: Key, **over: Any) -> dict:
+    env = {
+        "v": V,
+        "kind": "revocation",
+        "emitted-at": "2026-07-26T09:20:00.000Z",
+        "stream": "kernel:core",
+        "seq": seq,
+        "prev-hash": prev,
+        "identity": {"subject": key.label, "key": key.key_id, "component": "kernel"},
+        "revokes": EVIDENCE_HASH,
+        "revoked-at": "2026-07-26T09:19:00.000Z",
+    }
+    env.update(over)
+    return env
+
+
+def gate_decision_env(seq: int, prev: str | None, key: Key, **over: Any) -> dict:
+    env = {
+        "v": V,
+        "kind": "gate-decision",
+        "emitted-at": "2026-07-26T09:15:00.000Z",
+        "stream": "kernel:core",
+        "seq": seq,
+        "prev-hash": prev,
+        "identity": {"subject": key.label, "key": key.key_id, "component": "kernel"},
+        "decision-of": EVIDENCE_HASH,
+    }
+    env.update(over)
+    return env
+
+
+def checkpoint_env(seq: int, prev: str | None, key: Key, **over: Any) -> dict:
+    env = {
+        "v": V,
+        "kind": "checkpoint",
+        "emitted-at": "2026-07-26T10:00:00.000Z",
+        "stream": "kernel:checkpoints",
+        "seq": seq,
+        "prev-hash": prev,
+        "identity": {"subject": key.label, "key": key.key_id, "component": "kernel"},
+        "checkpoint": {
+            "stream": "gw:ivan-mbp:0001",
+            "from-seq": 0,
+            "to-seq": 3,
+            "head-hash": EVIDENCE_HASH,
+            "count": 4,
+            "at": "2026-07-26T10:00:00.000Z",
+        },
+    }
+    env.update(over)
+    return env
+
+
+#: `spec/02 §2.1` — what each kind MAY carry beyond the common eight and its own required set.
+#: `memory-ref` and `correlation-ref` are permitted on every kind and are not repeated here.
+MEMBER_MATRIX: dict[str, tuple[str, ...]] = {
+    "effect": ("evidence", "authorization", "trigger", "commitment-ref"),
+    "cognition": (),
+    "aggregate": (),
+    "signal": (),
+    "mandate": (),
+    "revocation": ("reason",),
+    "gate-decision": ("decision",),
+    "checkpoint": (),
+}
+
+MEMBER_COMMON_OPTIONAL = ("memory-ref", "correlation-ref")
+
+#: Members the two reference implementations disagreed about for the whole of v0.1, because §1's
+#: flat list left the question unposed and no vector asked it.
+MEMBER_PROBES: dict[str, Any] = {
+    "trigger": {"signal-ref": EVIDENCE_HASH, "standing-mandate-ref": EVIDENCE_HASH},
+    "memory-ref": "svod://note/why-this-was-done",
+    "correlation-ref": "trace-4f2b",
+    "policy-version": "2026.07.1",
+    "commitment-ref": {
+        "object-type": "github.ticket",
+        "object-id": "acme/backend#412",
+        "transition": "opened",
+    },
+}
+
+#: Kinds that refuse a member with their own code rather than `schema-unknown-member` (§02 §9.1).
+MEMBER_FORBIDDEN: dict[str, tuple[tuple[str, ...], str]] = {
+    "cognition": (
+        ("execution", "evidence", "classification", "authorization", "commitment-ref"),
+        "cognition-envelope-has-effect-fields",
+    ),
+    "signal": (
+        ("mandate-ref", "classification", "execution", "evidence", "authorization", "commitment-ref"),
+        "signal-envelope-has-effect-fields",
+    ),
+}
+
+
 def build_chain(key: Key) -> list[dict]:
     """A four-envelope chain: effect, cognition, aggregate, gated effect."""
     out: list[dict] = []
@@ -1243,6 +1353,60 @@ def gen_envelope_shape() -> None:
             "the outcome set is closed: applied | failed | denied | blocked | attempted",
         )
     )
+
+    # -- spec 02 section 2.1: which members each kind may carry -----------------------------------
+    #
+    # Generated from the matrix rather than written out, so the corpus asks every question the
+    # matrix answers. Five of the nine kinds had no vector of any sort before this; the placement
+    # questions had none at all, which is why the two reference implementations disagreed about
+    # eleven of them for the whole of v0.1 without either noticing.
+    builders = {
+        "effect": lambda **o: base_effect(0, None, key, **o),
+        "cognition": lambda **o: {**cognition_env(0, None, key), **o},
+        "aggregate": lambda **o: aggregate_env(0, None, key, **o),
+        "signal": lambda **o: signal_env(0, None, key, **o),
+        "mandate": lambda **o: mandate_env(0, None, key, **o),
+        "revocation": lambda **o: revocation_env(0, None, key, **o),
+        "gate-decision": lambda **o: gate_decision_env(0, None, key, **o),
+        "checkpoint": lambda **o: checkpoint_env(0, None, key, **o),
+    }
+    for kind, build in builders.items():
+        if kind not in ("effect", "cognition", "aggregate", "signal"):
+            # The four kinds nothing in the corpus had ever validated.
+            cases.append(
+                (
+                    f"valid-{kind}",
+                    sv(build()),
+                    True,
+                    None,
+                    f"the minimal {kind} envelope",
+                )
+            )
+        permitted = set(MEMBER_MATRIX[kind]) | set(MEMBER_COMMON_OPTIONAL)
+        forbidden, forbidden_code = MEMBER_FORBIDDEN.get(kind, ((), ""))
+        for member, value in MEMBER_PROBES.items():
+            if member in build():
+                # Already required or present on this kind: not a placement question.
+                continue
+            valid = member in permitted
+            if valid:
+                error = None
+            elif member in forbidden:
+                error = forbidden_code
+            else:
+                error = "schema-unknown-member"
+            cases.append(
+                (
+                    f"{kind}-with-{member}",
+                    sv(build(**{member: value})),
+                    valid,
+                    error,
+                    f"spec 02 section 2.1: {kind} "
+                    + ("MAY" if valid else "MUST NOT")
+                    + f" carry {member}",
+                )
+            )
+
 
     vectors = []
     for name, env, valid, err, desc in cases:
@@ -2712,6 +2876,246 @@ def gen_parity() -> None:
 # --------------------------------------------------------------------------
 
 
+
+def gen_policy_evaluation() -> None:
+    """spec 05 section 3 — classification and the gate rule, as a table.
+
+    §05 §3 is the order in which an organization's opinion is applied, and until v0.9 nothing in the
+    corpus asked about it: the two reference implementations scored `reclassify` specificity
+    differently and one of them supported no patterns at all, for the whole of v0.1, with 208
+    vectors passing.
+    """
+    policy_key = KEYS["org:policy"]
+
+    def policy(classification: dict, gate_rules: list[dict] | None = None) -> dict:
+        return sign_object(
+            {
+                "v": V,
+                "kind": "policy",
+                "policy-version": "2026.07.1",
+                "issued-at": "2026-07-26T08:00:00.000Z",
+                "classification": classification,
+                "gate-rules": gate_rules
+                if gate_rules is not None
+                else [
+                    {"classes": ["consequential"], "decision": "gate", "approvers": ["human:ivan"]},
+                    {"classes": ["prohibited"], "decision": "deny"},
+                    {"classes": ["read", "benign"], "decision": "allow"},
+                ],
+                "evidence-ttl": {
+                    "read": "P0D",
+                    "benign": "P30D",
+                    "consequential": "P365D",
+                    "prohibited": "P3650D",
+                },
+                "budgets": {"defaults": {"requests": 10000, "money-eur": "50.00"}},
+                "delegation": {"max-depth": 3, "max-standing-lifetime": "P90D"},
+                "offline": {
+                    "read": "allow",
+                    "benign": "allow",
+                    "consequential": "block",
+                    "prohibited": "block",
+                },
+                "aggregate-max-window": "PT5M",
+                "revoke-cached": False,
+                "max-staleness-seconds": 300,
+                "checkpoint-interval": "PT1H",
+                "profile": "vector-fixture",
+            },
+            policy_key,
+        )
+
+    SUBJECT = "agent:claude-code/ivan-mbp"
+    ACTION = "github.delete_repo"
+    RESOURCE = "repo:acme/backend"
+
+    def request(**over: Any) -> dict:
+        base = {
+            "subject": SUBJECT,
+            "action": ACTION,
+            "resource": RESOURCE,
+            "manifest-class": None,
+        }
+        base.update(over)
+        return base
+
+    cases: list[tuple[str, dict, dict, str, str, str]] = []
+
+    def case(name: str, classification: dict, req: dict, cls: str, decision: str, desc: str) -> None:
+        cases.append((name, classification, req, cls, decision, desc))
+
+    empty = {"by-action": {}, "reclassify": [], "default-unknown": "consequential"}
+
+    case(
+        "default-unknown-when-nobody-has-an-opinion",
+        empty,
+        request(),
+        "consequential",
+        "gate",
+        "no reclassification, no by-action entry and no manifest proposal: the default decides",
+    )
+    case(
+        "manifest-proposal-beats-default-unknown",
+        empty,
+        request(**{"manifest-class": "read"}),
+        "read",
+        "allow",
+        "spec 05 section 3 step 1: a registered manifest's declared class is consulted before "
+        "default-unknown",
+    )
+    case(
+        "by-action-beats-the-manifest-proposal",
+        {**empty, "by-action": {ACTION: "prohibited"}},
+        request(**{"manifest-class": "read"}),
+        "prohibited",
+        "deny",
+        "the organization's table wins over the component's proposal, in either direction",
+    )
+    case(
+        "reclassify-beats-by-action",
+        {
+            "by-action": {ACTION: "read"},
+            "reclassify": [{"subject": "*", "action": ACTION, "class": "prohibited"}],
+            "default-unknown": "consequential",
+        },
+        request(),
+        "prohibited",
+        "deny",
+        "reclassify is consulted first",
+    )
+    case(
+        "absent-resource-is-a-wildcard",
+        {**empty, "reclassify": [{"subject": "*", "action": ACTION, "class": "benign"}]},
+        request(),
+        "benign",
+        "allow",
+        "`resource` may be omitted and then matches every resource; `subject` and `action` "
+        "may not, and say `*` instead (spec 05 section 3.1)",
+    )
+    case(
+        "segment-prefix-matches-the-action",
+        {**empty, "reclassify": [{"subject": "*", "action": "github.*", "class": "benign"}]},
+        request(),
+        "benign",
+        "allow",
+        "a `<prefix>.*` pattern matches a longer dotted action",
+    )
+    case(
+        "segment-prefix-does-not-match-the-prefix-itself",
+        {**empty, "reclassify": [{"subject": "*", "action": "github.*", "class": "benign"}]},
+        request(action="github"),
+        "consequential",
+        "gate",
+        "`github.*` requires a further segment; the bare prefix is not a match",
+    )
+    case(
+        "colon-is-not-a-segment-separator",
+        {**empty, "reclassify": [{"subject": "agent:*", "action": "*", "class": "benign"}]},
+        request(),
+        "consequential",
+        "gate",
+        "spec 03 section 4.1's separator is `.`, so `agent:*` matches nothing but a subject "
+        "literally named that",
+    )
+    case(
+        "explicit-star-matches-and-scores-nothing",
+        {
+            **empty,
+            "reclassify": [
+                {"subject": "*", "action": "*", "resource": "*", "class": "benign"},
+                {"subject": "*", "action": ACTION, "class": "prohibited"},
+            ],
+        },
+        request(),
+        "prohibited",
+        "deny",
+        "an all-wildcard entry has specificity 0 and loses to any entry that names something",
+    )
+    case(
+        "more-dimensions-named-wins",
+        {
+            **empty,
+            "reclassify": [
+                {"subject": "*", "action": "*", "resource": RESOURCE, "class": "benign"},
+                {"subject": SUBJECT, "action": ACTION, "class": "prohibited"},
+            ],
+        },
+        request(),
+        "prohibited",
+        "deny",
+        "two exact dimensions (4) beat one (2); no dimension is worth more than another",
+    )
+    case(
+        "exact-beats-segment-prefix-on-the-same-dimension",
+        {
+            **empty,
+            "reclassify": [
+                {"subject": "*", "action": ACTION, "class": "prohibited"},
+                {"subject": "*", "action": "github.*", "class": "benign"},
+            ],
+        },
+        request(),
+        "prohibited",
+        "deny",
+        "exact scores 2 and a segment prefix 1, whatever order they appear in",
+    )
+    case(
+        "document-order-breaks-a-tie",
+        {
+            **empty,
+            "reclassify": [
+                {"subject": "*", "action": ACTION, "class": "benign"},
+                {"subject": "*", "action": ACTION, "class": "prohibited"},
+            ],
+        },
+        request(),
+        "benign",
+        "allow",
+        "equal specificity: the earliest entry wins",
+    )
+    case(
+        "an-entry-whose-subject-differs-does-not-match",
+        {**empty, "reclassify": [{"subject": "agent:someone-else", "action": "*", "class": "benign"}]},
+        request(),
+        "consequential",
+        "gate",
+        "every dimension an entry states must match",
+    )
+    case(
+        "a-class-no-gate-rule-names-is-denied",
+        {**empty, "by-action": {ACTION: "benign"}},
+        request(),
+        "benign",
+        "deny",
+        "spec 05 section 3 step 4: the absence of a permission is not a permission",
+    )
+
+    vectors = []
+    for name, classification, req, cls, decision, desc in cases:
+        gate_rules = None
+        if name == "a-class-no-gate-rule-names-is-denied":
+            gate_rules = [{"classes": ["consequential"], "decision": "gate", "approvers": ["human:ivan"]}]
+        vectors.append(
+            {
+                "name": name,
+                "description": desc,
+                "policy": policy(classification, gate_rules),
+                "request": req,
+                "expected": {"class": cls, "decision": decision},
+            }
+        )
+    emit(
+        "policy-evaluation.json",
+        "policy-evaluation",
+        "Classification and the gate rule (spec 05 section 3). Evaluate `request` against `policy`: "
+        "the resulting class MUST equal `expected.class` and the gate rule's verdict MUST equal "
+        "`expected.decision`. `request.manifest-class` is the class a registered manifest proposes, "
+        "or null when the component has none.",
+        vectors,
+        {"keys": [policy_key.as_vector()]},
+    )
+
+
 def gen_index() -> None:
     index = {
         "v": V,
@@ -2756,6 +3160,7 @@ def main() -> int:
     gen_payload_binding()
     gen_money_compare()
     gen_parity()
+    gen_policy_evaluation()
     gen_index()
     return 0
 

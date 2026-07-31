@@ -30,12 +30,22 @@ An envelope is a signed object (§01 §5). Top-level members:
 | `memory-ref` | string | MAY | Svod note reference (opaque to the kernel beyond storage) |
 | `commitment-ref` | object | MAY | durable-object reference, §8 |
 | `correlation-ref` | string | MAY | §10 — **stored and indexed, never interpreted** |
+| `mandate` | object | `mandate` only | the granted mandate (§03) |
+| `revokes` | string(64 hex) | `revocation` only | `id()` of the revoked mandate (§03 §7) |
+| `revoked-at` | timestamp | `revocation` only | §03 §7 |
+| `reason` | string | `revocation` only, MAY | §03 §7 |
+| `decision-of` | string(64 hex) | `gate-decision` only | the `request-hash` decided (§06 §5) |
+| `decision` | object | `gate-decision` only, MAY | §06 §5 |
+| `signal` | object | `signal` only | §07 §2 |
+| `checkpoint` | object | `checkpoint` only | §04 §4 |
 | `sig` | object | MUST | §01 §5 |
 
 The **envelope hash** is `id(envelope)` = `object-hash` over the complete signed envelope (§01 §5).
 It is the value referenced by `prev-hash`, by checkpoints, and by every audit citation.
 
-Members not listed above MUST be rejected at ingest with `schema-unknown-member` (§9).
+A member not listed above MUST be rejected at ingest with `schema-unknown-member` (§9), and so MUST
+a member this table lists but §2.1 does not permit **for that kind**. This table says a member
+exists; §2.1 says where it may appear, and both are conditions on the same refusal.
 
 ## 2. Envelope kinds
 
@@ -58,6 +68,50 @@ Rationale for `mandate`, `revocation`, `policy-change`, `gate-decision` and `che
 envelope kinds rather than side tables: everything that changes what the system will permit is
 itself an audited, chained, signed event. There is no privileged channel through which authority
 changes silently.
+
+### 2.1 Which members each kind may carry
+
+Every kind carries the eight common members — `v`, `kind`, `emitted-at`, `stream`, `seq`,
+`prev-hash`, `identity`, `sig` — and the required members of its row above. This table adds what it
+MAY carry. **A member outside its row is `schema-unknown-member` for that kind**, even though §1
+lists it, and even though another kind requires it.
+
+| `kind` | MAY additionally carry |
+|---|---|
+| `effect` | `evidence`, `authorization`, `trigger`, `commitment-ref` |
+| `policy-change` | `evidence` |
+| `aggregate` | — |
+| `cognition` | — |
+| `signal` | — |
+| `mandate` | — |
+| `revocation` | `reason` |
+| `gate-decision` | `decision` |
+| `checkpoint` | — |
+
+**`memory-ref` and `correlation-ref` are permitted on every kind** and are therefore not repeated in
+the table. Both are stored and never interpreted, and neither carries authority: refusing a trace
+label on a mandate grant would serve nothing, and correlating a grant to the ticket that prompted it
+is exactly what an operator wants. A member with no semantics has no kind it can be wrong on.
+
+Three placements are refused for the opposite reason, because the member's meaning does not exist
+on the kind:
+
+- **`trigger` only on `effect`.** §07 §4 defines it as linking an effect to the signal that
+  triggered it. A checkpoint, a mandate grant or a cognition record has no effect to link, so the
+  member would be decoration — and a decorative member on a signed, chained record is a place to
+  hide something.
+- **`commitment-ref` only on `effect`.** §8 makes it a durable-object transition. Publishing a
+  policy is not one.
+- **`policy-version` only on effect kinds**, where §1 already requires it. A `cognition` envelope
+  carries no `classification` and no `execution`; naming a governing policy version would claim a
+  governance that did not apply to it.
+
+The table is stated because the two reference implementations disagreed about all of it for the
+whole of v0.1 — one permitted `trigger` on every kind, the other on none but `effect`; one permitted
+`policy-version` on `cognition`, the other refused it — and none of the vector corpus asked, because
+§1's flat list left the question unposed. Where they disagreed on a member with no semantics, the
+permissive reading was adopted, because it is the resolution that cannot invalidate an envelope
+somebody has already chained.
 
 ## 3. `identity`
 

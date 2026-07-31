@@ -550,6 +550,9 @@ impl Policy {
 }
 
 /// Score how specifically a `reclassify` entry matches, or `None` if it does not (§05 §3 step 1).
+/// What an exact match on one dimension is worth; a `<prefix>.*` match is worth half (§05 §3.1).
+const DIMENSION_WEIGHT: u32 = 2;
+
 fn reclassify_match<'a>(entry: &'a Value, input: &ClassifyInput<'_>) -> Option<(u32, &'a str)> {
     let mut specificity = 0;
     let dimension = |pattern: Option<&str>, value: &str, weight: u32, score: &mut u32| -> bool {
@@ -575,24 +578,18 @@ fn reclassify_match<'a>(entry: &'a Value, input: &ClassifyInput<'_>) -> Option<(
         }
     };
 
-    if !dimension(
-        entry["subject"].as_str(),
-        input.subject,
-        2,
-        &mut specificity,
-    ) {
-        return None;
-    }
-    if !dimension(entry["action"].as_str(), input.action, 4, &mut specificity) {
-        return None;
-    }
-    if !dimension(
-        entry.get("resource").and_then(Value::as_str),
-        input.resource,
-        8,
-        &mut specificity,
-    ) {
-        return None;
+    // Every dimension scores the same (§05 §3.1): exact 2, segment prefix 1, wildcard or absent 0.
+    // Weighting them unequally would decide that naming a resource is narrower than naming an
+    // action, which is true in some deployments and false in others — so the tie-break is "how many
+    // dimensions did you name", which is what the person writing the policy means by specific.
+    for (pattern, value) in [
+        (entry["subject"].as_str(), input.subject),
+        (entry["action"].as_str(), input.action),
+        (entry.get("resource").and_then(Value::as_str), input.resource),
+    ] {
+        if !dimension(pattern, value, DIMENSION_WEIGHT, &mut specificity) {
+            return None;
+        }
     }
     entry["class"].as_str().map(|class| (specificity, class))
 }

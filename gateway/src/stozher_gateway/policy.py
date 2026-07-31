@@ -24,6 +24,28 @@ def class_weight(classification: str) -> int:
     return _WEIGHT.get(classification, len(_WEIGHT))
 
 
+def _dimension_score(pattern: Any, value: str) -> int | None:
+    """How specifically `pattern` matches `value`, or `None` if it does not (§05 §3.1).
+
+    An absent dimension is `*`. Patterns are §03 §4.1's vocabulary — exact, `*`, or a `<prefix>.*`
+    segment prefix — and this build supported none of it until v0.9: it compared the three dimensions
+    for string equality, so a policy reclassifying `github.*` was ignored here and honoured by the
+    kernel. The emitter then applied an effect believing it was `read` and the kernel refused the
+    record of it, which is an action in the world with no line in the audit.
+    """
+    if pattern is None or pattern == "*":
+        return 0
+    if not isinstance(pattern, str):
+        return None
+    if pattern == value:
+        return 2
+    if pattern.endswith(".*"):
+        prefix = pattern[:-2]
+        if value.startswith(prefix) and len(value) > len(prefix) and value[len(prefix)] == ".":
+            return 1
+    return None
+
+
 class PolicyError(ValueError):
     """A policy document that must not be enforced."""
 
@@ -70,37 +92,60 @@ class Policy:
 
     # -- §05 §3 step 1: classification ------------------------------------------------------
 
-    def classify(self, subject: str, action: str, resource: str, proposed: str | None) -> str:
-        """Apply org reclassification over whatever tier proposed a class.
+    def classify(
+        self,
+        subject: str,
+        action: str,
+        resource: str,
+        manifest_class: str | None = None,
+        *,
+        catalog_class: str | None = None,
+    ) -> str:
+        """§05 §3 step 1, plus the one emitter-side rule §10 §3 adds to it.
 
-        Reclassification runs in **both** directions and wins over the component's proposal: a
-        component's manifest is a proposal, the classification is the organization's.
+        `manifest_class` is what a **registered** manifest declares (§08 §1.2). The kernel can see it
+        too, so it takes part in §05 §3 exactly as written: reclassify, then `by-action`, then the
+        manifest, then `default-unknown`.
+
+        `catalog_class` is what the gateway's own catalog proposed — a tier the kernel **cannot**
+        see. When the organization has said nothing and the fallback is therefore `default-unknown`,
+        the **stronger** of the two is taken. This is not caution for its own sake: the kernel
+        evaluates step 1 with the registered manifest as the only proposal available to it, so a
+        catalog that quietly downgraded an action would produce envelopes the kernel refuses
+        `policy-component-override-attempt` — an effect applied in the world and missing from the
+        audit. Taking the stronger class makes the two evaluations agree by construction. To realize
+        a catalog downgrade the organization publishes it: `stozher-gateway catalog policy-fragment`
+        prints the `by-action` map to publish.
+
+        The two arrive as separate parameters because they were one for the whole of v0.1, and a
+        registered manifest's class was silently being strengthened along with a catalog guess —
+        which made this implementation disagree with §05 §3 and with the kernel.
         """
         classification = self.document.get("classification", {})
+        best: tuple[int, str] | None = None
         for entry in classification.get("reclassify", []):
-            if entry.get("subject") not in (None, subject):
-                continue
-            if entry.get("action") not in (None, action):
-                continue
-            if entry.get("resource") not in (None, resource):
-                continue
-            return str(entry["class"])
+            total = 0
+            for member, value in (("subject", subject), ("action", action), ("resource", resource)):
+                score = _dimension_score(entry.get(member), value)
+                if score is None:
+                    break
+                total += score
+            else:
+                # Highest specificity wins; among equals the earliest entry does, which is why the
+                # comparison is strict (§05 §3.1).
+                if best is None or total > best[0]:
+                    best = (total, str(entry["class"]))
+        if best is not None:
+            return best[1]
         by_action = classification.get("by-action", {})
         if action in by_action:
             return str(by_action[action])
-        # No org opinion. The catalog's proposal competes with `default-unknown`, and the **stronger**
-        # class wins.
-        #
-        # This is not caution for its own sake. The kernel evaluates §05 §3 step 1 with the emitting
-        # component's *manifest* as the only proposal it can see; the gateway's catalog tiers are
-        # invisible to it, so a catalog that quietly downgraded an action would produce envelopes the
-        # kernel refuses `policy-component-override-attempt` — an effect applied in the world and
-        # missing from the audit. Taking the stronger class makes the two evaluations agree by
-        # construction. To realize a catalog downgrade, the organization publishes it:
-        # `stozher-gateway catalog policy-fragment` prints the `by-action` map to publish.
+        if manifest_class in CLASSES:
+            return str(manifest_class)
+        # Nothing but the default is left, so the catalog's guess competes with it.
         unknown = str(classification.get("default-unknown", "consequential"))
-        if proposed in CLASSES:
-            return proposed if class_weight(proposed) > class_weight(unknown) else unknown
+        if catalog_class in CLASSES and class_weight(str(catalog_class)) > class_weight(unknown):
+            return str(catalog_class)
         return unknown
 
     # -- §05 §3 step 4: the gate rule --------------------------------------------------------

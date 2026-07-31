@@ -95,6 +95,45 @@ order:
 `prohibited` before mandate is deliberate: an organization must be able to state "nobody, under any
 authority, does this", and that statement must not be defeatable by issuing a broader mandate.
 
+### 3.1 How a `reclassify` entry matches, and which one wins
+
+An entry has three dimensions — `subject`, `action`, `resource` — and a `class`. Each is a **pattern
+in the vocabulary of §03 §4.1**: an exact string, `*`, or a `<prefix>.*` segment prefix.
+
+`subject` and `action` MUST be present; write `*` for "any"
+(`schema-missing-member`). `resource` MAY be absent, and an absent dimension is `*`. The asymmetry is
+deliberate: those two decide *who* and *what*, and a reclassification silent about either is more
+often a mistake than an intention, so an author has to say `*` and mean it. A rule that applies to
+every resource is ordinary, which is why the third may be left out — and why §1's worked entry does.
+
+§03 §4.1's segment separator is `.`, so a `<prefix>.*` pattern is only useful on `action`. `agent:*`
+is **not** a prefix pattern and matches nothing but a subject literally named `agent:*`; write `*`
+or omit the dimension. This is stated because it reads like it should work, and a reclassification
+rule that silently matches nothing is worse than one that is refused.
+
+An entry matches only if every dimension it states matches. Among matching entries, the **most
+specific** wins, and specificity is a number:
+
+| Dimension match | Score |
+|---|---|
+| exact | 2 |
+| `<prefix>.*` segment prefix | 1 |
+| `*`, or the dimension is absent | 0 |
+
+The entry's specificity is the sum over the three dimensions; the highest total wins, and **among
+equal totals the earliest entry in the document wins.** Naming two dimensions therefore beats naming
+one, which is what "more specific" means to the person writing the policy; nothing about the *kind*
+of dimension breaks the tie, because there is no deployment-independent sense in which naming a
+resource is narrower than naming an action.
+
+Both are stated because they were not. For the whole of v0.1 this clause said "most specific first"
+and defined neither the patterns nor the ordering: one implementation scored the dimensions
+unequally, the other supported no patterns at all — it matched `subject`, `action` and `resource`
+by string equality, so a policy reclassifying `github.*` was silently ignored by the emitter and
+honoured by the kernel. That combination is the worst one available: the emitter applies an effect
+believing it is `read`, and the kernel refuses the record of it
+(`policy-component-override-attempt`). The action happens and the audit does not have it.
+
 ## 4. Retention and TTL
 
 `evidence-ttl` maps each class to the **maximum** payload lifetime. An emitter computes

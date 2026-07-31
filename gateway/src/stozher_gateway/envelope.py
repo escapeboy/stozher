@@ -29,13 +29,17 @@ _STREAM = re.compile(r"\A[A-Za-z0-9._:-]{1,128}\Z")
 _MONEY = re.compile(r"\Amoney-[a-z]{3}\Z")
 
 _COMMON = ("v", "kind", "emitted-at", "stream", "seq", "prev-hash", "identity", "sig")
-_COMMON_OPTIONAL = ("memory-ref", "correlation-ref", "trigger")
+#: Members every kind MAY carry (§02 §2.1). Both are stored and never interpreted, and neither
+#: carries authority, so there is no kind they can be wrong on. `trigger` is deliberately not here:
+#: §07 §4 makes it a link from an effect to the signal that caused it, and a mandate grant or a
+#: checkpoint has no effect to link.
+_COMMON_OPTIONAL = ("memory-ref", "correlation-ref")
 
 #: `kind` → (additional required members, additional optional members).
 _KINDS: dict[str, tuple[tuple[str, ...], tuple[str, ...]]] = {
     "effect": (
         ("mandate-ref", "policy-version", "classification", "execution"),
-        ("evidence", "authorization", "commitment-ref"),
+        ("evidence", "authorization", "trigger", "commitment-ref"),
     ),
     "cognition": (("mandate-ref", "resource", "cost"), ()),
     "aggregate": (
@@ -46,7 +50,9 @@ _KINDS: dict[str, tuple[tuple[str, ...], tuple[str, ...]]] = {
     "revocation": (("revokes", "revoked-at"), ("reason",)),
     "policy-change": (
         ("mandate-ref", "policy-version", "classification", "execution", "authorization"),
-        ("evidence", "commitment-ref"),
+        # Not `commitment-ref`: §02 §8 makes it a durable-object transition, and publishing a
+        # policy is not one (§02 §2.1).
+        ("evidence",),
     ),
     "gate-decision": (("decision-of",), ("decision",)),
     "signal": (("signal",), ()),

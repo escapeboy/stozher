@@ -28,7 +28,7 @@ from typing import Any, NamedTuple
 from . import budget as budget_module
 from . import clock as clock_module
 from .canonical import CanonicalizationError, object_hash
-from .classify import Classification, Classifier
+from .classify import TIER_MANIFEST, Classification, Classifier
 from .config import GatewayConfig
 from .emitter import Emitter, WindowKey
 from .gate import ActionRequest, Approver, GateRefusedError, action_request, verify_authorization
@@ -327,8 +327,17 @@ class Enforcer:
 
     def _classify(self, session: Session, call: Call, policy: Policy) -> Classification:
         proposed = self._classifier.classify(call.server, call.tool, call.schema)
+        # A registered manifest is a proposal the kernel can see and evaluates itself (§05 §3 step
+        # 1); every other tier is one it cannot, and §10 §3 says the stronger class is taken there.
+        # Passing both through one slot made this build strengthen a *manifest's* class as well,
+        # which is a disagreement with the kernel rather than caution.
+        from_manifest = proposed.tier == TIER_MANIFEST
         effective = policy.classify(
-            session.subject, proposed.action, self._target(call), proposed.classification
+            session.subject,
+            proposed.action,
+            self._target(call),
+            proposed.classification if from_manifest else None,
+            catalog_class=None if from_manifest else proposed.classification,
         )
         return Classification(proposed.action, effective, proposed.tier)
 

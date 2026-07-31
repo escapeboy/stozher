@@ -95,6 +95,19 @@ Normative constraints:
   attacker-controllable in a hostile MCP server (§07 §3), and a classifier that reads them is a
   classifier an adversary configures.
 - A tool's class MUST NOT be downgraded by anything the upstream server says at call time.
+- **A tier the kernel cannot see MUST NOT come out weaker than the kernel's own answer.** Tier A is a
+  registered manifest, so the kernel evaluates §05 §3 step 1 with the same input the gateway has and
+  the two agree by construction. Tiers B, B′ and C are invisible to it: the kernel reaches
+  `classification.default-unknown` where the gateway reached its catalog. So when org policy has said
+  nothing — no `reclassify` entry, no `by-action` entry — the gateway MUST take the **stronger** of
+  its own tier's class and `default-unknown`.
+
+  Without this, a catalog entry weaker than `default-unknown` produces an effect the gateway applies
+  believing it `read` and the kernel refuses to record
+  (`policy-component-override-attempt`): the action happens and the audit does not have it. The rule
+  is deliberately confined to the tiers the kernel cannot see — applying it to Tier A would
+  strengthen a class the kernel evaluated as declared, which is a disagreement with §05 §3 rather
+  than caution. To realize a catalog downgrade, the organization publishes it as a `by-action` entry.
 
 ## 4. First-call gating and org-catalog seeding
 

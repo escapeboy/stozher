@@ -325,7 +325,7 @@ class Gateway:
         """
         policy, _ = self.policy_provider.current()
         action = "gateway.session_open"
-        classification = policy.classify(session.subject, action, "-", "benign")
+        classification = policy.classify(session.subject, action, "-", catalog_class="benign")
         if policy.decision_for(classification).kind != "allow":
             raise StartupRefusedError(
                 f"policy classifies {action} as {classification}, which is not allowed without an "
@@ -370,7 +370,7 @@ class Gateway:
         """
         policy, _ = self.policy_provider.current()
         action = "gateway.downstream_unavailable"
-        classification = policy.classify(session.subject, action, server, "benign")
+        classification = policy.classify(session.subject, action, server, catalog_class="benign")
         if policy.decision_for(classification).kind != "allow":
             # Deliberately not a startup refusal, unlike `gateway.session_open`. This path is already
             # the degraded one, and an org whose policy gates the *reporting* of a fault should not

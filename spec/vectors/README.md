@@ -97,6 +97,8 @@ the subject under test.
 | `mandate-chain` | file-level `roots`, `mandates`; per-vector `leaf-ref`, `subject-key`, `request`, `at`, `max-delegation-depth`, `revocations[]`, `expected.{valid,error,human-root,root-key,depth}` | run the §03 §5 algorithm |
 | `authorization` | `envelope`, `requires-gate`, `approvers[]`, `seen-request-hashes[]`, `expected.{valid,error}` | run the §06 §2 algorithm |
 | `payload-binding` | `ingest.{envelope,payloads[]}`, optional `chain[]`, `expected.{valid,error,envelope-hash,decayed,chain-head-hash,chain-valid}` | verify payload hashes and reference; an empty `payloads` array is always valid |
+| `money-compare` | `left`, `right`, `expected`, `spec`, `note?` | compare two decimal strings exactly (§01 §2.5); `expected` is `-1`, `0`, `1`, or an error code |
+| `policy-evaluation` | `policy`, `request.{subject,action,resource,manifest-class}`, `expected.{class,decision}` | run §05 §3 steps 1 and 4: classify, then apply the gate rule. `manifest-class` is what a **registered** manifest declares, or `null`; a catalog proposal is not this input (§10 §3) |
 | `parity` | `spec`, `algorithm`, `input`, `expected`, `divergence` | dispatch on `algorithm` (§3.1) and run the named algorithm — the same one an existing kind already exercises, on an input that reaches a branch the existing kind does not |
 
 `expected.error` is `null` on success vectors and otherwise a **normative error code** from the spec

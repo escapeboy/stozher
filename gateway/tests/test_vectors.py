@@ -35,6 +35,7 @@ from stozher_gateway.canonical import (
 from stozher_gateway.envelope import EnvelopeError
 from stozher_gateway.envelope import validate as validate_shape
 from stozher_gateway.gate import Approver, GateRefusedError, verify_authorization
+from stozher_gateway.policy import Policy
 from stozher_gateway.signing import object_id, signing_input, verify_signed_object
 
 VECTORS = Path(__file__).resolve().parents[2] / "spec" / "vectors"
@@ -315,6 +316,24 @@ def handle_money_compare(doc: dict[str, Any], vector: dict[str, Any], label: str
     )
 
 
+def handle_policy_evaluation(doc: dict[str, Any], vector: dict[str, Any], label: str) -> None:
+    """spec 05 section 3: which class an org policy produces, and what the gate rule then says.
+
+    Run through :meth:`Policy.verified` rather than the bare constructor, so the corpus also checks
+    that this implementation accepts a policy document the other one signed.
+    """
+    policy = Policy.verified(vector["policy"], doc["keys"][0]["key-id"])
+    request = vector["request"]
+    classification = policy.classify(
+        request["subject"],
+        request["action"],
+        request["resource"],
+        request.get("manifest-class"),
+    )
+    equal(classification, vector["expected"]["class"], f"{label}/class")
+    equal(policy.decision_for(classification).kind, vector["expected"]["decision"], f"{label}/decision")
+
+
 HANDLERS: dict[str, Callable[[dict[str, Any], dict[str, Any], str], None]] = {
     "jcs": handle_jcs,
     "jcs-invalid": handle_jcs_invalid,
@@ -330,6 +349,7 @@ HANDLERS: dict[str, Callable[[dict[str, Any], dict[str, Any], str], None]] = {
     "payload-binding": handle_payload_binding,
     "money-compare": handle_money_compare,
     "parity": handle_parity,
+    "policy-evaluation": handle_policy_evaluation,
 }
 
 

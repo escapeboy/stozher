@@ -36,8 +36,18 @@ class _Policy:
         self.version = "2026.07.01"
         self._decision = decision
 
-    def classify(self, subject: str, action: str, target: str, proposed: str) -> str:
-        return proposed
+    def classify(
+        self,
+        subject: str,
+        action: str,
+        target: str,
+        manifest_class: str | None = None,
+        *,
+        catalog_class: str | None = None,
+    ) -> str:
+        # The gateway's own bookkeeping has no registered manifest, so it arrives as a catalog
+        # proposal (§05 §3.1, §10 §3).
+        return manifest_class or catalog_class or "consequential"
 
     def decision_for(self, classification: str) -> SimpleNamespace:
         return SimpleNamespace(kind=self._decision)

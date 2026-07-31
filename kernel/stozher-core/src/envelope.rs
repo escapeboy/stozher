@@ -76,6 +76,13 @@ const COMMON: [&str; 8] = [
     "sig",
 ];
 
+/// Members every kind MAY carry — `spec/02 §2.1`.
+///
+/// Both are stored and never interpreted, and neither carries authority, so there is no kind they
+/// can be wrong on. Listing them here rather than in nine rows is also what stops the nine rows
+/// drifting apart, which is how the two reference implementations came to disagree about them.
+const COMMON_OPTIONAL: [&str; 2] = ["memory-ref", "correlation-ref"];
+
 struct KindSpec {
     required: &'static [&'static str],
     optional: &'static [&'static str],
@@ -92,14 +99,7 @@ fn kind_spec(kind: &str) -> Option<KindSpec> {
                 "classification",
                 "execution",
             ],
-            optional: &[
-                "evidence",
-                "authorization",
-                "trigger",
-                "memory-ref",
-                "commitment-ref",
-                "correlation-ref",
-            ],
+            optional: &["evidence", "authorization", "trigger", "commitment-ref"],
             forbidden: &[],
             forbidden_code: "",
         },
@@ -111,7 +111,7 @@ fn kind_spec(kind: &str) -> Option<KindSpec> {
                 "execution",
                 "authorization",
             ],
-            optional: &["evidence", "memory-ref", "correlation-ref"],
+            optional: &["evidence"],
             forbidden: &[],
             forbidden_code: "",
         },
@@ -124,13 +124,16 @@ fn kind_spec(kind: &str) -> Option<KindSpec> {
                 "counts",
                 "sample-hashes",
             ],
-            optional: &["correlation-ref", "memory-ref"],
+            optional: &[],
             forbidden: &["execution", "evidence", "authorization"],
             forbidden_code: "schema-unknown-member",
         },
         "cognition" => KindSpec {
             required: &["mandate-ref", "resource", "cost"],
-            optional: &["policy-version", "correlation-ref"],
+            // Not `policy-version`: a cognition envelope carries no classification and no
+            // execution, so naming a governing policy version would claim a governance that did
+            // not apply to it (§02 §2.1).
+            optional: &[],
             forbidden: &[
                 "execution",
                 "evidence",
@@ -142,7 +145,7 @@ fn kind_spec(kind: &str) -> Option<KindSpec> {
         },
         "signal" => KindSpec {
             required: &["signal"],
-            optional: &["correlation-ref"],
+            optional: &[],
             forbidden: &[
                 "mandate-ref",
                 "classification",
@@ -275,7 +278,8 @@ pub fn validate(envelope: &Value) -> Result<()> {
     for key in map.keys() {
         let known = COMMON.contains(&key.as_str())
             || spec.required.contains(&key.as_str())
-            || spec.optional.contains(&key.as_str());
+            || spec.optional.contains(&key.as_str())
+            || COMMON_OPTIONAL.contains(&key.as_str());
         if !known {
             return Err(err!("schema-unknown-member", "{key}"));
         }
