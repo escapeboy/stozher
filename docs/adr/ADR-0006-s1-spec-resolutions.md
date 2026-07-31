@@ -18,7 +18,26 @@ unsigned objects."
 
 **Resolution: the spec is correct and the brief was wrong.** Verifying the signature over the
 received bytes first means an unauthenticated caller learns nothing about schema internals, and
-cannot use the kernel as a schema oracle. Implementation follows the spec. No change.
+cannot use the kernel as a schema oracle.
+
+> **CORRECTION (2026-07-31, v0.2).** This section originally ended "Implementation follows the
+> spec. No change." **The second sentence was false, and stayed false for the whole of v0.1.**
+>
+> The *ingest* path did follow the spec. But `stozher-core::chain::verify_chain` — the library
+> function an external auditor calls to check a range — validated **schema before signature**
+> (`chain.rs:52-57`). So on an envelope that was both malformed and badly signed it answered with a
+> structural code, which is exactly the schema-oracle behaviour §02 §9.2 forbids. Fixed in v0.2
+> (`f77b85d`) and now pinned by the `parity` vector
+> `unsigned-object-must-not-probe-the-schema`, which both implementations consume.
+>
+> Recorded rather than silently amended because the failure mode is the point: **this ADR was
+> accurate about the decision and wrong about the fact, and nobody re-checked the fact for a full
+> release.** A reader following the reasoning would have concluded the code was conformant. That is
+> the documentation equivalent of a guard no test binds — and it was found by writing a vector, not
+> by reading the ADR again.
+>
+> Rule adopted from it: an ADR may record what was **decided** on its own authority, but a claim
+> about what the code **does** belongs in a test, with the ADR pointing at it.
 
 ## 2. Bootstrap is circular — resolved with exactly two validated envelopes
 
