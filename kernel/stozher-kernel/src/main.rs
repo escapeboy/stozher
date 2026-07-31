@@ -1,4 +1,5 @@
-//! The Stozher kernel binary: `serve`, `keygen`, `identity`, `token`, `genesis`, `verify`, `decide`.
+//! The Stozher kernel binary: `serve`, `keygen`, `identity`, `token`, `genesis`, `verify`, `decide`,
+//! `conformance`.
 //!
 //! Argument parsing is hand-written. The surface is a handful of subcommands and flags; a parser
 //! generator would be a dependency in a product whose pitch is a minimal auditable surface
@@ -50,6 +51,10 @@ usage:
                           [--minutes <n>] [--role <n>] [--index <n>]
                           sign a gate decision and print it; submit it to
                           POST /console/pending/<request-hash>/decide
+  stozher-kernel conformance --manifest <path> --component <command>
+                          [--vectors <dir>] [--at <timestamp>]
+                          run spec 08 section 4 against a component and print the result;
+                          exits non-zero unless every group passed
   stozher-kernel help
 
 The kernel refuses to start if its seed file is readable by anyone but its owner (spec 09 section 8).
@@ -70,15 +75,22 @@ An approver enrolled by `genesis` holds the root key at role 0': sign with `--ro
 const DEFAULT_APPROVAL_MINUTES: i64 = 15;
 
 fn main() -> ExitCode {
-    tracing_subscriber::fmt()
+    let arguments: Vec<String> = std::env::args().skip(1).collect();
+    let command = arguments.first().map(String::as_str).unwrap_or("help");
+
+    let logs = tracing_subscriber::fmt()
         .with_target(false)
         // Payloads, key material and signatures are never logged at any level; INFO carries
         // envelope ids, stream names and reason codes only.
-        .with_max_level(tracing::Level::INFO)
-        .init();
-
-    let arguments: Vec<String> = std::env::args().skip(1).collect();
-    let command = arguments.first().map(String::as_str).unwrap_or("help");
+        .with_max_level(tracing::Level::INFO);
+    if command == "conformance" {
+        // `conformance` writes a document to stdout for a person or a script to read. A log line in
+        // the middle of it is not a cosmetic problem: it makes the output unparseable, which turns a
+        // green run into an error nobody can distinguish from a failed one.
+        logs.with_writer(std::io::stderr).init();
+    } else {
+        logs.init();
+    }
     let flag = |name: &str| -> Option<PathBuf> {
         arguments
             .iter()
@@ -130,6 +142,7 @@ fn main() -> ExitCode {
         "serve" => run(flag("--config"), Mode::Serve),
         "verify" => run(flag("--config"), Mode::Verify),
         "decide" => decide(&arguments),
+        "conformance" => conformance(&arguments),
         "help" | "--help" | "-h" => {
             print!("{USAGE}");
             ExitCode::SUCCESS
@@ -831,4 +844,135 @@ async fn serve(kernel: Arc<Kernel>, bind: &str) -> ExitCode {
             ExitCode::FAILURE
         }
     }
+}
+
+/// Run `spec/08 §4` against a component and print the result.
+///
+/// The run happens against a kernel this process builds in memory and discards — see
+/// [`stozher_kernel::harness`]. Nothing about the operator's deployment is read and nothing about it
+/// is touched, which is what makes a certification exercise safe to perform against a manifest that
+/// arrived by e-mail from a stranger.
+///
+/// The output is the evidence document and nothing else, so it can be piped. A green run is not a
+/// registration: `spec/08 §3.1` wants a human signature over the manifest hash, and this prints what
+/// that human is being asked to sign over rather than acting for them.
+fn conformance(arguments: &[String]) -> ExitCode {
+    let value = |name: &str| -> Option<&str> {
+        arguments
+            .iter()
+            .position(|a| a == name)
+            .and_then(|i| arguments.get(i + 1))
+            .map(String::as_str)
+    };
+    let (Some(manifest_path), Some(command)) = (value("--manifest"), value("--component")) else {
+        eprintln!("conformance requires --manifest <path> and --component <command>");
+        return ExitCode::FAILURE;
+    };
+    let mut words = command.split_whitespace().map(str::to_owned);
+    let Some(program) = words.next() else {
+        eprintln!("--component names no program");
+        return ExitCode::FAILURE;
+    };
+    let component_arguments: Vec<String> = words.collect();
+
+    let manifest = match std::fs::read_to_string(manifest_path)
+        .map_err(|e| e.to_string())
+        .and_then(|text| serde_json::from_str::<serde_json::Value>(&text).map_err(|e| e.to_string()))
+    {
+        Ok(document) => match stozher_kernel::manifest::Manifest::parse(&document) {
+            Ok(manifest) => manifest,
+            Err(e) => {
+                eprintln!("the manifest is not one this kernel would register: {e}");
+                return ExitCode::FAILURE;
+            }
+        },
+        Err(e) => {
+            eprintln!("cannot read {manifest_path}: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
+
+    let vectors = value("--vectors").unwrap_or("spec/vectors");
+    let corpus = match load_corpus(Path::new(vectors)) {
+        Ok(corpus) => corpus,
+        Err(e) => {
+            eprintln!("cannot read the vector corpus at {vectors}: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
+
+    let at = match value("--at") {
+        Some(at) => at.to_owned(),
+        None => Clock::now(&stozher_kernel::clock::SystemClock),
+    };
+
+    let runtime = match tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+    {
+        Ok(runtime) => runtime,
+        Err(e) => {
+            eprintln!("cannot start the async runtime: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
+    runtime.block_on(async move {
+        let driver =
+            match stozher_kernel::driver::StdioDriver::spawn(&program, &component_arguments) {
+                Ok(driver) => driver,
+                Err(e) => {
+                    eprintln!("{e}");
+                    return ExitCode::FAILURE;
+                }
+            };
+        let plan = stozher_kernel::harness::Plan {
+            manifest: &manifest,
+            corpus,
+            at,
+        };
+        let outcome = stozher_kernel::harness::run(&driver, &plan).await;
+        driver.shutdown().await;
+        match outcome {
+            Ok(run) => {
+                match serde_json::to_string_pretty(&run.evidence()) {
+                    Ok(evidence) => println!("{evidence}"),
+                    Err(e) => eprintln!("the result would not serialize: {e}"),
+                }
+                if run.is_green() {
+                    ExitCode::SUCCESS
+                } else {
+                    // Red is the default and the exit code says so, because a harness whose failure
+                    // an operator has to notice by reading is a harness that will pass in a script.
+                    eprintln!("outstanding: {:?}", run.outstanding());
+                    ExitCode::FAILURE
+                }
+            }
+            Err(e) => {
+                eprintln!("the run could not be performed: {e}");
+                ExitCode::FAILURE
+            }
+        }
+    })
+}
+
+/// Every `spec/vectors/` document that declares a kind.
+///
+/// Read from a directory rather than compiled in, so an operator certifying a component can point
+/// the harness at the corpus that component was written against and see the mismatch, instead of
+/// this binary silently certifying against its own.
+fn load_corpus(directory: &Path) -> std::io::Result<Vec<serde_json::Value>> {
+    let mut documents = Vec::new();
+    for entry in std::fs::read_dir(directory)? {
+        let path = entry?.path();
+        if path.extension().and_then(std::ffi::OsStr::to_str) != Some("json") {
+            continue;
+        }
+        let text = std::fs::read_to_string(&path)?;
+        if let Ok(document) = serde_json::from_str::<serde_json::Value>(&text) {
+            if document.get("kind").is_some() {
+                documents.push(document);
+            }
+        }
+    }
+    Ok(documents)
 }

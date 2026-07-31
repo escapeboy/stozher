@@ -1939,6 +1939,15 @@ async fn manifest_rows(report: &mut Report, world: &World) {
             codes::MANIFEST_MALFORMED,
             json!({ "subject-class": "wizard" }),
         ),
+        (
+            // §08 §1.1 makes `conformance` a MUST, and its `self-test` is the action §08 §4.8's
+            // harness invokes. A manifest that named no self-test would be one no run could ever be
+            // performed against — and the component contract has required it since the
+            // specification was written, which is what ADR-0016 §1 rests on.
+            "conformance-self-test-missing",
+            "schema-missing-member",
+            json!({ "conformance": { "self-test": Value::Null } }),
+        ),
     ];
     for (name, code, overrides) in cases {
         let manifest = component.sign(&manifest_object("github", "1.0.0", overrides));

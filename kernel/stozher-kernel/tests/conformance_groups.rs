@@ -1,13 +1,13 @@
-//! Two of `spec/08 §4`'s seven groups, run against a real manifest and a real store.
+//! The three groups of `spec/08 §4` that need no live component, against a real manifest and store.
 //!
-//! # Which two, and why these
+//! # Which three, and why these
 //!
-//! §4.6 (durable objects) is decidable from the manifest alone, and §4.7 (decay independence) from a
-//! store holding the component's samples. The other five need a component to drive: §4.1 wants the
-//! component to reproduce the vector corpus, §4.2 a sample envelope per declared action, §4.3 more
-//! than `max-samples` calls, §4.4 eight refusals *from the component*, and §4.5 the component running
-//! with the kernel unreachable. ADR-0015 §8 records that; `conformance.rs` makes it impossible for
-//! their absence to be mistaken for a pass.
+//! §4.6 (durable objects) is decidable from the manifest alone, §4.7 (decay independence) from a
+//! store holding the component's samples, and §4.2 from those samples put through the real ingest.
+//! The other four have to *drive* something: §4.1 wants the component to reproduce the vector
+//! corpus, §4.3 more than `max-samples` calls, §4.4 eight refusals the component signs, and §4.5 the
+//! component running with the kernel unreachable. Those live in `conformance_driven_groups.rs`,
+//! behind the protocol of §08 §4.8; ADR-0016 records the design.
 //!
 //! # The negative half is the group
 //!

@@ -13,6 +13,8 @@
 //! | [`store`] | 04 — append-only chained store, payload store, checkpoints, rejections |
 //! | [`budget`] | 03 §4.3 — spend accrual and the cap check |
 //! | [`conformance`] | 08 §4 — what a conformance run must have checked to be green |
+//! | [`driver`] | 08 §4.8 — how the harness invokes the component's declared self-test |
+//! | [`harness`] | 08 §4 — the run itself, against a throwaway kernel it builds and discards |
 //! | [`migrate`] | `docs/product-completion-design.md` §4.1 — forward-only, additive-only schema |
 //! | [`ingest`] | 02 §9.2, 03, 05 §3, 06 §2, 07 — the one validating write path |
 //! | [`policy`] | 05 — policy document, evaluation order, retention ceiling |
@@ -53,8 +55,10 @@ pub mod codes;
 pub mod config;
 pub mod conformance;
 pub mod console;
+pub mod driver;
 pub mod gatequeue;
 pub mod genesis;
+pub mod harness;
 pub mod http;
 pub mod ingest;
 pub mod keys;

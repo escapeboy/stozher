@@ -526,6 +526,30 @@ is deliberately not on it: nothing in there can affect the measured install, and
 past what it is measuring is not a cleaner wipe. Everything else in that list is gone, though, so if
 this directory is also a real deployment, take a backup and put it somewhere else first.
 
+### The conformance gate
+
+```sh
+./gate/conformance.sh
+```
+
+`spec/08 §3.3` is "no green conformance run, no registration". This performs one: the Rust harness
+certifying the Python gateway's self-test, cross-language, all seven groups of `spec/08 §4`.
+
+It is a **second** gate rather than a step inside the first, and deliberately. `clean-install.sh`
+lives entirely in Docker; the harness spawns its component as a local subprocess, so folding them
+together would produce a step whose failures were about container plumbing rather than about
+conformance. This one needs only `cargo` and a Python interpreter with the gateway installed
+(`--python <path>` if it is not `gateway/.venv/bin/python`).
+
+It touches no deployment. Every run builds its own kernel in memory, performs its own ceremony,
+mints its own mandate, and discards all of it — which is what makes it safe to point at a manifest
+that arrived by e-mail from a stranger, and what makes the run re-runnable and deterministic as §4
+requires.
+
+**A green run is evidence, not a registration.** It prints a manifest hash and stops. `spec/08 §3.1`
+wants a human signature over that hash, and a harness that submitted its own result would be a
+program deciding that a third party's code may run here.
+
 ---
 
 ## 8. Files
@@ -541,6 +565,7 @@ deploy/
   bin/stozher-backup        VACUUM INTO snapshot + keys + config, mode 0600
   bin/stozher-restore       restore, then refuse to call it restored until the chain verifies
   gate/clean-install.sh     THE GATE
+  gate/conformance.sh       spec 08 section 4, across both implementations
   gate/mcp_probe.py         a stdlib MCP client, so the gate drives the documented command
   demo/notes_server.py      an ordinary downstream MCP server, so the first session has a target
   config/                   written by the ceremony; git-ignored

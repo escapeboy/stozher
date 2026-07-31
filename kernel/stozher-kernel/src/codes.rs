@@ -127,6 +127,20 @@ pub const SCHEMA_VERSION_AHEAD: &str = "x-schema-version-ahead";
 /// started at. See [`crate::migrate`].
 pub const SCHEMA_MIGRATION_FAILED: &str = "x-schema-migration-failed";
 
+/// The component under test could not be driven — §08 §4.8's transport failed.
+///
+/// Not a rejection: nothing was submitted, and the component may be perfectly correct in every way
+/// this run failed to observe. It is nevertheless a conformance failure and is recorded as one,
+/// because a component that cannot be certified has not been certified. See [`crate::driver`].
+pub const CONFORMANCE_DRIVER_FAILED: &str = "x-conformance-driver-failed";
+
+/// The harness could not build the throwaway kernel a run is performed against.
+///
+/// Never a statement about the component: nothing had been asked of it yet. It is deliberately
+/// distinct from [`CONFORMANCE_DRIVER_FAILED`], because "our own bootstrap is broken" and "the
+/// component would not talk to us" send an operator to opposite ends of the problem.
+pub const CONFORMANCE_HARNESS_FAILED: &str = "x-conformance-harness-failed";
+
 /// The complete register. A test asserts on this so the list cannot grow without the growth being
 /// a visible, reviewed diff.
 pub const REGISTER: [&str; 15] = [

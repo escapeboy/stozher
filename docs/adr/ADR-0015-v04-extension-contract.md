@@ -182,6 +182,12 @@ the harness *cannot* construct, because they need the component's signing key, w
 unreachable. A run assembled today is therefore still red, which is the correct answer rather than an
 embarrassment: four of the seven checks genuinely have not happened.
 
+**Superseded by ADR-0016.** The four are closed. The decision this section left to the owner — a
+component-side conformance mode, or a temporary signing key for the harness — turned out to have been
+made already by `spec/08 §1.1`, which has required a manifest to declare `conformance.self-test`
+since the specification was written. What was missing was `spec/08 §4.8`, the protocol for invoking
+it. `deploy/gate/conformance.sh` now performs a green run across both implementations.
+
 What is closed is the hazard. From here, adding a check can only move a group from red to green, and
 no amount of half-finishing can produce a green run that was not earned.
 
