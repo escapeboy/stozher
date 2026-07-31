@@ -602,11 +602,39 @@ pub fn is_timestamp(s: &str) -> bool {
         return false;
     }
     let num = |range: std::ops::Range<usize>| s[range].parse::<u32>().unwrap_or(u32::MAX);
-    (1..=12).contains(&num(5..7))
-        && (1..=31).contains(&num(8..10))
+    let (year, month, day) = (num(0..4), num(5..7), num(8..10));
+    (1..=12).contains(&month)
+        && day >= 1
+        && day <= days_in_month(year, month)
         && num(11..13) <= 23
         && num(14..16) <= 59
         && num(17..19) <= 60
+}
+
+/// Days in a Gregorian month. `0` for a month outside `1..=12`, so an out-of-range month can never
+/// admit a day.
+///
+/// This is the deployment's single calendar. It lives here, in the crate everything else depends on,
+/// because there were two: this range-checked the day at `1..=31` and accepted `2026-02-31`, while
+/// `stozher_kernel::clock` rejected it — so whether a date existed depended on which validator a
+/// code path happened to reach. `gate.rs` reached for this one before comparing approval windows,
+/// and since the form is fixed-width, `"2026-02-31"` sorts after every real day in February: an
+/// approval bounded by a day that never arrives is an approval that does not expire.
+#[must_use]
+pub fn days_in_month(year: u32, month: u32) -> u32 {
+    match month {
+        1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
+        4 | 6 | 9 | 11 => 30,
+        2 if is_leap_year(year) => 29,
+        2 => 28,
+        _ => 0,
+    }
+}
+
+/// The Gregorian leap rule: every fourth year, except centuries, except every fourth century.
+#[must_use]
+pub fn is_leap_year(year: u32) -> bool {
+    year % 4 == 0 && (year % 100 != 0 || year % 400 == 0)
 }
 
 /// Every JSON number in a protocol object must be an integer in the binary64-exact range.
