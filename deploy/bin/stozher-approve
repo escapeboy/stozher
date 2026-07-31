@@ -22,7 +22,12 @@ DEPLOY="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$DEPLOY"
 
 IMAGE="stozher-kernel:0.1.0"
-NETWORK="stozher_default"
+# Resolved from the running container below, never assumed. `bin/stozher-bootstrap` and
+# `bin/stozher-restore` both already did this; this script did not, and a hardcoded
+# `stozher_default` is wrong for every install that set `COMPOSE_PROJECT_NAME` — it either attaches
+# the submitting container to the *other* install's network, so one deployment's approval is
+# delivered to another deployment's kernel, or to a network that does not exist at all.
+NETWORK=""
 SEED="secrets/operator/operator.seed"
 REQUEST=""
 ROOT=""
@@ -49,6 +54,14 @@ done
 # shellcheck disable=SC1091
 set -a; . ./.env; set +a
 UID_GID="$(id -u):$(id -g)"
+
+# The network this project's kernel is actually on, asked of docker. `.env` is sourced first because
+# compose interpolates the whole file on every invocation and `user:` has no default, and because
+# `COMPOSE_PROJECT_NAME` — if this install set one — has to be in the environment before `ps`.
+CONTAINER="$(docker compose ps -q kernel)"
+[ -n "$CONTAINER" ] || { echo "the kernel container is not running — start it with 'docker compose up -d kernel'" >&2; exit 1; }
+NETWORK="$(docker inspect -f '{{range $name, $_ := .NetworkSettings.Networks}}{{$name}}{{end}}' "$CONTAINER")"
+[ -n "$NETWORK" ] || { echo "the kernel container is on no network" >&2; exit 1; }
 
 verdict=(--approve)
 [ -n "$DENY" ] && verdict=(--deny "$DENY")
