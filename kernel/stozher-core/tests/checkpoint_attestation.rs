@@ -103,13 +103,25 @@ fn a_checkpoint_over_the_whole_stream_is_not_satisfied_by_a_suffix_of_it() {
     //
     // The result was `Ok(())`: a verifier could report a stream as attested from genesis having been
     // shown half of it.
+    //
+    // Two of the new barriers stand in the way of this shape — the range holds 5 records where 10
+    // are attested, and it begins at seq 5 where seq 0 is attested. Which one reports it depends on
+    // the order they are written in, and that order is not a property worth pinning: the property is
+    // that the forgery does not verify. `checkpoint_range.rs` isolates each barrier on an input that
+    // trips only that one.
     let all = chain_of(10);
     let attested = checkpoint(0, 9, 10, &head_of(&all));
     let suffix = &all[5..];
 
     let error = chain::verify_checkpoint(&attested, suffix, None)
         .expect_err("a checkpoint over [0, 9] must not accept the range [5, 9]");
-    assert_eq!(error.code(), "x-checkpoint-range-mismatch", "got {error}");
+    assert!(
+        matches!(
+            error.code(),
+            "checkpoint-count-mismatch" | "x-checkpoint-range-mismatch"
+        ),
+        "unexpected code {error}"
+    );
 }
 
 #[test]

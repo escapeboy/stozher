@@ -190,11 +190,21 @@ pub fn verify_checkpoint(
             "count {count} does not match the attested range {from_seq}..={to_seq}"
         ));
     }
-    // …and then against what was actually supplied, identity before size. The two refusals are
-    // different incidents and must not share a code: a range that begins somewhere else is the
-    // caller holding the wrong records, while a range of the wrong length with the right start is
-    // the count claim failing. Reporting the second for the first would tell an operator their
-    // chain had been tampered with when they had merely passed the wrong slice.
+    // …and then against what was actually supplied. `count` is the number of envelopes the
+    // checkpoint attests, so a range of a different length does not satisfy it however consistent
+    // that range is with itself: a checkpoint over `[0, 999]` verifying against four envelopes is
+    // the difference between "these thousand records are the history" and "some records are".
+    if range.len() as u64 != count {
+        return Err(err!(
+            "checkpoint-count-mismatch",
+            "attests {count} envelopes, supplied {}",
+            range.len()
+        ));
+    }
+    // The right number of records is still not the right records. A range of the attested length
+    // that begins somewhere else is a different slice of the stream, and saying so with its own
+    // code matters: `checkpoint-count-mismatch` reads as "your chain does not add up" to an
+    // operator who has simply passed the wrong range.
     let observed_first = range
         .first()
         .and_then(|e| e.get("seq"))
@@ -204,17 +214,6 @@ pub fn verify_checkpoint(
         return Err(err!(
             CHECKPOINT_RANGE_MISMATCH,
             "attests from seq {from_seq}, supplied range begins at {observed_first}"
-        ));
-    }
-    // `count` is the number of envelopes the checkpoint attests, so a range of a different length
-    // does not satisfy it however consistent that range is with itself: a checkpoint over
-    // `[0, 999]` verifying against three envelopes is the difference between "these thousand
-    // records are the history" and "some records are".
-    if range.len() as u64 != count {
-        return Err(err!(
-            "checkpoint-count-mismatch",
-            "attests {count} envelopes, supplied {}",
-            range.len()
         ));
     }
 
