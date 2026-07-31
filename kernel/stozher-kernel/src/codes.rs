@@ -85,6 +85,10 @@ pub const GATE_RATE_LIMITED: &str = "x-gate-rate-limited";
 /// single place the local codes can be read.
 pub use stozher_core::envelope::AGGREGATE_CARDINALITY;
 
+/// §02 §7 rule 3 constrains `counts.total` to the sum of `by-action` and says nothing about the
+/// sign, so the sum was satisfiable by cancellation. No code is given for a negative count.
+pub use stozher_core::envelope::AGGREGATE_COUNT_NEGATIVE;
+
 /// §04 §4 — a checkpoint whose attested range simply begins somewhere other than the range
 /// supplied to verify it against. §04 names codes for the count and the head, but not for this.
 /// Defined in `stozher_core::chain`; listed here so the register stays the one place to read them.
@@ -102,8 +106,9 @@ pub const CALLER_UNAUTHENTICATED: &str = "x-caller-unauthenticated";
 
 /// The complete register. A test asserts on this so the list cannot grow without the growth being
 /// a visible, reviewed diff.
-pub const REGISTER: [&str; 14] = [
+pub const REGISTER: [&str; 15] = [
     GATE_RATE_LIMITED,
+    AGGREGATE_COUNT_NEGATIVE,
     MEDIA_TYPE_NOT_ALLOWED,
     CHECKPOINT_RANGE_MISMATCH,
     AGGREGATE_CARDINALITY,

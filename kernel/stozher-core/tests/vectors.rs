@@ -591,7 +591,9 @@ fn check_payload_binding(report: &mut Report, id: &str, vector: &Value) {
 fn check_parity(report: &mut Report, id: &str, vector: &Value) {
     let input = &vector["input"];
     match vector["algorithm"].as_str().expect("algorithm") {
-        "verify-authorization" => check_parity_authorization(report, id, input, &vector["expected"]),
+        "verify-authorization" => {
+            check_parity_authorization(report, id, input, &vector["expected"])
+        }
         "verify-chain" => check_parity_chain(report, id, input, &vector["expected"]),
         other => report.fail(id, format!("unsupported parity algorithm {other:?}")),
     }

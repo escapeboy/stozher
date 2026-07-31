@@ -36,7 +36,10 @@ fn the_leap_year_rule_is_the_gregorian_one() {
     // Divisible by 4 is a leap year, except centuries, except centuries divisible by 400. Getting
     // the exceptions wrong is the classic way to write a calendar that is right for a lifetime and
     // wrong at the boundary.
-    assert!(is_timestamp("2024-02-29T00:00:00.000Z"), "2024 is a leap year");
+    assert!(
+        is_timestamp("2024-02-29T00:00:00.000Z"),
+        "2024 is a leap year"
+    );
     assert!(is_timestamp("2000-02-29T00:00:00.000Z"), "2000: /400, leap");
     assert!(!is_timestamp("1900-02-29T00:00:00.000Z"), "1900: /100, not");
     assert!(!is_timestamp("2100-02-29T00:00:00.000Z"), "2100: /100, not");
@@ -61,7 +64,10 @@ fn the_rest_of_the_fixed_form_is_unchanged() {
     // §01 §2.3 is fixed-width so that lexicographic order is chronological order; nothing about the
     // calendar fix may loosen the shape that guarantee rests on.
     assert!(is_timestamp("2026-07-26T09:15:01.300Z"));
-    assert!(!is_timestamp("2026-07-26T09:15:01Z"), "no fractional digits");
+    assert!(
+        !is_timestamp("2026-07-26T09:15:01Z"),
+        "no fractional digits"
+    );
     assert!(!is_timestamp("2026-07-26T11:15:01.300+02:00"), "not UTC");
     assert!(!is_timestamp("2026-13-26T09:15:01.300Z"), "month 13");
     assert!(!is_timestamp("2026-07-26t09:15:01.300z"), "lowercase");

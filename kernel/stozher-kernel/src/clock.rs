@@ -279,10 +279,6 @@ fn civil_from_days(days: i64) -> (i64, i64, i64) {
     (year + i64::from(month <= 2), month, day)
 }
 
-fn is_leap_year(year: i64) -> bool {
-    u32::try_from(year).is_ok_and(envelope::is_leap_year)
-}
-
 /// Delegates to `stozher_core::envelope`, which is where the deployment's one calendar lives.
 ///
 /// There used to be two — this one and `envelope::is_timestamp`'s `1..=31` range check — and they

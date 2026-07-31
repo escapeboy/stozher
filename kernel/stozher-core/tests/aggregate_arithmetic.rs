@@ -112,3 +112,35 @@ fn the_widest_admissible_window_is_summed_exactly() {
         error.detail()
     );
 }
+
+/// The other way to make the sum agree without the window being what it says.
+///
+/// Overflow needs a thousand entries; cancellation needs two. `check_numbers` bounds each count and
+/// the fold is now exact, but neither says a count of calls that happened cannot be negative — so
+/// `1000000` bulk exports and `-999999` file reads sum to exactly the declared `total: 1`, and the
+/// one envelope kind whose arithmetic *is* the audit claim reports a million-record window as one.
+#[test]
+fn counts_cannot_cancel_each_other_out() {
+    let mut by_action = Map::new();
+    by_action.insert("github.bulk_export".to_owned(), json!(1_000_000));
+    by_action.insert("github.get_file".to_owned(), json!(-999_999));
+    let error = envelope::validate(&aggregate(1, by_action))
+        .expect_err("a million exports must not record as one read");
+    assert_eq!(error.code(), "x-aggregate-count-negative");
+}
+
+#[test]
+fn a_negative_total_is_refused_too() {
+    let error = envelope::validate(&aggregate(-1, counts(&[-1])))
+        .expect_err("a window cannot have folded a negative number of calls");
+    assert_eq!(error.code(), "x-aggregate-count-negative");
+}
+
+#[test]
+fn a_window_that_folded_nothing_is_still_arithmetically_sound() {
+    // Zero is not negative: an emitter closing an empty window states a true fact about it, and the
+    // sign check must not turn that into a refusal.
+    let mut by_action = Map::new();
+    by_action.insert("github.get_file".to_owned(), json!(0));
+    envelope::validate(&aggregate(0, by_action)).expect("a window of zero reads is a real window");
+}

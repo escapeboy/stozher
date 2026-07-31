@@ -48,6 +48,16 @@ pub const CORRELATION_REF_MAX: usize = 512;
 /// distinct actions one component declares, not by traffic.
 pub const AGGREGATE_MAX_ACTIONS: usize = 1024;
 
+/// A `counts` member is negative.
+///
+/// Implementation-local, hence the `x-` prefix: §02 §7 rule 3 constrains `total` to the *sum* of
+/// `by-action` and says nothing about the sign, because a count of things that happened has no
+/// meaningful negative value. Without the check the sum is satisfiable by cancellation — one entry
+/// of 1000000 and one of -999999 sum to 1 — so `aggregate-count-mismatch` becomes a check an
+/// emitter passes while recording a window of a million reads as one. Registered in
+/// `stozher_kernel::codes::REGISTER`.
+pub const AGGREGATE_COUNT_NEGATIVE: &str = "x-aggregate-count-negative";
+
 /// `counts.by-action` folds more than [`AGGREGATE_MAX_ACTIONS`] distinct actions.
 ///
 /// Implementation-local, hence the `x-` prefix: `spec/02 §9.1` tabulates no code for this because
@@ -466,6 +476,9 @@ fn validate_aggregate(
     let total = counts["total"]
         .as_i64()
         .ok_or_else(|| err!("schema-type-mismatch", "counts.total must be an integer"))?;
+    if total < 0 {
+        return Err(err!(AGGREGATE_COUNT_NEGATIVE, "counts.total is {total}"));
+    }
     let by_action = counts["by-action"]
         .as_object()
         .ok_or_else(|| err!("schema-type-mismatch", "counts.by-action must be an object"))?;
@@ -481,13 +494,22 @@ fn validate_aggregate(
     // `aggregate-count-mismatch` into a check an emitter can choose to pass: land the wrap on the
     // declared total and a window of 1.8e19 reads records as one.
     let mut sum: i128 = 0;
-    for value in by_action.values() {
-        sum += i128::from(value.as_i64().ok_or_else(|| {
+    for (action, value) in by_action {
+        let count = value.as_i64().ok_or_else(|| {
             err!(
                 "schema-type-mismatch",
                 "counts.by-action values must be integers"
             )
-        })?);
+        })?;
+        // A count of calls that happened cannot be negative, and without saying so the sum is
+        // satisfiable by cancellation rather than by being true.
+        if count < 0 {
+            return Err(err!(
+                AGGREGATE_COUNT_NEGATIVE,
+                "counts.by-action[{action}] is {count}"
+            ));
+        }
+        sum += i128::from(count);
     }
     if sum != i128::from(total) {
         return Err(err!(
