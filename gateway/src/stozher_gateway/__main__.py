@@ -88,6 +88,40 @@ def main(argv: list[str] | None = None) -> int:
     return _decide(config, args.request, args.key, args.subject, "deny", args.reason, None)
 
 
+def _unreachable_downstreams(config: GatewayConfig) -> list[str]:
+    """Findings for declared servers that cannot be enumerated.
+
+    A downstream that is down costs the operator nothing visible at startup — some tools are simply
+    absent from `tools/list`, which looks exactly like a server nobody configured. This is the check
+    that turns that into a sentence, before an agent discovers it as a missing capability.
+
+    A server that could not be *reached* and a server that is fine must never look the same, so a
+    failure here is reported rather than swallowed; the enumeration is read-only and the timeout is
+    the configured one, so `config check` cannot hang on a downstream that accepts and never answers.
+    """
+    from .background import BackgroundLoop
+    from .proxy import Downstream
+
+    findings: list[str] = []
+    loop = BackgroundLoop()
+    loop.start()
+    try:
+        for server in config.servers:
+            downstream = Downstream(
+                server,
+                loop,
+                persistent=False,
+                timeout=config.gateway.downstream_timeout_seconds,
+            )
+            try:
+                downstream.list_tools()
+            except Exception as e:  # noqa: BLE001 - any failure to reach it is "unreachable"
+                findings.append(f"downstream {server.name!r} cannot be enumerated: {e}")
+    finally:
+        loop.stop()
+    return findings
+
+
 def _config(config: GatewayConfig, action: str) -> int:
     if action == "show":
         print(json.dumps(config.model_dump(mode="json"), indent=2, sort_keys=True))
@@ -108,6 +142,7 @@ def _config(config: GatewayConfig, action: str) -> int:
         findings.append(f"{config.kernel.token_env} is unset — the kernel will refuse the gateway")
     if not config.servers:
         findings.append("no downstream servers are configured — nothing would be proxied")
+    findings.extend(_unreachable_downstreams(config))
     for caller in config.callers:
         if caller.mandate_file is not None and not Path(caller.mandate_file).is_file():
             findings.append(f"caller {caller.name!r}: mandate file {caller.mandate_file} is missing")

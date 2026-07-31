@@ -2205,6 +2205,131 @@ def gen_payload_binding() -> None:
 # --------------------------------------------------------------------------
 
 
+def gen_money_compare() -> None:
+    """Exact comparison of monetary decimal strings (§01 §2.5, §03 §4.3).
+
+    `spec/01 §2.5` puts monetary quantities out of the reach of binary64 by requiring them to be
+    decimal strings. Both implementations then parsed those strings back into a float to compare
+    them -- Rust `s.parse::<f64>()`, Python `float(s)` -- which put them straight back in, at the one
+    place it decides whether a delegated budget narrows.
+
+    Two failure modes, both reachable and neither covered by the 177 vectors that preceded this
+    file:
+
+    * precision -- `9007199254740993` and `9007199254740992` are one apart and the same binary64, so
+      a child budget one unit over its parent's compared *equal* and the grant was accepted;
+    * disagreement -- the two parsers do not accept the same strings. `float(" 25 ")` is 25.0 and
+      `" 25 ".parse::<f64>()` is an error, so one implementation admitted a mandate the other
+      refused.
+
+    The expected values below are computed here by a third technique -- integer tuples, no `Decimal`
+    and no float -- so agreement between the corpus, the Rust digit-walk and the Python `Decimal`
+    comparison is three independent implementations agreeing, not one of them checking itself.
+    """
+    max_len = 32
+
+    def independent(value: str) -> tuple[int, int] | None:
+        """`(scaled, scale)` for a valid value, or None. Deliberately not the algorithm either
+        implementation uses."""
+        if not isinstance(value, str) or not value or len(value) > max_len:
+            return None
+        integer, point, fraction = value.partition(".")
+        if not integer.isascii() or not integer.isdigit():
+            return None
+        if point and (not fraction.isascii() or not fraction.isdigit()):
+            return None
+        if not point and fraction:
+            return None
+        return (int(integer + fraction), len(fraction))
+
+    def expected(left: str, right: str) -> str:
+        a, b = independent(left), independent(right)
+        if a is None or b is None:
+            return "refused"
+        scale = max(a[1], b[1])
+        left_scaled = a[0] * 10 ** (scale - a[1])
+        right_scaled = b[0] * 10 ** (scale - b[1])
+        if left_scaled == right_scaled:
+            return "equal"
+        return "less" if left_scaled < right_scaled else "greater"
+
+    cases: list[tuple[str, str, str, str]] = [
+        # -- scale carries no meaning: one amount, several spellings --------------------------
+        ("equal-across-scale", "25", "25.00", "trailing zeros are not a different amount"),
+        ("equal-across-leading-zeros", "025.00", "25", "leading zeros are not a different amount"),
+        ("equal-zero", "0", "0.0", "zero written two ways"),
+        # -- ordering is by value, and lexical comparison gets each of these wrong ------------
+        ("nine-is-less-than-ten", "9", "10", "the bug lexical comparison always is"),
+        ("fraction-below-one", "0.9", "1", ""),
+        ("fraction-digit-alignment", "1.09", "1.1", "compares '09' against '1' if aligned wrongly"),
+        ("small-fractions", "0.0001", "0.001", ""),
+        # -- the precision boundary: this is the defect the module was written for ------------
+        (
+            "one-above-parent-beyond-binary64",
+            "9007199254740993",
+            "9007199254740992",
+            "2^53 + 1 and 2^53 are the same f64: a child one unit over its parent compared equal",
+        ),
+        (
+            "one-below-parent-beyond-binary64",
+            "9007199254740991",
+            "9007199254740992",
+            "the same boundary from the other side, so a fix cannot be 'refuse everything here'",
+        ),
+        (
+            "fraction-beyond-binary64",
+            "0.1000000000000000055511151231",
+            "0.1",
+            "0.1 is not representable in binary64; through a float these compare equal",
+        ),
+        # -- forms the two parsers read differently, or read at all ---------------------------
+        ("leading-space", " 25", "25", "float(' 25') is 25.0; Rust's parse is an error"),
+        ("trailing-space", "25 ", "25", ""),
+        ("trailing-newline", "25\n", "25", "a `$`-anchored regex would admit this"),
+        ("exponent-lowercase", "1e5", "100000", "an exponent is not a way to write money"),
+        ("exponent-uppercase", "1E5", "100000", ""),
+        ("positive-sign", "+25", "25", ""),
+        ("negative", "-25", "25", "a budget is a cap; a negative cap is not a narrower one"),
+        ("infinity", "inf", "25", "both float parsers accept this and it is not an amount"),
+        ("infinity-spelled-out", "infinity", "25", ""),
+        ("not-a-number", "NaN", "25", "comparisons against NaN are all false, so it passed"),
+        ("bare-fraction", ".5", "1", "the grammar requires a digit before the point"),
+        ("trailing-point", "5.", "1", ""),
+        ("underscore-separator", "1_000", "2000", ""),
+        ("comma-separator", "1,000", "2000", ""),
+        ("two-points", "1.2.3", "2", ""),
+        ("hexadecimal", "0x19", "25", ""),
+        ("full-width-digits", "２５", "25", "numeric to `str.isnumeric`, but not ASCII digits"),
+        ("empty", "", "1", ""),
+        # -- the length bound, on both sides --------------------------------------------------
+        ("at-the-length-bound", "1" * max_len, "1", "the longest value that is still compared"),
+        ("over-the-length-bound", "1" * (max_len + 1), "1", "unbounded input is unbounded work"),
+        ("over-the-length-bound-on-the-right", "1", "1" * (max_len + 1), ""),
+    ]
+
+    vectors = [
+        {
+            "name": name,
+            "spec": "01 §2.5, 03 §4.3",
+            "note": note,
+            "left": left,
+            "right": right,
+            "expected": expected(left, right),
+        }
+        for name, left, right, note in cases
+    ]
+
+    emit(
+        "money-compare.json",
+        "money-compare",
+        "Exact comparison of monetary decimal strings. `expected` is one of less, equal, greater, "
+        "refused. A harness MUST compare by value without converting to a binary floating-point "
+        "number, and MUST refuse every form outside `digits [ '.' digits ]`.",
+        vectors,
+        {"max-length": max_len},
+    )
+
+
 def gen_parity() -> None:
     """The branches on which two implementations of this specification actually disagreed.
 
@@ -2629,6 +2754,7 @@ def main() -> int:
     gen_mandate_chain()
     gen_authorization()
     gen_payload_binding()
+    gen_money_compare()
     gen_parity()
     gen_index()
     return 0

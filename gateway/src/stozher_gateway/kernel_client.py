@@ -86,6 +86,10 @@ class KernelClient:
     def policy_version(self, version: str) -> KernelResponse:
         return self._request("GET", f"/v1/policy/{version}")
 
+    def manifests(self) -> KernelResponse:
+        """Every registered component's current manifest — tier-A classification (§08, §10 §3)."""
+        return self._request("GET", "/v1/manifests")
+
     def revocations(self, if_none_match: str | None = None) -> KernelResponse:
         """The revocation feed (§03 §7). `304` means the epoch has not moved and nothing was read."""
         return self._request("GET", "/v1/revocations", if_none_match=if_none_match)

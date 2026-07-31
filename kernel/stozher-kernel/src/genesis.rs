@@ -577,6 +577,14 @@ mod tests {
         let genesis = build(&seed(), &ceremony()).unwrap();
         let by_action = &genesis.policy_document["classification"]["by-action"];
         assert_eq!(by_action["gateway.session_open"].as_str(), Some("benign"));
+        // And the record a gateway writes when a downstream it fronts cannot be reached. Left to
+        // `default-unknown` it would be `consequential` — so the one moment the gateway most needs
+        // to be able to say something would be the moment it was gated, and a declared server would
+        // go missing from `tools/list` with nothing in the audit to say why.
+        assert_eq!(
+            by_action["gateway.downstream_unavailable"].as_str(),
+            Some("benign")
+        );
         assert_eq!(
             genesis.policy_document["classification"]["default-unknown"].as_str(),
             Some("consequential"),

@@ -141,6 +141,10 @@ async fn world_bare_at(database: Option<&std::path::Path>, notifier: Notifier) -
         "kernel-core-stream": CORE_STREAM,
         "checkpoint-stream": "kernel:checkpoints",
         "rejection-stream": "kernel:rejections",
+        // The shortest interval the kernel accepts. Nothing sweeps unless a test starts the
+        // maintenance loops, so this costs the other tests nothing; it is what lets the one test
+        // that does start them drive the real wiring instead of calling the loop by hand.
+        "decay-interval": "PT1S",
         "roots": [
             { "subject": root.subject, "key": root.id.as_str(), "enrolled-at": "2026-07-01T00:00:00.000Z" },
             { "subject": second_root.subject, "key": second_root.id.as_str(), "enrolled-at": "2026-07-01T00:00:00.000Z" }

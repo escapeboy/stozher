@@ -719,21 +719,28 @@ fn budget_within(child: Option<&Value>, parent: Option<&Value>) -> Result<bool> 
         };
         match (child_value, parent_value) {
             (Value::Number(c), Value::Number(p)) => {
-                if c.as_f64().unwrap_or(f64::INFINITY) > p.as_f64().unwrap_or(0.0) {
+                // §01 §2.5 bounds every protocol number to an integer in ±(2^53 - 1), so `as_i64`
+                // is exact for anything that got this far, and a value that is not an integer in
+                // that range is refused rather than coerced. The previous `as_f64` comparison read
+                // as harmless because of that bound — but it left the *type* rule unchecked, so a
+                // fractional budget silently became a float comparison after all.
+                let (Some(c), Some(p)) = (c.as_i64(), p.as_i64()) else {
+                    return Err(err!(
+                        "schema-type-mismatch",
+                        "budget.{dimension} must be an integer; fractional and monetary \
+                         quantities are decimal strings (spec 01 section 2.5)"
+                    ));
+                };
+                if c > p {
                     return Ok(false);
                 }
             }
             (Value::String(c), Value::String(p)) => {
-                // Monetary values are decimal strings; compare numerically, not lexically.
-                let parse = |s: &str| s.parse::<f64>().unwrap_or(f64::NAN);
-                let (c, p) = (parse(c), parse(p));
-                if c.is_nan() || p.is_nan() {
-                    return Err(err!(
-                        "schema-type-mismatch",
-                        "budget.{dimension} is not a decimal string"
-                    ));
-                }
-                if c > p {
+                // Exactly, never through `f64`. Parsing a decimal string back into binary64 to
+                // compare it reintroduces the representation §01 §2.5 removed, at the one place it
+                // decides whether authority narrows: `9007199254740993` and `9007199254740992` are
+                // one apart and the same `f64`, so a child one unit over its parent compared equal.
+                if !crate::decimal::at_most(c, p)? {
                     return Ok(false);
                 }
             }

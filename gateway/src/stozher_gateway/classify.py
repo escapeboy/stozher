@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import json
 import re
+from collections.abc import Callable
 from importlib import resources
 from typing import Any, NamedTuple
 
@@ -103,13 +104,18 @@ class Classifier:
     def __init__(
         self,
         scopes: dict[str, str],
-        manifests: dict[str, dict[str, Any]] | None = None,
+        manifests: dict[str, dict[str, Any]] | Callable[[], dict[str, dict[str, Any]]] | None = None,
         org_seeded: Any = None,
     ) -> None:
         #: server name → action scope, so `github`/`get_file_contents` becomes
         #: `github.get_file_contents` (§02 §4's `<component-scope>.<action>`).
         self._scopes = scopes
-        self._manifests = manifests or {}
+        #: Either a fixed mapping or a callable returning one. Tier A is the *only* tier whose
+        #: source changes while the process runs — `kernel.register_component` is a gated action a
+        #: human signs mid-session — so a classifier that read this once at startup would classify a
+        #: freshly registered component by the shape heuristic until the next restart, which is the
+        #: tier the taxonomy is least confident about and the one the registration existed to leave.
+        self._manifests: Any = manifests or {}
         #: A callable `(server, tool) -> (action, class) | None`, normally the store's lookup.
         self._org_seeded = org_seeded
         self._shipped = _load_shipped()
@@ -125,11 +131,16 @@ class Classifier:
     def action(self, server: str, tool: str) -> str:
         return f"{self.scope(server)}.{tool}"
 
+    def _manifest_for(self, server: str) -> dict[str, Any] | None:
+        source = self._manifests() if callable(self._manifests) else self._manifests
+        manifest = source.get(server) if isinstance(source, dict) else None
+        return manifest if isinstance(manifest, dict) else None
+
     def classify(self, server: str, tool: str, schema: Any) -> Classification:
         """§10 §3's order, first match wins. Policy reclassification is applied by the caller."""
         action = self.action(server, tool)
 
-        manifest = self._manifests.get(server)
+        manifest = self._manifest_for(server)
         if manifest is not None:
             for declared in manifest.get("actions", []):
                 if declared.get("action") in (action, f"{manifest.get('name')}.{tool}"):

@@ -811,10 +811,9 @@ async fn serve(kernel: Arc<Kernel>, bind: &str) -> ExitCode {
     // §04 §4.6: the kernel emits a checkpoint per stream at least every `checkpoint-interval`, so a
     // rebuilt chain always contradicts a published head. The service owns the loop; it is not left
     // to an operator to remember.
-    let checkpointer = tokio::spawn(checkpoint::run_interval(
-        kernel.ingest.clone(),
-        kernel.config.checkpoint_stream.clone(),
-    ));
+    // Both loops, including the decay sweep the deployment used to have to schedule itself. They
+    // live behind one function so a test can start exactly what the service starts.
+    let maintenance = kernel.spawn_maintenance();
 
     let app = http::router(Arc::clone(&kernel));
     let shutdown = async {
@@ -824,7 +823,7 @@ async fn serve(kernel: Arc<Kernel>, bind: &str) -> ExitCode {
     let outcome = axum::serve(listener, app)
         .with_graceful_shutdown(shutdown)
         .await;
-    checkpointer.abort();
+    maintenance.abort();
     match outcome {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {

@@ -12,6 +12,7 @@ from __future__ import annotations
 
 from typing import Any, NamedTuple
 
+from . import money
 from .signing import object_id, verify_signed_object
 
 __all__ = ["MandateRefusedError", "MandateRequest", "MandateOk", "verify_mandate_chain", "scope_permits"]
@@ -190,8 +191,26 @@ def _require_budget_within(child: dict[str, Any] | None, parent: dict[str, Any] 
         if dimension not in child:
             continue
         value = child[dimension]
-        exceeded = (
-            float(value) > float(cap) if isinstance(cap, str) else int(value) > int(cap)
-        )
+        if isinstance(cap, str) or isinstance(value, str):
+            # Exactly, never through a float. `float(s)` here reintroduced the representation §01
+            # §2.5 removed, at the one place it decides whether authority narrows — and it read a
+            # different set of strings than Rust's `parse::<f64>()` did, so the same mandate could be
+            # valid through one implementation and refused by the other. See `money`.
+            #
+            # The condition is `or`, not `and`: a child that answers a monetary cap with a JSON
+            # number is a type error, and `int(value) > int(cap)` would have compared it happily.
+            try:
+                exceeded = not money.at_most(value, cap)
+            except money.MoneyFormatError as e:
+                raise MandateRefusedError("schema-type-mismatch", f"budget.{dimension}: {e}") from e
+        else:
+            # §01 §2.5 bounds every protocol number to an integer, so a non-integer here is a type
+            # error rather than something to round.
+            if not isinstance(value, int) or not isinstance(cap, int) or isinstance(value, bool):
+                raise MandateRefusedError(
+                    "schema-type-mismatch",
+                    f"budget.{dimension} must be an integer or a decimal string",
+                )
+            exceeded = value > cap
         if exceeded:
             raise MandateRefusedError("mandate-budget-exceeds-parent", dimension)

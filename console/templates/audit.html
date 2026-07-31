@@ -51,7 +51,8 @@ fractional digits (<code>spec/01 §2.3</code>).</span>
 <button type="submit">filter</button>
 </form>
 
-<p><b>{{ matched }}</b> record(s) match these filters; <b>{{ shown }}</b> shown below.
+<p><b>{{ matched }}</b> record(s) match these filters; <b>{{ shown }}</b> shown below{% if paged %},
+continuing from an earlier page{% endif %}.
 <a href="/console/audit/export?{{ query }}">export all {{ matched }} for regulators (NDJSON)</a>
 {% if f.stream != "" %} · <a href="/console/streams/{{ f.stream }}/verify">verify this stream's chain</a>{% endif %}
 </p>
@@ -59,9 +60,9 @@ fractional digits (<code>spec/01 §2.3</code>).</span>
 {% if truncated %}
 <div class="note"><b class="violation">This table is not the whole answer.</b> It shows
 {{ shown }} of {{ matched }} matching records because <code>limit</code> is set to
-<code>{{ f.limit }}</code>. Raise it to see more here. The export link above is unaffected — it
-carries all {{ matched }}, because an export a regulator cannot tell is complete is not
-evidence.</div>
+<code>{{ f.limit }}</code>. Page through them with the link below, or raise <code>limit</code> to
+see more at once. The export link above is unaffected — it carries all {{ matched }}, because an
+export a regulator cannot tell is complete is not evidence.</div>
 {% endif %}
 
 {% if rows.is_empty() %}
@@ -90,5 +91,11 @@ evidence.</div>
 {% endfor %}
 </tbody>
 </table>
+{% endif %}
+
+{% if let Some(next) = next %}
+<p><a href="{{ next }}">next {{ f.limit }} records →</a>
+<span class="quiet">Paging resumes at the last row above rather than counting the rows skipped, so a
+record appended while you are reading cannot push another one past you unseen.</span></p>
 {% endif %}
 {% endblock %}

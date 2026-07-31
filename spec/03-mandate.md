@@ -131,6 +131,31 @@ mandate and everything delegated beneath it**. Integer members: `requests`, `tok
 be named `money-<iso4217 lowercase>` (`money-eur`). A delegated mandate's budget MUST NOT exceed
 its parent's for any dimension present in the parent (`mandate-budget-exceeds-parent`).
 
+**Comparison of monetary values.** A monetary value MUST match the grammar
+
+```
+money = 1*DIGIT [ "." 1*DIGIT ]
+```
+
+and MUST be at most 32 characters. Anything else — a sign, an exponent, surrounding whitespace, a
+digit separator, a bare `.5` or `5.`, a non-ASCII digit — MUST be refused
+(`schema-type-mismatch`); a budget is a cap on spend, so a negative one is not a narrower budget and
+is not given a meaning.
+
+Values MUST be compared **exactly, by value**, and an implementation MUST NOT convert them to a
+binary floating-point number to do so. Scale carries no meaning: `"25"`, `"25.0"` and `"025.00"` are
+one amount and compare equal. Concretely, compare the integer parts with leading zeros removed —
+longer first, then digit by digit — and on equality compare the fractional digits position by
+position, treating a missing digit as zero.
+
+*Rationale.* §01 §2.5 places monetary quantities out of the reach of binary64 by making them
+strings; parsing them back into a `double` to compare them puts them straight back in, at the one
+place that decides whether delegated authority narrows. `9007199254740993` and `9007199254740992`
+are one apart and the same binary64, so a child budget one unit above its parent's compares equal.
+The grammar is narrow for a second reason: two implementations' number parsers do not accept the
+same strings, so an unconstrained one admits a mandate on one side of a deployment that the other
+side refuses. Both failures are covered by `spec/vectors/money-compare.json`.
+
 Budget enforcement is the kernel's; accounting inputs are `cost` in cognition envelopes (§02 §6)
 and the emitter's declared budget dimensions (§08). Exhausted budget blocks like an expired
 mandate: `outcome: "blocked"`, envelope still emitted.

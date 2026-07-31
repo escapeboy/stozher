@@ -214,6 +214,10 @@ fn replay_vectors(report: &mut Report) -> BTreeSet<String> {
                 | "slip10-ed25519"
                 | "object-hash"
                 | "envelope"
+                // A pure comparison over two strings, with no envelope to submit. Its consequences
+                // for ingest are reached through `mandate-chain`'s budget vectors, which this
+                // dispatcher does replay.
+                | "money-compare"
         ) {
             continue;
         }

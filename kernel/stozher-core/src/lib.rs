@@ -10,6 +10,7 @@
 //! | Module | Specification section |
 //! |---|---|
 //! | [`jcs`] | 01 §3 — JCS (RFC 8785) canonicalization |
+//! | [`decimal`] | 01 §2.5, 03 §4.3 — exact comparison of monetary decimal strings |
 //! | [`crypto`] | 01 §1, §6 — SHA-256, Ed25519, SLIP-0010 |
 //! | [`signed`] | 01 §4–§5 — key identifiers, the signed-object pattern |
 //! | [`envelope`] | 02 — envelope structure |
@@ -49,6 +50,7 @@
 
 pub mod chain;
 pub mod crypto;
+pub mod decimal;
 pub mod envelope;
 pub mod error;
 pub mod gate;
