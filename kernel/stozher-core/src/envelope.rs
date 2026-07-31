@@ -34,6 +34,27 @@ pub const MAX_SAFE_INTEGER: i128 = 9_007_199_254_740_991;
 /// Maximum length in octets of `correlation-ref`.
 pub const CORRELATION_REF_MAX: usize = 512;
 
+/// The most distinct actions one `aggregate` window may fold.
+///
+/// `spec/02 §7` bounds `sample-hashes` at 16 but leaves `counts.by-action` unbounded, which makes
+/// one envelope an unbounded amount of work for every consumer that iterates it — including the
+/// kernel's own mandate walk, which does a signature-verifying ancestry query per distinct action.
+///
+/// 1024 is chosen so that `i64` accumulation over the counts cannot leave its range even in
+/// principle: `check_numbers` caps each count at [`MAX_SAFE_INTEGER`], and
+/// `1024 * MAX_SAFE_INTEGER` is 9223372036854774784, which is below `i64::MAX`, while 1025 of them
+/// is not. It is also two orders of magnitude above any real window: `by-action` keys are
+/// `<manifest name>.<action>` identifiers, so the cardinality is bounded in practice by how many
+/// distinct actions one component declares, not by traffic.
+pub const AGGREGATE_MAX_ACTIONS: usize = 1024;
+
+/// `counts.by-action` folds more than [`AGGREGATE_MAX_ACTIONS`] distinct actions.
+///
+/// Implementation-local, hence the `x-` prefix: `spec/02 §9.1` tabulates no code for this because
+/// it states no bound. It is registered alongside the kernel's other local codes in
+/// `stozher_kernel::codes::REGISTER` so the set stays reviewable in one place.
+pub const AGGREGATE_CARDINALITY: &str = "x-aggregate-cardinality";
+
 const COMMON: [&str; 8] = [
     "v",
     "kind",
@@ -448,16 +469,27 @@ fn validate_aggregate(
     let by_action = counts["by-action"]
         .as_object()
         .ok_or_else(|| err!("schema-type-mismatch", "counts.by-action must be an object"))?;
-    let mut sum: i64 = 0;
+    if by_action.len() > AGGREGATE_MAX_ACTIONS {
+        return Err(err!(
+            AGGREGATE_CARDINALITY,
+            "{} distinct actions exceeds {AGGREGATE_MAX_ACTIONS}",
+            by_action.len()
+        ));
+    }
+    // Accumulated in `i128`, not `i64`. Each count is already bounded at `MAX_SAFE_INTEGER` by
+    // `check_numbers`, but the *sum* of many of them is not, and an accumulator that wraps turns
+    // `aggregate-count-mismatch` into a check an emitter can choose to pass: land the wrap on the
+    // declared total and a window of 1.8e19 reads records as one.
+    let mut sum: i128 = 0;
     for value in by_action.values() {
-        sum += value.as_i64().ok_or_else(|| {
+        sum += i128::from(value.as_i64().ok_or_else(|| {
             err!(
                 "schema-type-mismatch",
                 "counts.by-action values must be integers"
             )
-        })?;
+        })?);
     }
-    if sum != total {
+    if sum != i128::from(total) {
         return Err(err!(
             "aggregate-count-mismatch",
             "total {total} != sum {sum}"

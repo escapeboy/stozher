@@ -633,7 +633,26 @@ impl Ingest {
             plan.policy_violation = Some("prohibited-applied".to_owned());
         }
 
-        // §05 §3 step 3 — mandate. Every request in the window walks to the same human root.
+        // §05 §3 step 3 — mandate. Every request is checked against the *same* chain: `mandate-ref`
+        // is one top-level member, so an aggregate cites one mandate for the whole window and every
+        // request necessarily terminates at the same human root. What differs per request is only
+        // the scope match (§03 §4.2), so the chain is fetched once and each request is matched
+        // against it — an aggregate folding a thousand actions is one ancestry query, not a
+        // thousand identical ones.
+        let mandate_ref = env["mandate-ref"]
+            .as_str()
+            .ok_or_else(|| Error::new("schema-missing-member", "mandate-ref"))?;
+        let max_depth = policy.max_delegation_depth();
+        let mandates = self.store.mandate_ancestry(mandate_ref, max_depth).await?;
+        let ids: Vec<String> = mandates.keys().cloned().collect();
+        let revocations = self.store.revocations_targeting(&ids).await?;
+        let params = VerifyParams {
+            roots,
+            revocations: &revocations,
+            at: emitted_at,
+            subject_key,
+            max_delegation_depth: max_depth,
+        };
         let mut human_root = None;
         for (action, resource) in &requests {
             let request = MandateRequest {
@@ -646,10 +665,8 @@ impl Ingest {
                 },
                 resource: resource.clone(),
             };
-            human_root = Some(
-                self.walk_mandate(env, roots, subject_key, emitted_at, policy, Some(&request))
-                    .await?,
-            );
+            human_root =
+                Some(verify_mandate_chain(&mandates, mandate_ref, &request, &params)?.human_root);
         }
         plan.human_root = human_root;
 
