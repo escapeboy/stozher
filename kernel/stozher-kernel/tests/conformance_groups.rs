@@ -18,7 +18,9 @@
 //! identical to one that worked.
 
 use serde_json::{Value, json};
-use stozher_kernel::conformance::{GroupResult, check_decay_independence, check_durable_objects};
+use stozher_kernel::conformance::{
+    GroupResult, check_decay_independence, check_durable_objects, check_per_action_emission,
+};
 use stozher_kernel::manifest::Manifest;
 use stozher_testkit::{TestKey, manifest_object};
 
@@ -149,4 +151,103 @@ fn a_head_that_moved_across_decay_fails_and_so_does_a_chain_that_stopped_verifyi
         GroupResult::Failed { detail } => assert!(detail.contains("did not verify"), "{detail}"),
         other => panic!("an unverifiable chain passed: {other:?}"),
     }
+}
+
+// -- §4.2, against a real ingest -----------------------------------------------------------------
+
+/// A manifest declaring exactly the two actions the fixture world can emit.
+fn two_action_manifest() -> Manifest {
+    let component = TestKey::new(0x16, "agent:github-proxy");
+    let document = manifest_object("github", "1.0.0", json!({}));
+    Manifest::parse(&component.sign(&document)).expect("the fixture manifest parses")
+}
+
+/// An ingest request as the component would submit it.
+fn request(envelope: Value) -> Value {
+    json!({ "envelope": envelope, "payloads": [] })
+}
+
+#[tokio::test]
+async fn per_action_emission_passes_when_every_declared_action_has_a_sample_that_ingests() {
+    let world = stozher_testkit::world().await;
+    let manifest = two_action_manifest();
+
+    // `get_file` and `create_issue` are what the fixture manifest declares. The gated one carries a
+    // real approval, because "passes ingest" includes the gate — a sample that skipped it would be
+    // certifying a component against a weaker bar than production applies.
+    // Chained, because a component's samples are consecutive positions in its own stream and the
+    // harness submits them as such. Building both against the current head would make the second a
+    // `chain-seq-duplicate` — a defect in the fixture, not in the component under test.
+    let first = world.effect("github.get_file", "read", json!({})).await;
+    let first_id = stozher_core::signed::object_id(&first).expect("an envelope id");
+    let second = world
+        .gated_effect(
+            "github.create_issue",
+            json!({ "seq": 1, "prev-hash": first_id }),
+        )
+        .await;
+    let samples = vec![request(first), request(second)];
+
+    match check_per_action_emission(world.ingest(), &manifest, &samples).await {
+        Ok(GroupResult::Passed { checks }) => assert!(checks >= 3, "only {checks} assertions"),
+        other => panic!("a conformant component failed §4.2: {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn a_component_that_covers_only_some_of_its_declared_actions_fails() {
+    // The failure a happy-path harness misses entirely: one perfect envelope for one action, nothing
+    // for the rest, and a group whose whole subject is "for every declared action type" passes.
+    let world = stozher_testkit::world().await;
+    let manifest = two_action_manifest();
+    let samples = vec![request(
+        world.effect("github.get_file", "read", json!({})).await,
+    )];
+
+    match check_per_action_emission(world.ingest(), &manifest, &samples).await {
+        Ok(GroupResult::Failed { detail }) => {
+            assert!(detail.contains("github.create_issue"), "{detail}");
+        }
+        other => panic!("partial coverage was accepted: {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn a_sample_the_kernel_rejects_fails_the_group_and_says_why() {
+    // "Passes ingest" is the check, and it is not a property a harness can evaluate by reading an
+    // envelope: it includes the mandate walk, the classification and the payload binding. So the
+    // sample goes through the real pipeline, and a refusal is reported with the kernel's own code
+    // rather than a paraphrase.
+    let world = stozher_testkit::world().await;
+    let manifest = two_action_manifest();
+    let tampered = stozher_testkit::tamper(
+        &world.effect("github.get_file", "read", json!({})).await,
+        json!({ "policy-version": "2026.07.99" }),
+    );
+
+    match check_per_action_emission(world.ingest(), &manifest, &[request(tampered)]).await {
+        Ok(GroupResult::Failed { detail }) => assert!(detail.contains("sig-invalid"), "{detail}"),
+        other => panic!("an envelope the kernel rejects was accepted as a sample: {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn a_manifest_declaring_no_actions_fails_rather_than_passing_vacuously() {
+    // Zero declared actions means zero samples needed, which would make the group pass for a
+    // component that conforms to nothing at all.
+    let world = stozher_testkit::world().await;
+    let component = TestKey::new(0x16, "agent:github-proxy");
+    let mut document = manifest_object("github", "1.0.0", json!({}));
+    document["actions"] = json!([]);
+    // Parsed rather than validated: the kernel refuses an actionless manifest at registration, and
+    // this asserts the harness would too if one ever reached it.
+    let manifest = Manifest::parse(&component.sign(&document));
+    let Ok(manifest) = manifest else {
+        // The manifest validator refuses it first, which is the stronger answer. Nothing to check.
+        return;
+    };
+    assert!(matches!(
+        check_per_action_emission(world.ingest(), &manifest, &[]).await,
+        Ok(GroupResult::Failed { .. })
+    ));
 }

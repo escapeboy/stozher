@@ -20,18 +20,26 @@
 //!
 //! # What is here, and what is not
 //!
-//! Two groups are implemented: §4.6 durable objects, which is decidable from the manifest alone, and
-//! §4.7 decay independence, which needs only the head hashes either side of a decay. The other five
-//! need a component to drive — §4.1 wants the component to reproduce the vector corpus, §4.2 a
-//! sample envelope per declared action, §4.3 more than `max-samples` calls, §4.4 eight refusals from
-//! the component, and §4.5 the component running with the kernel unreachable.
+//! Three groups are implemented. §4.6 durable objects is decidable from the manifest alone; §4.7
+//! decay independence needs only the head hashes either side of a decay; §4.2 per-action emission
+//! needs the component's sample envelopes, but *obtaining* them is the driver's problem and checking
+//! them is this module's — they go through the real [`crate::ingest::Ingest`], because "passes
+//! ingest" includes the mandate walk, the classification and the payload binding, and a harness with
+//! its own opinion about those would be a second implementation to keep correct.
+//!
+//! The remaining four need a live component to *drive*: §4.1 wants the component to reproduce the
+//! vector corpus through its declared self-test, §4.3 more than `max-samples` real calls, §4.4 eight
+//! refusals **from the component** — most of which the harness cannot construct, because they need
+//! the component's signing key — and §4.5 the component running with the kernel unreachable.
 //!
 //! So a run assembled today is still red, and that is the correct answer rather than an
-//! embarrassment: five of the seven checks genuinely have not happened. ADR-0015 §8 records it.
+//! embarrassment: four of the seven checks genuinely have not happened. ADR-0015 §8 records it.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use serde_json::{Value, json};
+
+use crate::codes;
 
 /// The check groups `spec/08 §4` requires, in its order.
 ///
@@ -196,6 +204,106 @@ impl Run {
             "groups": groups
         })
     }
+}
+
+/// §08 §4.2 — for every declared action type, the component emits a sample envelope that passes
+/// ingest.
+///
+/// The samples come from the component; obtaining them is the driver's problem and checking them is
+/// this one's. Submitting them through the real [`crate::ingest::Ingest`] is the point — "passes
+/// ingest" is not a property a harness can evaluate by reading an envelope, because it includes the
+/// mandate walk, the policy classification and the payload binding, and a harness with its own
+/// opinion about those would be a second implementation to keep correct.
+///
+/// **Coverage is checked first and separately.** A component that submitted one perfect envelope for
+/// one action and nothing for the other nine would otherwise pass a group whose whole subject is
+/// "for every declared action type" — and it is the *undeclared* half of a manifest that a
+/// third-party component is most likely to get wrong.
+///
+/// # Errors
+///
+/// [`codes::STORE_UNAVAILABLE`] if the store cannot answer. A store outage is not a component
+/// failure and must not be recorded as one.
+pub async fn check_per_action_emission(
+    ingest: &crate::ingest::Ingest,
+    manifest: &crate::manifest::Manifest,
+    samples: &[Value],
+) -> stozher_core::error::Result<GroupResult> {
+    let declared: Vec<String> = manifest.document()["actions"]
+        .as_array()
+        .map(|list| {
+            list.iter()
+                .filter_map(|a| a["action"].as_str())
+                .map(str::to_owned)
+                .collect()
+        })
+        .unwrap_or_default();
+    if declared.is_empty() {
+        return Ok(GroupResult::Failed {
+            detail: "the manifest declares no actions, so there is nothing it could conform to"
+                .to_owned(),
+        });
+    }
+
+    let mut covered: BTreeSet<String> = BTreeSet::new();
+    let mut checks = 0u32;
+    for sample in samples {
+        let Some(action) = sample["envelope"]["execution"]["action"]
+            .as_str()
+            .or_else(|| sample["execution"]["action"].as_str())
+        else {
+            return Ok(GroupResult::Failed {
+                detail: "a sample carries no execution.action".to_owned(),
+            });
+        };
+        let action = action.to_owned();
+
+        let raw = match stozher_core::jcs::canonicalize(sample) {
+            Ok(raw) => raw,
+            Err(e) => {
+                return Ok(GroupResult::Failed {
+                    detail: format!("the sample for {action} does not canonicalize: {e}"),
+                });
+            }
+        };
+        match ingest
+            .submit(raw.as_bytes(), Some("agent:conformance"))
+            .await
+        {
+            crate::ingest::Outcome::Accepted(_) => {}
+            crate::ingest::Outcome::Rejected { reason, detail, .. } => {
+                return Ok(GroupResult::Failed {
+                    detail: format!("the sample for {action} was rejected {reason}: {detail}"),
+                });
+            }
+            // The kernel could not answer. Not the component's fault and not recorded as such.
+            crate::ingest::Outcome::Unavailable(detail) => {
+                return Err(stozher_core::error::Error::new(
+                    codes::STORE_UNAVAILABLE,
+                    detail,
+                ));
+            }
+        }
+        covered.insert(action);
+        checks += 1;
+    }
+
+    let missing: Vec<&String> = declared
+        .iter()
+        .filter(|action| !covered.contains(*action))
+        .collect();
+    if !missing.is_empty() {
+        return Ok(GroupResult::Failed {
+            detail: format!(
+                "no sample was emitted for {} of {} declared actions: {missing:?}",
+                missing.len(),
+                declared.len()
+            ),
+        });
+    }
+    // One assertion per declared action, plus the coverage check itself. A group reporting fewer
+    // checks than the manifest has actions would be describing a run that skipped some.
+    Ok(GroupResult::Passed { checks: checks + 1 })
 }
 
 /// §08 §4.6 — replay a declared transition sequence, and attack it.

@@ -162,17 +162,25 @@ seven whatever happened to them, so a red run tells an operator *which* checks a
 goes red; `the_negative_cases_cannot_be_declared_inapplicable` and
 `a_group_the_specification_does_not_define_is_refused` are the two panics.
 
-**Two of the seven groups are implemented**, both the ones decidable without a component to drive:
-§4.6 durable objects (from the manifest alone) and §4.7 decay independence (from the head hashes
-either side of a decay). Each is run against a conformant fixture *and* against the failure it exists
-to catch — an undeclared transition, a human-only transition an agent can sign, a head that moved, a
-"decay" that deleted nothing.
+**Three of the seven groups are implemented.** §4.6 durable objects and §4.7 decay independence need
+nothing but the manifest and a pair of head hashes. §4.2 per-action emission needs the component's
+sample envelopes — but *obtaining* them is the driver's job and *checking* them is the harness's, so
+the check exists now and takes them as input. It submits each through the real ingest rather than
+inspecting it, because "passes ingest" includes the mandate walk, the classification and the payload
+binding, and a harness holding its own opinion about those would be a second implementation to keep
+correct.
 
-**The other five need machinery this release did not build:** a live component to drive, N >
-`max-samples` calls for §4.3, a kernel that can be made unreachable for §4.5, and the eight refusals
-of §4.4 — which must come *from the component*, not from the kernel. A run assembled today is
-therefore still red, which is the correct answer rather than an embarrassment: five of the seven
-checks genuinely have not happened.
+Each group is run against a conformant fixture *and* against the failure it exists to catch: an
+undeclared transition, a human-only transition an agent can sign, a head that moved across decay, a
+"decay" that deleted nothing, a component covering only some of its declared actions, a sample the
+kernel rejects, a manifest declaring no actions at all.
+
+**The remaining four need a live component to drive:** §4.1 the vector corpus through the component's
+declared self-test, §4.3 more than `max-samples` real calls, §4.4 the eight refusals — most of which
+the harness *cannot* construct, because they need the component's signing key, which is precisely why
+§08 §4.4 says the component must attempt them — and §4.5 the component running with the kernel
+unreachable. A run assembled today is therefore still red, which is the correct answer rather than an
+embarrassment: four of the seven checks genuinely have not happened.
 
 What is closed is the hazard. From here, adding a check can only move a group from red to green, and
 no amount of half-finishing can produce a green run that was not earned.
