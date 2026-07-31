@@ -90,6 +90,11 @@ pub use stozher_core::envelope::AGGREGATE_CARDINALITY;
 /// Defined in `stozher_core::chain`; listed here so the register stays the one place to read them.
 pub use stozher_core::chain::CHECKPOINT_RANGE_MISMATCH;
 
+/// §02 §4 — "any other IANA media type" is the right rule for a format and the wrong one for
+/// something the kernel serves back over HTTP from the origin its console runs on. No code is given
+/// for a payload whose declared type the kernel will not serve. Defined in `stozher_core::payload`.
+pub use stozher_core::payload::MEDIA_TYPE_NOT_ALLOWED;
+
 /// The caller presented no credential, or one that does not resolve (§05 §2.2, §10 §1.1).
 ///
 /// Also not a rejection: there is no authenticated subject to attribute one to.
@@ -97,8 +102,9 @@ pub const CALLER_UNAUTHENTICATED: &str = "x-caller-unauthenticated";
 
 /// The complete register. A test asserts on this so the list cannot grow without the growth being
 /// a visible, reviewed diff.
-pub const REGISTER: [&str; 13] = [
+pub const REGISTER: [&str; 14] = [
     GATE_RATE_LIMITED,
+    MEDIA_TYPE_NOT_ALLOWED,
     CHECKPOINT_RANGE_MISMATCH,
     AGGREGATE_CARDINALITY,
     POLICY_OFFLINE_ALLOWS_GATED,
