@@ -85,6 +85,12 @@
       "kind": "payload-binding",
       "count": 7,
       "description": "Evidence payload binding and decay (spec 04 section 5). Validate the ingest record: every submitted payload MUST hash to the value the envelope committed to, and MUST be referenced by it. An empty `payloads` array is always valid. Where a vector carries `chain`, verifying that chain with no payloads MUST produce `expected.chain-head-hash`."
+    },
+    {
+      "path": "parity.json",
+      "kind": "parity",
+      "count": 16,
+      "description": "Cross-implementation parity (spec 01 section 2.3, 04 sections 2-3, 06 sections 1.2, 2 and 5). Each vector reaches a branch on which two independent implementations of this specification were observed to disagree. Dispatch on `algorithm`: `verify-authorization` takes `input.{envelope,requires-gate,approvers,seen-request-hashes}` and `verify-chain` takes `input.{stream,envelopes,expected-first-prev}`. Note that `approvers` entries here are objects carrying a `key` and a nullable `subject`, not bare key strings: §06 §5 states self-approval over the subject as well as the key, and a verifier given only keys cannot evaluate it. `divergence` is documentation and MUST NOT be asserted on."
     }
   ]
 }
