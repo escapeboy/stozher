@@ -8,4 +8,9 @@
 /config/stozher-gateway.toml
 /.env
 /backups/
+# What `bin/stozher-restore` renames on its two paths: `.superseded-` is the state it moved out of
+# the way, `.rejected-` is the archive material it rolled back after the chain failed to verify.
+# Both can be a copy of `secrets/` or of `.env`, so both are key material under a name the root
+# `.gitignore`'s `secrets/` and `*.seed` rules do not match.
 *.superseded-*
+*.rejected-*
