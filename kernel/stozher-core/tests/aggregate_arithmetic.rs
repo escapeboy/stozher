@@ -113,6 +113,39 @@ fn the_widest_admissible_window_is_summed_exactly() {
     );
 }
 
+/// `[profile.release] overflow-checks = true` must stay in the workspace manifest.
+///
+/// This is a configuration assertion rather than a behavioural one, deliberately, and it is here
+/// because a mutation test showed that **nothing else binds it**: deleting the setting leaves the
+/// whole suite green in both profiles. That is not a gap in the suite — the 1024-action bound makes
+/// `i64` accumulation unreachable at this site, so there is no aggregate input left that can
+/// overflow. The setting earns its place by guarding the *class*: every other arithmetic site in the
+/// workspace, including ones not written yet.
+///
+/// A guard that no test binds is a guard that a future edit removes silently, which is precisely how
+/// this defect class stayed invisible to 153 tests in the first place — debug panicked, release
+/// wrapped, and nothing ran release. So the manifest line itself is the thing pinned.
+#[test]
+fn the_release_profile_still_traps_arithmetic_overflow() {
+    let manifest = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../Cargo.toml"),
+    )
+    .expect("reading the workspace manifest");
+
+    let release_section = manifest
+        .split("\n[")
+        .find(|section| section.starts_with("profile.release]"))
+        .expect("[profile.release] is missing from the workspace manifest");
+
+    assert!(
+        release_section
+            .lines()
+            .any(|line| line.trim() == "overflow-checks = true"),
+        "[profile.release] must set overflow-checks = true, so that the profile which ships \
+         agrees with the profile the tests run in about what an overflowing sum does:\n{release_section}"
+    );
+}
+
 /// The other way to make the sum agree without the window being what it says.
 ///
 /// Overflow needs a thousand entries; cancellation needs two. `check_numbers` bounds each count and
