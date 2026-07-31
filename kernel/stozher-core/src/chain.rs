@@ -49,12 +49,17 @@ pub fn verify_chain(
     for (index, current) in envelopes.iter().enumerate() {
         let observed_seq = current.get("seq").and_then(Value::as_u64);
 
-        // Structure first: it decides genesis/prev-hash consistency and member sets.
-        envelope::validate(current).map_err(|e| attach(e, observed_seq))?;
+        // Signature first, over the bytes as received (§04 §2.1 step 1, §02 §9.2). The order is
+        // normative, not stylistic: a schema check that runs first answers an *unsigned* object with
+        // a structural code, which turns the verifier into a schema oracle — an attacker learns
+        // which member a forged envelope is missing without ever holding a key. Authenticate, then
+        // interpret. `attach` supplies the `seq` because a malformed record may not have a usable
+        // one to fail at.
         let seq = observed_seq.unwrap_or_default();
+        verify_signed_object(current).map_err(|e| attach(e, observed_seq))?;
 
-        // Then the signature, over the bytes as received.
-        verify_signed_object(current).map_err(|e| e.at_seq(seq))?;
+        // Then structure: it decides genesis/prev-hash consistency and member sets.
+        envelope::validate(current).map_err(|e| e.at_seq(seq))?;
 
         // Then that this envelope belongs to this stream at all. `stream` is a signed member, so
         // an envelope cannot be moved between streams without invalidating its signature; this
