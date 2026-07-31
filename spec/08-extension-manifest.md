@@ -137,6 +137,16 @@ one for a document that is not a well-formed manifest in the first place.
 3. **No green conformance run, no registration** (`manifest-conformance-not-green`). Foundry-
    synthesized tools pass the identical path; self-growth with a governed perimeter is achieved by
    there being exactly one door.
+
+   The run itself is root-approved (§05 §5 rule 6), and its envelope MUST commit to the manifest in
+   both `execution.target` and `execution.args-hash`. It is the evidence a root relies on when
+   signing a registration, and evidence the policy under audit can cheapen is not evidence: an
+   organization that classified `kernel.conformance_run` below `gate` would otherwise let any subject
+   with a covering mandate decide what the root was agreeing to.
+
+   **This costs an existing deployment something.** A registration flow that emitted its conformance
+   run under an ordinary mandate now needs a root's approval for that run too. That is the intended
+   price, stated here rather than discovered on upgrade.
 4. A manifest version bump follows the same path. Adding an action, or weakening a class, requires a
    fresh human signature. Removing an action does not invalidate historical envelopes citing it.
 5. The kernel MUST retain every registered manifest version forever: an envelope from 2027 citing

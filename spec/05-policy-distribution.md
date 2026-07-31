@@ -87,6 +87,15 @@ order:
 2. **Prohibition.** If the resulting class is `prohibited`, the action is hard-blocked. No mandate,
    no approval, and no gate decision can permit it. The attempt MUST be emitted with
    `outcome: "attempted"` and full evidence.
+
+   An envelope that reports a `prohibited` action as `applied` or `failed` MUST be **accepted and
+   flagged** (`prohibited-applied`), never refused. The kernel records effects; it does not apply
+   them, and by the time such an envelope arrives the act has already happened in the world.
+   Refusing it would delete the only record that the violation occurred — the strict-looking choice
+   that destroys evidence. The same holds for an effect reported as applied past an exhausted budget
+   (`budget-exceeded-applied`, §03 §4.3): a component confessing that it acted anyway is the most
+   audit-valuable record the system holds, and an implementation MUST make such envelopes
+   queryable as violations.
 3. **Mandate.** Verify the chain (§03 §5). Failure blocks (`outcome: "blocked"`).
 4. **Gate rule.** The first matching `gate-rules` entry decides `allow` | `gate` | `deny`. `gate`
    requires an approval signature per §06 before the effect may be applied.
@@ -188,6 +197,15 @@ Normative:
 5. Org overrides live in git and are reviewable (policy-model Tier 2); the git commit is *not* the
    authority — the envelope is. Reviewability and enforceability are separate properties and this
    spec provides the second one.
+6. **Policy cannot lower the bar on the mechanism that enforces policy.** The actions that change
+   what the system will permit — `kernel.publish_policy`, `kernel.register_component`,
+   `kernel.enroll_root`, `kernel.retire_root`, `kernel.conformance_run` — MUST be approved by an
+   enrolled human root, whatever class the policy in force assigns them. An organization may
+   classify them *higher*; it MUST NOT classify them lower, and a `gate-rules` entry that would
+   allow one of them without a root's signature has no effect on them.
+
+   A policy that could downgrade its own amendment path is a policy that can be amended into
+   permitting anything, in one step, by whoever holds the weakest mandate that step then requires.
 
 ## 6. Cache, staleness, and `revoke-cached`
 

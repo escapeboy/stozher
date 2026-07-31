@@ -9,7 +9,7 @@ been to skip the check — trading a documented gap for an undocumented hole —
 implemented and their names were marked as not part of the wire contract. Every one of them carried a
 comment naming the clause it enforces and saying it was a candidate for the next revision.
 
-v0.9 is that revision. Fifteen are adopted.
+v0.9 is that revision. Sixteen are adopted.
 
 ---
 
@@ -32,6 +32,7 @@ v0.9 is that revision. Fifteen are adopted.
 | `gate-decision-already-recorded` | §06 §5 — one request, one answer |
 | `gate-rate-limited` | §09 §7 — the kernel rate-limits gate requests per subject |
 | `notify-failed` | §06 §4.3 — a notification that could not be delivered |
+| `budget-exceeded-applied` | §05 §3 step 2 — an effect reported as applied past an exhausted cap |
 
 Each is now stated next to the rule rather than in a table of its own, which is how the specification
 already names every other code. §02's structural table gained the five that belong to envelope
@@ -49,6 +50,12 @@ category error rather than a courtesy.
 That also repairs something: the register's own comment claimed to be complete while five codes added
 during v0.3 and v0.4 sat outside it. They are in it now, and the boundary is a rule rather than a
 habit.
+
+`budget-exceeded-applied` moved across that boundary while this work was in progress, and the move is
+the rule working. It is a `policy_violation` marker on an accepted envelope rather than a refusal, so
+it started in the local set — and then ADR-0019's catch-up named it in §05 §3 step 2 alongside
+`prohibited-applied`, which is normative and never carried a prefix. A code the specification names
+is adopted, whatever shape of condition it reports.
 → `no_adopted_code_still_claims_to_be_local` is the half a rename forgets: a code the specification
 names, still carrying `x-`, tells a reader of a rejection record the opposite of the truth.
 `the_two_sets_are_disjoint_and_have_no_duplicates` stops a code being claimed by both.
@@ -74,11 +81,11 @@ own ADR; §00 §1's three sentences do not change.
 
 ## 4. What this does not do
 
-It does not add a check, remove one, or change what any of them refuses. Every condition was already
+It does not add a check, remove one, or change what any of them reports. Every condition was already
 being detected and reported; what changed is whether the name is part of the contract an independent
 implementation has to match. That was the point: v0.9's gate is an implementation written from
-`spec/` alone passing the corpus, and fifteen refusals it could not have known the names of were
-fifteen ways to fail that gate for no reason.
+`spec/` alone passing the corpus, and sixteen conditions whose names it could not have known were
+sixteen ways to fail that gate for no reason.
 
 ## Related
 

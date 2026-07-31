@@ -26,7 +26,7 @@ specification does not name, and a reader of a rejection record can tell the two
 An implementation MAY define such codes; it MUST NOT emit one for a condition this specification
 does name.
 
-**A code adopted into this specification does not rewrite the past.** Fifteen `x-` codes were adopted
+**A code adopted into this specification does not rewrite the past.** Sixteen `x-` codes were adopted
 in the `stozher/0.1` revision that added this paragraph, dropping the prefix. Rejection records
 already chained under the old name keep it forever — the store is append-only and a rename is not a
 migration. So:

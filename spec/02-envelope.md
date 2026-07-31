@@ -261,6 +261,12 @@ Rules:
 6. Aggregation MUST NOT be used to hide an exfiltration: policy MAY reclassify a read action as
    `consequential` (bulk export, credential read), and a `consequential` action is never
    aggregated. See §09 for what this does and does not defend against.
+7. An aggregation record carries **no `resource`**, so §03 §4.2's scope tuple cannot be formed from
+   it: each folded action is checked against the `"-"` sentinel of §4. **A mandate whose `resources`
+   scope is narrower than `["-"]` or `["*"]` therefore cannot cover aggregated reads.** That is a
+   real limitation rather than an oversight, and it is stated here because it will bite the first
+   organization that writes a narrowly-scoped read mandate: the fix is to widen the mandate or to
+   stop aggregating, not to weaken the check.
 
 ## 8. Durable objects and folds (`commitment-ref`)
 

@@ -84,6 +84,11 @@ A signed object (§01 §5), signed by the **approver's** key:
   SHOULD be short (default `PT15M`). An approval is a permission to act *now*, not a licence.
 - `single-use` (MUST) — see §3. `false` is permitted only where policy explicitly allows it; the
   default profile MUST set it `true`.
+- All members are REQUIRED and the set is closed: an unknown member MUST be rejected
+  (`schema-unknown-member`), exactly as for the action request in §1.1. Stated rather than left to
+  symmetry, because asymmetric strictness between the two halves of one signed authorization object
+  is a defect waiting to be found, and an implementation accepting unknown decision members would
+  not have been violating the text.
 - `decision` alone is inert. Note that even the string `"approve"` carries no authority: it is
   meaningless without `sig` verifying and without `request-hash` matching the action actually
   performed. There is no place in this schema where a truthy value grants permission.
@@ -106,6 +111,11 @@ signature with no access to kernel state.
 
 Let `E` be an envelope, `requires-gate` the policy decision for `E` (§05 §3 step 4), and `approvers`
 the set of keys permitted to approve that scope.
+
+**`requires-gate` is outcome-conditional.** It is true only when the effect was applied — outcome
+`applied` or `failed`. A gated action that was parked, denied or timed out legitimately carries no
+approval, and §4 rules 5 and 6 *require* those envelopes to exist. Read without this, step (1) would
+refuse the very record of a human saying no.
 
 ```
 verify_authorization(E, requires-gate, approvers, at = E.emitted-at):
@@ -253,6 +263,40 @@ gateway's wire format, §10 §6):
   suggest an alternative unapproved action. Refusals are terminal facts, not negotiations.
 - `envelope-id` lets the caller (and its operator) find the record. Being refused legibly is a
   feature: the agent can report accurately to its user instead of retrying blind.
+
+### 4.2 Parking is a terminal answer, not a wait
+
+Parking is synchronous from the caller's perspective in that the caller receives a *terminal answer*
+immediately: a `parked` refusal (§4.1) is a legitimate terminal response. The approval binds a
+**later identical request** — identical by `request-hash`, therefore the same call and not a similar
+one. A component MUST NOT block a request handler waiting for a decision.
+
+An implementation that held the call open would turn every gate into a request-handler leak and an
+approver's lunch break into an outage, and it would do so while looking like it worked.
+
+### 4.3 The pending queue
+
+A parked request is **not** an envelope. §02 §2's `kind` vocabulary is closed, and its admission rule
+covers what changes what the system will permit; an action request changes nothing. Accordingly:
+
+1. The kernel MUST expose `POST /v1/gate/requests`, taking an action-request object (§1.1), and it
+   MUST be idempotent by `request-hash`. It MUST validate the request against §1.1's closed member
+   set, MUST reject an unknown member (`schema-unknown-member`), and MUST reject a request whose
+   `not-after` has already passed (`gate-request-expired`).
+2. That route MUST NOT append an envelope and MUST NOT be reachable from any code path that can.
+3. The kernel MUST record the authenticated caller alongside the request. **The caller need not be
+   the subject the request names**: the approval binds `request.key`, so a caller that does not hold
+   that key has asked a question it can never act on. An interface MUST show both.
+4. The kernel MUST expose the queue for reading, and one request together with its decision when one
+   exists. A decision MUST be returned **verbatim**; a component consuming it MUST itself perform §2
+   steps (2)–(10) before acting. A queue that pre-digested a decision would be a second verifier, and
+   the one that matters is the one at the point of use.
+5. The queue MUST be append-only. A request that could be edited after an approver read it is not the
+   request they approved, and a decision that could be rewritten is not a decision.
+6. The kernel MUST record every approver-notification attempt with its outcome. An interface MUST
+   distinguish "no channel is configured" and "no channel delivered" from "an approver was notified"
+   (§4 rule 3's `notify-failed`).
+7. At most one decision may be recorded per request (`gate-decision-already-recorded`).
 
 ## 5. Approvers
 

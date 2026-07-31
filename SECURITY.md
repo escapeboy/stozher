@@ -36,14 +36,26 @@ that starts from a map is worth more than one that starts from a README.
    downstream tool without transiting it.
 6. **`deploy/` — the key ceremony and file modes.** Keys are generated on the operator's machine,
    never on the server.
+7. **`kernel/stozher-kernel/src/harness.rs` and `driver.rs` — the conformance harness.** It builds a
+   throwaway kernel, performs a root ceremony with a generated seed, mints mandates and signs
+   approvals. It is the one place in the codebase that legitimately holds a root key and drives a
+   foreign process, so it is the one place where "this is only for testing" would be the most
+   dangerous sentence in the repository. The harness must not be reachable from the service, and it
+   must not be able to submit its own result (`spec/08 §3.1` requires a human signature).
 
 ## Known limitations, stated rather than discovered
 
-- The specification **lags the implementation**: ADRs 0006–0012 hold normative text not yet folded
-  into `spec/`, and 11 conditions live in a quarantined `x-` reason-code register standing in for
-  missing spec language. An independent implementation could legally diverge today.
-- **Budget enforcement is not implemented.** Mandates carry budget dimensions and cognition envelopes
-  carry cost, but nothing accumulates spend.
+- **No independent implementation has been written from `spec/` alone.** That is the project's own
+  definition of done for a protocol product and the one gate it cannot grade itself. The corpus
+  (`spec/vectors/`, 293 vectors) is what such an implementation would be measured against, and the
+  three most recent releases were largely spent making it able to catch things: eleven concrete
+  disagreements between this repository's own two implementations were found in v0.9 by reading
+  clauses rather than by running tests, each one a place the specification decided nothing and two
+  authors decided differently (ADR-0017). It is reasonable to assume more remain.
+- **Six rules are checkable only against a running kernel.** The pending queue's append-only
+  property, the root-approved floor over policy amendment, the idempotence of
+  `POST /v1/gate/requests` — these are covered by this repository's tests, not by the corpus, so an
+  independent implementation could pass every vector and still get them wrong (ADR-0019 §3).
 - **TLS is terminated externally.** The containers publish on loopback and expect a terminator; they
   do not speak TLS themselves.
 - **The regulator export is assembled in memory** (the store is paged in 10,000-row batches, so no
@@ -52,7 +64,14 @@ that starts from a map is worth more than one that starts from a README.
   once the feed is pulled; between pulls the window is bounded by the poll interval and visible in
   the audit.
 - The four-class action taxonomy has been exercised only through the gateway's boundary
-  classification, never by a component that classifies natively.
+  classification, never by a component that classifies natively. The conformance harness
+  (`spec/08 §4`) now exists and produces a green cross-language run, but **both halves of that run
+  were written here**: it proves the registration path works and that the harness catches the
+  failures it enumerates. It does not answer whether the taxonomy survives a foreign domain.
+- **Payload decay has no second custodian.** Deleting a payload is the one destructive operation the
+  kernel performs, and the property that makes it safe — chain verification never reads a payload —
+  is enforced by the schema (no chain-bearing column in `payloads`) rather than by a separate
+  authority. A reviewer should try to make verification depend on payload presence.
 
 ## Reporting a vulnerability
 

@@ -120,8 +120,9 @@ pub const CALLER_UNAUTHENTICATED: &str = "x-caller-unauthenticated";
 /// the blocking on the emitter ("outcome: blocked, envelope still emitted"), so an envelope that
 /// arrives here claiming `applied` past a cap is a component confessing that it acted anyway. The
 /// effect has already happened, and refusing the record would delete the only evidence of it — the
-/// same reasoning as `prohibited-applied`. See [`crate::budget`] and ADR-0015.
-pub const BUDGET_EXCEEDED_APPLIED: &str = "x-budget-exceeded-applied";
+/// same reasoning as `prohibited-applied`. §05 §3 step 2 names both, so both are normative and
+/// neither carries the local prefix. See [`crate::budget`], ADR-0015 and ADR-0018.
+pub const BUDGET_EXCEEDED_APPLIED: &str = "budget-exceeded-applied";
 
 /// The store's schema is newer than this build understands.
 ///
@@ -156,10 +157,9 @@ pub const CONFORMANCE_HARNESS_FAILED: &str = "x-conformance-harness-failed";
 /// See the module documentation: every entry here reports a condition of the *kernel*, not a verdict
 /// about a submitted object, so none of them is part of the wire contract and every one keeps its
 /// `x-` prefix.
-pub const REGISTER: [&str; 7] = [
+pub const REGISTER: [&str; 6] = [
     STORE_UNAVAILABLE,
     CALLER_UNAUTHENTICATED,
-    BUDGET_EXCEEDED_APPLIED,
     SCHEMA_VERSION_AHEAD,
     SCHEMA_MIGRATION_FAILED,
     CONFORMANCE_DRIVER_FAILED,
@@ -171,7 +171,8 @@ pub const REGISTER: [&str; 7] = [
 /// Listed so a test can assert they did **not** keep the `x-` prefix. A code that is in the
 /// specification and still marked as this implementation's own would tell a reader of a rejection
 /// record the opposite of the truth.
-pub const ADOPTED: [&str; 15] = [
+pub const ADOPTED: [&str; 16] = [
+    BUDGET_EXCEEDED_APPLIED,
     POLICY_OFFLINE_ALLOWS_GATED,
     POLICY_CHANGE_TARGET_MISMATCH,
     POLICY_CHANGE_DOCUMENT_UNBOUND,
