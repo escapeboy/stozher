@@ -148,7 +148,10 @@ async fn chain_verification_over_ten_thousand_envelopes() {
         .kernel_checkpoint(EFFECT_STREAM, 0, CHAIN_LENGTH - 1, json!({}))
         .await;
     world.accept(&checkpoint, &[]).await;
-    chain::verify_checkpoint(&checkpoint, &stored).expect("the checkpoint must attest this range");
+    // The range starts at seq 0, so it is anchored by construction and needs no external anchor.
+    let attested = chain::verify_checkpoint(&checkpoint, &stored, None)
+        .expect("the checkpoint must attest this range");
+    assert!(attested.anchored);
     assert_eq!(
         checkpoint["checkpoint"]["head-hash"].as_str(),
         Some(result.head_hash.as_str())
@@ -165,7 +168,7 @@ async fn chain_verification_over_ten_thousand_envelopes() {
     let flipped = flip_hash(victim["prev-hash"].as_str().unwrap_or(&"0".repeat(64)));
     rebuilt[position] = revise(victim, json!({ "prev-hash": flipped }), &world.agent);
     assert!(
-        chain::verify_checkpoint(&checkpoint, &rebuilt).is_err(),
+        chain::verify_checkpoint(&checkpoint, &rebuilt, None).is_err(),
         "a rebuilt chain must not satisfy a previously published checkpoint"
     );
 }

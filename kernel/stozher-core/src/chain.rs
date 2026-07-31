@@ -134,13 +134,31 @@ fn attach(error: crate::error::Error, seq: Option<u64>) -> crate::error::Error {
     }
 }
 
+/// The supplied range is not the range the checkpoint attests.
+///
+/// Implementation-local, hence the `x-` prefix: §04 §4 names `checkpoint-count-mismatch` for
+/// `count != to-seq - from-seq + 1` and `checkpoint-head-mismatch` for the head, but names nothing
+/// for a range that simply begins somewhere else. Registered in `stozher_kernel::codes::REGISTER`.
+pub const CHECKPOINT_RANGE_MISMATCH: &str = "x-checkpoint-range-mismatch";
+
 /// Verify a signed checkpoint against the chain range it attests (§04 §4).
+///
+/// `expected_first_prev` anchors a checkpoint whose range does not start at `seq` 0. It is the
+/// caller's to supply — deliberately, because it is the one input that cannot come from the
+/// material under examination. Anchoring a range with a `prev-hash` read out of that same range
+/// compares a value with itself: it always passes, and it certifies a signed branch that never
+/// happened just as readily as the real history. Without it the result is honest but weaker, and
+/// says so in [`ChainResult::anchored`].
 ///
 /// # Errors
 ///
-/// `checkpoint-count-mismatch`, `checkpoint-head-mismatch`, `schema-missing-member`, or a code
-/// propagated from [`verify_chain`].
-pub fn verify_checkpoint(checkpoint: &Value, range: &[Value]) -> Result<()> {
+/// `checkpoint-count-mismatch`, `checkpoint-head-mismatch`, [`CHECKPOINT_RANGE_MISMATCH`],
+/// `schema-missing-member`, or a code propagated from [`verify_chain`].
+pub fn verify_checkpoint(
+    checkpoint: &Value,
+    range: &[Value],
+    expected_first_prev: Option<&str>,
+) -> Result<ChainResult> {
     let body = checkpoint
         .get("checkpoint")
         .ok_or_else(|| err!("schema-missing-member", "checkpoint"))?;
@@ -165,14 +183,42 @@ pub fn verify_checkpoint(checkpoint: &Value, range: &[Value]) -> Result<()> {
         .and_then(Value::as_str)
         .ok_or_else(|| err!("schema-missing-member", "checkpoint.head-hash"))?;
 
+    // §04 §4 rule 2, on the checkpoint's own members.
     if count != to_seq.saturating_sub(from_seq) + 1 {
         return Err(err!(
             "checkpoint-count-mismatch",
-            "count {count} does not match the range"
+            "count {count} does not match the attested range {from_seq}..={to_seq}"
         ));
     }
-    let anchor = range.first().and_then(|e| e["prev-hash"].as_str());
-    let result = verify_chain(range, stream, anchor)?;
+    // …and then against what was actually supplied, identity before size. The two refusals are
+    // different incidents and must not share a code: a range that begins somewhere else is the
+    // caller holding the wrong records, while a range of the wrong length with the right start is
+    // the count claim failing. Reporting the second for the first would tell an operator their
+    // chain had been tampered with when they had merely passed the wrong slice.
+    let observed_first = range
+        .first()
+        .and_then(|e| e.get("seq"))
+        .and_then(Value::as_u64)
+        .ok_or_else(|| err!("schema-missing-member", "range[0].seq"))?;
+    if observed_first != from_seq {
+        return Err(err!(
+            CHECKPOINT_RANGE_MISMATCH,
+            "attests from seq {from_seq}, supplied range begins at {observed_first}"
+        ));
+    }
+    // `count` is the number of envelopes the checkpoint attests, so a range of a different length
+    // does not satisfy it however consistent that range is with itself: a checkpoint over
+    // `[0, 999]` verifying against three envelopes is the difference between "these thousand
+    // records are the history" and "some records are".
+    if range.len() as u64 != count {
+        return Err(err!(
+            "checkpoint-count-mismatch",
+            "attests {count} envelopes, supplied {}",
+            range.len()
+        ));
+    }
+
+    let result = verify_chain(range, stream, expected_first_prev)?;
     if result.head_hash != head_hash {
         return Err(err!(
             "checkpoint-head-mismatch",
@@ -180,5 +226,5 @@ pub fn verify_checkpoint(checkpoint: &Value, range: &[Value]) -> Result<()> {
             result.head_hash
         ));
     }
-    Ok(())
+    Ok(result)
 }
