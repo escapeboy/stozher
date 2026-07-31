@@ -45,13 +45,14 @@ services:
     ports:
       - "127.0.0.1:${STOZHER_KERNEL_PORT:-8787}:8787"
     # Long syntax, for `create_host_path: false` on every one of them. Docker's default is to
-    # *create* a missing bind source, and for a file-shaped mount it creates a **directory** — so a
-    # `docker compose up` run before the ceremony leaves `config/kernel-config.json` as a directory,
-    # the kernel logs `config-unreadable: Is a directory (os error 21)`, and `restart: unless-stopped`
-    # loops on it for ever. It also creates `secrets/` and `secrets/kernel/` at the daemon's 0755
-    # rather than the ceremony's 0700. Refusing to start is the honest failure: nothing here is
-    # docker's to invent, every one of these paths is written by `bin/stozher-bootstrap`, and a
-    # deployment that has not been bootstrapped should say so rather than half-exist.
+    # *create* a missing bind source, and for a file-shaped mount it creates a **directory**. Under
+    # that default a `docker compose up` run before the ceremony left `config/kernel-config.json` as
+    # a directory, the kernel logged `config-unreadable: Is a directory (os error 21)`, and
+    # `restart: unless-stopped` looped on it for ever; it also created `secrets/` and
+    # `secrets/kernel/` at the daemon's 0755 rather than the ceremony's 0700. Refusing to start is
+    # the honest failure: nothing here is docker's to invent, every one of these paths is written by
+    # `bin/stozher-bootstrap`, and a deployment that has not been bootstrapped should say so rather
+    # than half-exist.
     volumes:
       - type: bind
         source: ./var
