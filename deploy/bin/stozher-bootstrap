@@ -46,7 +46,7 @@ set -euo pipefail
 DEPLOY="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$DEPLOY"
 
-IMAGE="stozher-kernel:0.1.0"
+IMAGE="${STOZHER_KERNEL_IMAGE:-stozher-kernel:0.1.0}"
 # Resolved from the running container once the kernel is up, never assumed: the compose project can
 # be renamed with COMPOSE_PROJECT_NAME so that two installs on one host do not collide, and a
 # hardcoded `stozher_default` would silently attach the throwaway containers below to the *other*
@@ -347,8 +347,9 @@ cat <<DONE
   The deployment is up.
 
   Console      http://127.0.0.1:${PORT}/console
-               It authenticates with the kernel's Bearer credential; see deploy/README.md for the
-               two ways to reach it from a browser.
+               It authenticates with the kernel's Bearer credential, which a browser will not
+               attach to an address-bar navigation. Run bin/stozher-console to read it in one
+               (deploy/README.md section 3); this URL is for a client that sends the header.
   Root         ${ROOT_SUBJECT}  ${ROOT_KEY}
   Caller       ${CALLER_SUBJECT}
 

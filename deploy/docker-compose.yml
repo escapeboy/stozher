@@ -24,7 +24,7 @@ name: stozher
 
 services:
   kernel:
-    image: stozher-kernel:0.1.0
+    image: ${STOZHER_KERNEL_IMAGE:-stozher-kernel:0.1.0}
     build:
       # The repository root: the console's templates are compiled into the binary from `console/`.
       context: ..
@@ -105,7 +105,7 @@ services:
     stop_grace_period: 20s
 
   gateway:
-    image: stozher-gateway:0.1.0
+    image: ${STOZHER_GATEWAY_IMAGE:-stozher-gateway:0.1.0}
     build:
       context: ..
       dockerfile: deploy/Dockerfile.gateway

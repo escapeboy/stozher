@@ -33,9 +33,14 @@
 # gated, parked, signed for by a named human, and only then applied. The chain is then verified.
 # "The install finished" is not the assertion; "the audit trail exists and verifies" is.
 #
-# Usage: gate/clean-install.sh [--dirty] [--keep-images] [--budget 1800]
+# Usage: gate/clean-install.sh [--dirty] [--keep-images] [--budget 1800] [--port 8787]
 #   --dirty        skip the wipe (for iterating; the measured number then means nothing)
 #   --keep-images  skip the image rebuild (same caveat)
+#   --port         publish the kernel here instead of 8787, for a host that already has an install
+#
+# STOZHER_KERNEL_IMAGE / STOZHER_GATEWAY_IMAGE override the image tags this deletes and rebuilds.
+# The tags are the docker daemon's, not the compose project's, so on a host with a second install
+# the default ones are that install's too.
 
 set -euo pipefail
 
@@ -46,12 +51,23 @@ BUDGET=1800
 CLEAN="yes"
 REBUILD="yes"
 ROOT_SUBJECT="human:gate-operator"
+# The port the ceremony publishes on. A host that already runs an install holds 8787, and a gate
+# that can only ever be run on a machine with no deployment on it cannot be run on the machine the
+# deployment is on. Defaults to the documented 8787; `--port` is what makes a second one possible.
+PORT="${STOZHER_KERNEL_PORT:-8787}"
+# The image tags are global to the docker daemon, not to the compose project, so a gate that deletes
+# and rebuilds `stozher-kernel:0.1.0` deletes and rebuilds the *host's* one — the tag another
+# install's next `up` would resolve. Overridable for the same reason `COMPOSE_PROJECT_NAME` is.
+KERNEL_IMAGE="${STOZHER_KERNEL_IMAGE:-stozher-kernel:0.1.0}"
+GATEWAY_IMAGE="${STOZHER_GATEWAY_IMAGE:-stozher-gateway:0.1.0}"
+export STOZHER_KERNEL_IMAGE="$KERNEL_IMAGE" STOZHER_GATEWAY_IMAGE="$GATEWAY_IMAGE"
 while [ $# -gt 0 ]; do
   case "$1" in
     --dirty) CLEAN="no"; shift ;;
     --keep-images) REBUILD="no"; shift ;;
     --budget) BUDGET="$2"; shift 2 ;;
-    -h|--help) sed -n '2,35p' "$0"; exit 0 ;;
+    --port) PORT="$2"; shift 2 ;;
+    -h|--help) sed -n '2,43p' "$0"; exit 0 ;;
     *) echo "unknown argument $1" >&2; exit 2 ;;
   esac
 done
@@ -85,12 +101,12 @@ docker info >/dev/null 2>&1 || fail "the docker daemon is not reachable — 'doc
 
 # The ceremony below publishes on 127.0.0.1:8787 and nothing tells it to pick another port. A port
 # already in use fails at step 2, after the images have been built.
-python3 - <<'PY' || fail "127.0.0.1:8787 is already in use — free it, or stop the other install, and re-run"
+python3 - "$PORT" <<'PY' || fail "127.0.0.1:$PORT is already in use — free it, or stop the other install, or pass --port, and re-run"
 import socket, sys
 probe = socket.socket()
 probe.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
 try:
-    probe.bind(("127.0.0.1", 8787))
+    probe.bind(("127.0.0.1", int(sys.argv[1])))
 except OSError:
     sys.exit(1)
 finally:
@@ -110,17 +126,33 @@ case "$HEADROOM_KB" in
   *) [ "$HEADROOM_KB" -ge 5242880 ] || fail "under 5 GB free on the filesystem holding this checkout ($(( HEADROOM_KB / 1024 )) MB) — a --no-cache build of both images needs more" ;;
 esac
 
+# `COMPOSE_PROJECT_NAME` is the operator's, and it is the only thing standing between this gate and
+# the *other* install on this host: every `docker compose` call below — the wiping `down --volumes`
+# first among them — addresses whatever project the environment resolves to. This script used to
+# truncate it out of `.env` on the line before that `down`, so a host set up the way README.md §1
+# "Two installs on one host" documents had its other deployment torn down by a gate that had been
+# told, in that same file, which project it was for. Read it once, before anything writes, and
+# re-emit it into every `.env` this script produces — the ceremony already does exactly this.
+GATE_PROJECT=""
+if [ -f .env ]; then
+  GATE_PROJECT="$(grep -E '^[[:space:]]*COMPOSE_PROJECT_NAME=' .env | tail -n 1 || true)"
+fi
+write_env() {
+  printf 'STOZHER_UID=%s\nSTOZHER_GID=%s\n' "$(id -u)" "$(id -g)" > .env
+  if [ -n "$GATE_PROJECT" ]; then printf '%s\n' "$GATE_PROJECT" >> .env; fi
+}
+
 # ---------------------------------------------------------------------------------------------
 step "0  wiping every trace of a previous install"
 if [ "$CLEAN" = "yes" ]; then
   # `.env` first and only then `down`: compose interpolates the whole file on every invocation, and
   # `user:` has no default (SEC-7), so a `down` run without STOZHER_UID errors out — and this one is
   # `|| true`, which would leave the previous install's containers standing while claiming a wipe.
-  printf 'STOZHER_UID=%s\nSTOZHER_GID=%s\n' "$(id -u)" "$(id -g)" > .env
+  write_env
   docker compose down --remove-orphans --volumes >/dev/null 2>&1 || true
   rm -rf var secrets genesis config/kernel-config.json config/stozher-gateway.toml .env
   if [ "$REBUILD" = "yes" ]; then
-    docker image rm -f stozher-kernel:0.1.0 stozher-gateway:0.1.0 >/dev/null 2>&1 || true
+    docker image rm -f "$KERNEL_IMAGE" "$GATEWAY_IMAGE" >/dev/null 2>&1 || true
   fi
   echo "  removed: var/ secrets/ genesis/ config/*.json config/*.toml .env"
   # Asserted, not assumed. A gate that quietly reused a store or a seed would measure the time to
@@ -136,17 +168,19 @@ fi
 # ---------------------------------------------------------------------------------------------
 step "1  building both images from source"
 if [ "$REBUILD" = "yes" ] && [ "$CLEAN" = "yes" ]; then
-  printf 'STOZHER_UID=%s\nSTOZHER_GID=%s\n' "$(id -u)" "$(id -g)" > .env
+  write_env
   docker compose build --no-cache kernel gateway
 else
-  printf 'STOZHER_UID=%s\nSTOZHER_GID=%s\n' "$(id -u)" "$(id -g)" > .env
+  write_env
   docker compose build kernel gateway
 fi
 
 # ---------------------------------------------------------------------------------------------
 step "2  the ceremony (bin/stozher-bootstrap, exactly as documented)"
-rm -f .env
-./bin/stozher-bootstrap --root "$ROOT_SUBJECT" --port 8787
+# Not `rm -f .env`: the ceremony reads this file for the operator's own keys before it rewrites it,
+# and removing it here is how the project name got lost on the way into the install that needed it.
+write_env
+./bin/stozher-bootstrap --root "$ROOT_SUBJECT" --port "$PORT"
 
 set -a; . ./.env; set +a
 GATEWAY=(docker compose -f "$DEPLOY/docker-compose.yml" run --rm -T gateway)

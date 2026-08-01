@@ -169,7 +169,7 @@ if [ -z "$CONTAINER" ]; then
   exit 1
 fi
 NETWORK="$(docker inspect -f '{{range $name, $_ := .NetworkSettings.Networks}}{{$name}}{{end}}' "$CONTAINER")"
-if ! docker run --rm -u "$(id -u):$(id -g)" --network "$NETWORK" stozher-kernel:0.1.0 \
+if ! docker run --rm -u "$(id -u):$(id -g)" --network "$NETWORK" "${STOZHER_KERNEL_IMAGE:-stozher-kernel:0.1.0}" \
      await-health --url http://kernel:8787 --timeout 90; then
   echo "the kernel did not become healthy on the restored state" >&2
   roll_back

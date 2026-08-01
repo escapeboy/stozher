@@ -33,12 +33,24 @@ That is the right posture for the most privileged action in the system, and it i
 rather than a surprise. Before the ceremony, have your second root generate their own seed **on
 their own machine** and send you the public identifier only:
 
+`stozher-kernel` is the binary inside the kernel image, and there is nothing to install on their
+machine: they need this checkout and docker, and they run it out of the image the same way the
+ceremony does. From their own `deploy/`:
+
 ```sh
-stozher-kernel keygen  --out ~/.stozher/mira.seed
-stozher-kernel identity --key ~/.stozher/mira.seed --role 0     # -> ed25519:...
+mkdir -p ~/.stozher && docker compose build kernel
+docker run --rm -u "$(id -u):$(id -g)" -v ~/.stozher:/keys stozher-kernel:0.1.0 \
+    keygen --out /keys/mira.seed
+docker run --rm -u "$(id -u):$(id -g)" -v ~/.stozher:/keys stozher-kernel:0.1.0 \
+    identity --key /keys/mira.seed --role 0                     # -> ed25519:...
 ```
 
-You will pass that to `--second-root-key`. Their seed never comes near yours.
+`--role 0` is the one that matters. `keygen` also prints a *checkpoint* key on its way out; that is
+role `3'`, it belongs to a kernel rather than to a human, and it is not what goes in a root set.
+
+You will pass the `identity` line's output to `--second-root-key`. Their seed never comes near
+yours — `-v ~/.stozher:/keys` is their directory on their machine, and the container is gone by the
+time the command returns.
 
 A one-root install works and is supported — the ceremony warns and continues. It is the right
 choice for an evaluation and the wrong one for anything you would miss.
@@ -110,6 +122,23 @@ keys back out first and re-emits them, `COMPOSE_PROJECT_NAME` among them. Compos
 the containers, the network and the volumes of each install separately, and neither service pins a
 `container_name`, so nothing else has to change. Give each install its own `--port` as well: both
 publish on `127.0.0.1`, and two of them cannot have the same one.
+
+**One thing is not namespaced: the image tags.** `stozher-kernel:0.1.0` and
+`stozher-gateway:0.1.0` are the docker daemon's, not the compose project's, so the second install's
+`docker compose build` moves those tags off the first install's images and onto its own. The running
+container is unaffected — it holds an image *id* — but that id is now untagged, which means the
+first install's next `docker compose up` silently starts the *other* checkout's build, and a
+`docker image prune` deletes the image its running kernel came from. If the two installs are not the
+same commit, give each its own tags:
+
+```sh
+export STOZHER_KERNEL_IMAGE=stozher-kernel-staging:0.1.0
+export STOZHER_GATEWAY_IMAGE=stozher-gateway-staging:0.1.0
+```
+
+Both default to the plain names, and every script here reads them, so exporting them in the shell
+that runs the ceremony is enough. `.env` is the wrong place for them: the ceremony rewrites it and
+only carries over the keys listed in `.env.example`.
 
 ### What the ceremony actually is
 
@@ -281,7 +310,21 @@ pays the whole cost.
 ./bin/stozher-backup                       # -> backups/stozher-<utc>.tar.gz, mode 0600
 ./bin/stozher-backup --no-keys             # an archive that is not a secret, and cannot restore alone
 ./bin/stozher-restore backups/stozher-<utc>.tar.gz
+./bin/stozher-restore backups/stozher-<utc>.tar.gz --force   # when a store is already here
 ```
+
+**`--force` is not optional as often as it looks.** The bare form restores only onto a deployment
+with no `var/stozher.db` — the total-loss case. Every other restore you are likely to run, the
+rehearsal that proves the archive is good and the roll-back-a-bad-upgrade of §5a among them, is a
+restore *over* a store, and the bare form stops with
+
+```
+var/stozher.db exists. Restoring over a live deployment replaces its audit trail.
+Re-run with --force if that is what you mean; the current state is moved aside, not deleted.
+```
+
+That refusal is the right default — replacing an audit trail should be typed out — and the flag
+changes nothing else: the current state is still renamed `.superseded-<utc>` rather than deleted.
 
 The store is snapshotted with `VACUUM INTO` **through the running kernel** — no downtime, no
 separate `sqlite3`, and a copy that is consistent at one instant. Copying the three SQLite files
@@ -512,6 +555,7 @@ versioning is stamped and re-verified rather than rebuilt.
 
 ```sh
 ./gate/clean-install.sh
+./gate/clean-install.sh --port 8801        # on a host that already has an install on 8787
 ```
 
 From nothing — no store, no keys, no configuration, both images deleted and rebuilt `--no-cache` —

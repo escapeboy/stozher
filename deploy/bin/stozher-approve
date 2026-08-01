@@ -21,7 +21,7 @@ set -euo pipefail
 DEPLOY="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$DEPLOY"
 
-IMAGE="stozher-kernel:0.1.0"
+IMAGE="${STOZHER_KERNEL_IMAGE:-stozher-kernel:0.1.0}"
 # Resolved from the running container below, never assumed. `bin/stozher-bootstrap` and
 # `bin/stozher-restore` both already did this; this script did not, and a hardcoded
 # `stozher_default` is wrong for every install that set `COMPOSE_PROJECT_NAME` — it either attaches
