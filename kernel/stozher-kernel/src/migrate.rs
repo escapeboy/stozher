@@ -42,7 +42,7 @@ const SCHEMA: &str = include_str!("sql/schema.sql");
 const APPEND_ONLY_SQLITE: &str = include_str!("sql/append_only.sqlite.sql");
 
 /// The schema version this build writes and expects.
-pub const SCHEMA_VERSION: u32 = 3;
+pub const SCHEMA_VERSION: u32 = 4;
 
 /// One forward-only step. There is no `down`: a downgrade would have to discard rows, and the rows
 /// in question are an audit trail.
@@ -94,6 +94,50 @@ pub const MIGRATIONS: &[Migration] = &[
                     PRIMARY KEY (mandate_id, dimension)
                 );
                 CREATE INDEX IF NOT EXISTS spend_by_mandate ON spend (mandate_id);"],
+    },
+    Migration {
+        to_version: 4,
+        name: "append-only covers INSERT too, not only UPDATE and DELETE",
+        // The baseline's triggers make an existing row immutable, which is what append-only means
+        // and all it means. They say nothing about *new* rows, so anyone able to write the database
+        // file could INSERT a record `Ingest` would have refused — a consequential effect carrying
+        // no authorization — and every read path serves it as genuine. `Store::append` being
+        // crate-private is a guarantee of the Rust type system, not of the storage engine, and
+        // §09's threat model does not stop at the process boundary. Found by attacking a throwaway
+        // deployment: the forged row verified, and after one INSERT into the `streams` projection
+        // it was reported by `stozher-kernel verify` as part of a clean run.
+        //
+        // Additive in the sense §4.1 permits: triggers only, no column, no rewrite, no signed byte
+        // moved.
+        //
+        // What this closes: an insert into an *existing* stream that does not extend it — a gap, a
+        // repeated position, or a `prev_hash` naming something other than the row before it.
+        //
+        // What it does NOT close, said plainly because a partial defence read as a total one is
+        // worse than none: a forged **new** stream. Its first envelope is legitimately seq 0 with a
+        // null `prev_hash`, and no SQL predicate separates that from a real one — the difference is
+        // whether an enrolled key signed it under a resolvable mandate, which is `Ingest`'s
+        // judgement and is not expressible here. Catching a stream that should not exist needs the
+        // off-box checkpoint set plus knowing which streams an emitter ought to have, which is why
+        // §04 §4 rule 7 says a checkpoint that never leaves the box proves little.
+        sql: &["CREATE TRIGGER IF NOT EXISTS envelopes_insert_must_extend_the_chain
+                BEFORE INSERT ON envelopes
+                WHEN NEW.seq > 0
+                BEGIN
+                    SELECT RAISE(ABORT, 'envelopes are append-only: an insert must extend its stream, naming the row at seq - 1 as prev_hash')
+                    WHERE NOT EXISTS (
+                        SELECT 1 FROM envelopes
+                        WHERE stream = NEW.stream AND seq = NEW.seq - 1 AND id = NEW.prev_hash
+                    );
+                END;
+                CREATE TRIGGER IF NOT EXISTS envelopes_insert_at_seq_zero_starts_a_stream
+                BEFORE INSERT ON envelopes
+                WHEN NEW.seq = 0
+                BEGIN
+                    SELECT RAISE(ABORT, 'envelopes are append-only: seq 0 starts a stream, so prev_hash must be null and the stream must be empty')
+                    WHERE NEW.prev_hash IS NOT NULL
+                       OR EXISTS (SELECT 1 FROM envelopes WHERE stream = NEW.stream);
+                END;"],
     },
 ];
 
@@ -206,21 +250,33 @@ pub async fn run(pool: &SqlitePool, migrations: &[Migration]) -> Result<Vec<u32>
 /// check. Chain-bearing tables are additive-only, so a migration that loses one of their triggers is
 /// a bug in the migration, and the safe direction is to say so before the commit.
 async fn assert_append_only_intact(tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>) -> Result<()> {
-    let mut triggers: BTreeMap<String, usize> = BTreeMap::new();
-    let rows = sqlx::query("SELECT tbl_name FROM sqlite_master WHERE type = 'trigger'")
+    // What each table must still have, by *meaning* rather than by count. This counted triggers and
+    // required two, which was the same thing only while every table carried exactly the UPDATE and
+    // DELETE pair. Step 4 added two INSERT triggers to `envelopes`, and under the old rule dropping
+    // its UPDATE guard left three — still "at least two", so a hostile migration passed the check
+    // that exists to catch it. A proxy for a property stops being one the moment the property's
+    // shape changes.
+    let mut triggers: BTreeMap<String, (bool, bool)> = BTreeMap::new();
+    let rows = sqlx::query("SELECT tbl_name, sql FROM sqlite_master WHERE type = 'trigger'")
         .fetch_all(&mut **tx)
         .await
         .map_err(|e| Error::new(codes::SCHEMA_MIGRATION_FAILED, e.to_string()))?;
     for row in rows {
         let table: String = row.get(0);
-        *triggers.entry(table).or_default() += 1;
+        let sql: String = row
+            .get::<Option<String>, _>(1)
+            .unwrap_or_default()
+            .to_uppercase();
+        let entry = triggers.entry(table).or_default();
+        entry.0 |= sql.contains("BEFORE UPDATE");
+        entry.1 |= sql.contains("BEFORE DELETE");
     }
 
     for table in CHAIN_BEARING_TABLES {
-        // Two: one for UPDATE, one for DELETE. A table left with one of them is half-protected,
-        // which reads as protected.
+        // Both, by name of the operation each refuses. A table left with one of them is
+        // half-protected, which reads as protected.
         match triggers.get(table) {
-            Some(&count) if count >= 2 => {}
+            Some(&(true, true)) => {}
             _ => {
                 return Err(Error::new(
                     codes::SCHEMA_MIGRATION_FAILED,

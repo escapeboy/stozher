@@ -50,19 +50,23 @@ pub const AGGREGATE_MAX_ACTIONS: usize = 1024;
 
 /// A `counts` member is negative.
 ///
-/// Implementation-local, hence the `x-` prefix: §02 §7 rule 3 constrains `total` to the *sum* of
-/// `by-action` and says nothing about the sign, because a count of things that happened has no
-/// meaningful negative value. Without the check the sum is satisfiable by cancellation — one entry
-/// of 1000000 and one of -999999 sum to 1 — so `aggregate-count-mismatch` becomes a check an
-/// emitter passes while recording a window of a million reads as one. Registered in
-/// `stozher_kernel::codes::REGISTER`.
+/// §02 §7 rule 3 constrains `total` to the *sum* of `by-action` and says nothing about the sign,
+/// because a count of things that happened has no meaningful negative value. Without the check the
+/// sum is satisfiable by cancellation — one entry of 1000000 and one of -999999 sum to 1 — so
+/// `aggregate-count-mismatch` becomes a check an emitter passes while recording a window of a
+/// million reads as one.
+///
+/// Was implementation-local; **adopted into `spec/02 §9.1` in v0.9** (ADR-0018), so it is normative
+/// and every implementation owes it. It never carried an `x-` prefix in this crate.
 pub const AGGREGATE_COUNT_NEGATIVE: &str = "aggregate-count-negative";
 
 /// `counts.by-action` folds more than [`AGGREGATE_MAX_ACTIONS`] distinct actions.
 ///
-/// Implementation-local, hence the `x-` prefix: `spec/02 §9.1` tabulates no code for this because
-/// it states no bound. It is registered alongside the kernel's other local codes in
-/// `stozher_kernel::codes::REGISTER` so the set stays reviewable in one place.
+/// §7 bounds the sample hashes and left the actions unbounded, so one envelope was unbounded work
+/// for every consumer that iterates it.
+///
+/// Was implementation-local; **adopted into `spec/02 §9.1` in v0.9** (ADR-0018), which now states
+/// the 1024 bound normatively. It never carried an `x-` prefix in this crate.
 pub const AGGREGATE_CARDINALITY: &str = "aggregate-cardinality";
 
 const COMMON: [&str; 8] = [

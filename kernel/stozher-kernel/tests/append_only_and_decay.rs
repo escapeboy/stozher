@@ -424,3 +424,78 @@ async fn rejections_are_chained_records_and_are_queryable() {
 
     let _ = std::fs::remove_dir_all(database.parent().expect("a parent directory"));
 }
+
+/// INSERT is a write too, and the baseline's triggers did not cover it.
+///
+/// An adversarial run against a throwaway deployment injected a validly-signed effect straight into
+/// the store — one `Ingest` refuses, carrying no authorization — and every read path served it as
+/// genuine. `Store::append` being crate-private is a guarantee of this crate, not of the storage
+/// engine, and `spec/09`'s threat model does not stop at the process boundary.
+///
+/// The third case is the honest one: the trigger cannot tell a forged **new** stream from a real
+/// one, because both begin at seq 0 with a null `prev_hash`. It is asserted here rather than left in
+/// a comment, so that the limit is a fact the suite records instead of a claim someone later reads
+/// as broader than it is.
+#[tokio::test]
+async fn a_forged_insert_cannot_extend_a_chain_it_does_not_link_to() {
+    let database = scratch("forged-insert");
+    let world = world_at(&database).await;
+    let effect = world.effect("github.get_file", "read", json!({})).await;
+    let id = world.accept(&effect, &[]).await;
+    let pool = raw(&database).await;
+
+    // Cloning a real row keeps every NOT NULL column populated, so what the engine judges is the
+    // chain linkage and nothing incidental about the fixture.
+    let clone = "INSERT INTO envelopes (stream, seq, id, prev_hash, kind, subject, subject_key, \
+                 component, emitted_at, received_at, canonical_json) \
+                 SELECT ?2, ?3, 'forged-' || id, ?4, kind, subject, subject_key, component, \
+                 emitted_at, received_at, canonical_json FROM envelopes WHERE id = ?1";
+
+    for (stream, seq, prev, why) in [
+        (
+            EFFECT_STREAM,
+            9_i64,
+            None::<String>,
+            "a gap in an existing stream",
+        ),
+        (
+            EFFECT_STREAM,
+            9,
+            Some("0".repeat(64)),
+            "a prev-hash naming no predecessor",
+        ),
+        (
+            "forged:stream",
+            0,
+            Some("0".repeat(64)),
+            "seq 0 with a prev-hash",
+        ),
+    ] {
+        let error = sqlx::query(clone)
+            .bind(&id)
+            .bind(stream)
+            .bind(seq)
+            .bind(prev.as_deref())
+            .execute(&pool)
+            .await
+            .expect_err(&format!("the engine allowed {why}"));
+        assert!(
+            error.to_string().contains("append-only"),
+            "{why} failed for the wrong reason: {error}"
+        );
+    }
+
+    // And the limit, recorded rather than described: a brand-new stream starting at seq 0 with no
+    // prev-hash is indistinguishable in SQL from a legitimate one. Catching this needs the off-box
+    // checkpoint set and knowing which streams ought to exist — §04 §4 rule 7, not a trigger.
+    sqlx::query(clone)
+        .bind(&id)
+        .bind("forged:stream")
+        .bind(0_i64)
+        .bind(None::<&str>)
+        .execute(&pool)
+        .await
+        .expect(
+            "a new stream at seq 0 is accepted by the storage engine — this is the known limit",
+        );
+}
