@@ -88,7 +88,11 @@ class ServerConfig(BaseModel):
     env: dict[str, str] = Field(default_factory=dict)
     url: str | None = None
     token_env: str | None = None
-    #: The action namespace used in envelopes: `<scope>.<tool>` (§02 §4). Defaults to `name`.
+    #: The action namespace used in envelopes: `<scope>.<tool>` (§02 §4), when the operator names
+    #: one. **Absent is not "the server's name"** — absent means the classifier falls through to the
+    #: shipped catalog, which knows that the server called `filesystem` spells its actions `fs.*`.
+    #: Reading the two as the same thing made the catalog's branch unreachable for every proxied
+    #: server, so a catalogued read never matched the baseline policy and was gated as unknown.
     action_scope: str | None = None
 
     @model_validator(mode="after")
@@ -99,9 +103,12 @@ class ServerConfig(BaseModel):
             raise ValueError(f"server {self.name!r}: streamable-http transport needs a url")
         return self
 
-    @property
-    def scope(self) -> str:
-        return self.action_scope or self.name
+    # There is deliberately no `scope` property here. There was one — `action_scope or name` — and
+    # it read exactly like the thing to build an action identifier from, which is why two call sites
+    # used it and both were wrong: falling back to the server's name is what shadowed the shipped
+    # catalog. The one authority on an action namespace is `Classifier.scope`, which consults the
+    # operator's map, then the catalog, then the heuristic. Deleting the property is what stops the
+    # mistake being available to make a third time.
 
 
 class KernelConfig(BaseModel):

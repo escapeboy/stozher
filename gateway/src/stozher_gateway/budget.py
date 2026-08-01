@@ -68,11 +68,17 @@ def exceeded_dimensions(chain: list[dict[str, Any]], adding: dict[str, str]) -> 
         spent = entry.get("spent")
         spent = spent if isinstance(spent, dict) else {}
         for dimension, cap in caps.items():
-            if dimension not in adding:
-                continue
             held = spent.get(dimension, "0")
             try:
-                total = money.add(str(held), adding[dimension])
+                # A dimension this call does not consume is still a dimension the chain can be out
+                # of. §03 §4.3 says an exhausted budget "blocks like an expired mandate", and an
+                # expired mandate does not block only the actions that would have aged it further.
+                # Without this branch a `money-eur` cap was never once compared to anything at the
+                # emitter — the gateway adds a request and nothing else, so every monetary cap fell
+                # through the `dimension not in adding` skip and a mandate five times over its money
+                # budget went on making calls. That is the prevention-turned-detection defect
+                # `docs/product-completion-design.md` §1 names, in the dimension budgets exist for.
+                total = money.add(str(held), adding[dimension]) if dimension in adding else str(held)
                 if not money.at_most(total, _as_decimal(cap)):
                     exceeded.append(dimension)
             except money.MoneyFormatError:

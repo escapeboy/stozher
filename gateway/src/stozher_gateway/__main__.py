@@ -187,7 +187,16 @@ def _catalog(config: GatewayConfig, action: str) -> int:
     it. This prints exactly what to publish, for the servers this deployment actually fronts.
     """
     classifier = Classifier(
-        scopes={server.name: server.scope for server in config.servers},
+        # The same map the running gateway builds — only the scopes an operator wrote down. This is
+        # what `deploy/README.md` names as the source of the `by-action` map an operator publishes,
+        # so a classifier here that disagrees with `runtime.py`'s prints a policy matching nothing
+        # the emitter will ever emit, with no signal that it does not match. That is precisely what
+        # happened when `runtime.py` was fixed and this was not.
+        scopes={
+            server.name: server.action_scope
+            for server in config.servers
+            if server.action_scope
+        },
         org_seeded=_store(config).catalog_entry,
     )
     fragment: dict[str, str] = {}

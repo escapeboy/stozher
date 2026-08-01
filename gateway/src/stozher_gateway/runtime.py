@@ -175,12 +175,13 @@ class Gateway:
             self.kernel, config.kernel.policy_refresh_seconds, self._clock
         )
         self.classifier = Classifier(
-            # Only the scopes an operator wrote down. `ServerConfig.scope` defaults to the server's
-            # own name, so passing it here made `server in self._scopes` true for every proxied
-            # server and `Classifier.scope`'s shipped-catalog branch unreachable — a server named
-            # exactly `filesystem` emitted `filesystem.read_file` while the catalog and the shipped
-            # baseline policy both spell that action `fs.read_file`, so the policy entry never
-            # matched and a catalogued read was gated as `default-unknown`.
+            # Only the scopes an operator wrote down. This used to pass a `ServerConfig.scope`
+            # property that fell back to the server's own name, which made `server in self._scopes`
+            # true for every proxied server and `Classifier.scope`'s shipped-catalog branch
+            # unreachable — a server named exactly `filesystem` emitted `filesystem.read_file` while
+            # the catalog and the shipped baseline policy both spell that action `fs.read_file`, so
+            # the policy entry never matched and a catalogued read was gated as `default-unknown`.
+            # That property has been deleted rather than left for a third caller to reach for.
             scopes={
                 server.name: server.action_scope
                 for server in config.servers
