@@ -29,7 +29,7 @@
 //! of a v0.3 kernel over a v0.2 store stamps it 1 and re-verifies it, which is the upgrade gate
 //! rather than a special case of it.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 
 use sqlx::{Row, SqlitePool};
 use stozher_core::error::{Error, Result};
@@ -250,46 +250,118 @@ pub async fn run(pool: &SqlitePool, migrations: &[Migration]) -> Result<Vec<u32>
 /// check. Chain-bearing tables are additive-only, so a migration that loses one of their triggers is
 /// a bug in the migration, and the safe direction is to say so before the commit.
 async fn assert_append_only_intact(tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>) -> Result<()> {
-    // What each table must still have, by *meaning* rather than by count. This counted triggers and
-    // required two, which was the same thing only while every table carried exactly the UPDATE and
-    // DELETE pair. Step 4 added two INSERT triggers to `envelopes`, and under the old rule dropping
-    // its UPDATE guard left three — still "at least two", so a hostile migration passed the check
-    // that exists to catch it. A proxy for a property stops being one the moment the property's
-    // shape changes.
-    let mut triggers: BTreeMap<String, (bool, bool)> = BTreeMap::new();
-    let rows = sqlx::query("SELECT tbl_name, sql FROM sqlite_master WHERE type = 'trigger'")
-        .fetch_all(&mut **tx)
+    // This check has been wrong twice, each time by asking a question next to the one that matters.
+    // It counted triggers per table and required two, which stopped meaning anything the moment
+    // `envelopes` gained two INSERT triggers and a dropped UPDATE guard still left three. It then
+    // matched the strings "BEFORE UPDATE" and "BEFORE DELETE" in `sqlite_master.sql`, which an empty
+    // trigger body satisfies exactly as well as a `RAISE(ABORT)` does — and so does
+    // `BEFORE UPDATE OF <column>`, which guards one column. Both asked whether a trigger *exists*.
+    //
+    // The property is that a write is *refused*, so that is what is asserted: the write is attempted.
+    // A probe that succeeds means the table is writable, and returning an error unwinds the
+    // migration transaction, so the successful probe is rolled back with everything else. A probe
+    // that is refused leaves nothing behind — SQLite's `RAISE(ABORT)` reverts its own statement and
+    // the transaction stays usable.
+    for table in CHAIN_BEARING_TABLES {
+        let populated: i64 = sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
+            "SELECT COUNT(*) FROM (SELECT 1 FROM \"{table}\" LIMIT 1)"
+        )))
+        .fetch_one(&mut **tx)
         .await
         .map_err(|e| Error::new(codes::SCHEMA_MIGRATION_FAILED, e.to_string()))?;
-    for row in rows {
-        let table: String = row.get(0);
-        let sql: String = row
-            .get::<Option<String>, _>(1)
-            .unwrap_or_default()
-            .to_uppercase();
-        let entry = triggers.entry(table).or_default();
-        entry.0 |= sql.contains("BEFORE UPDATE");
-        entry.1 |= sql.contains("BEFORE DELETE");
-    }
 
-    for table in CHAIN_BEARING_TABLES {
-        // Both, by name of the operation each refuses. A table left with one of them is
-        // half-protected, which reads as protected.
-        match triggers.get(table) {
-            Some(&(true, true)) => {}
-            _ => {
+        if populated == 0 {
+            // Nothing to probe: a `BEFORE UPDATE`/`BEFORE DELETE` trigger fires per row, so on an
+            // empty table both probes would succeed while proving nothing. A fresh install reaches
+            // here with every table empty. Fall back to the structural check, tightened to require
+            // the abort itself — which is what the empty-body substitution could not fake.
+            assert_guards_declared(tx, table).await?;
+            continue;
+        }
+
+        // A no-op assignment: the trigger fires `BEFORE` the write whatever the values are, and if
+        // no trigger fires the row is left byte-identical.
+        let column = first_column(tx, table).await?;
+        let probes = [
+            format!("UPDATE \"{table}\" SET \"{column}\" = \"{column}\""),
+            format!("DELETE FROM \"{table}\" WHERE rowid = (SELECT MIN(rowid) FROM \"{table}\")"),
+        ];
+        for probe in probes {
+            if sqlx::query(sqlx::AssertSqlSafe(probe.clone()))
+                .execute(&mut **tx)
+                .await
+                .is_ok()
+            {
                 return Err(Error::new(
                     codes::SCHEMA_MIGRATION_FAILED,
                     format!(
-                        "after migrating, {table} does not carry its append-only triggers. \
-                         The migration has been rolled back: a chain-bearing table that can be \
-                         rewritten is not a chain."
+                        "after migrating, the storage engine accepted `{probe}`. The migration has \
+                         been rolled back, and with it that write: a chain-bearing table that can \
+                         be rewritten is not a chain."
                     ),
                 ));
             }
         }
     }
     Ok(())
+}
+
+/// The first column of `table`, for a probe that assigns a value to itself.
+async fn first_column(tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>, table: &str) -> Result<String> {
+    let row = sqlx::query(sqlx::AssertSqlSafe(format!(
+        "PRAGMA table_info(\"{table}\")"
+    )))
+    .fetch_optional(&mut **tx)
+    .await
+    .map_err(|e| Error::new(codes::SCHEMA_MIGRATION_FAILED, e.to_string()))?
+    .ok_or_else(|| {
+        Error::new(
+            codes::SCHEMA_MIGRATION_FAILED,
+            format!("after migrating, {table} has no columns — it is not the table it was"),
+        )
+    })?;
+    Ok(row.get::<String, _>(1))
+}
+
+/// The empty-table fallback: a `BEFORE UPDATE` and a `BEFORE DELETE` that actually abort.
+///
+/// Weaker than the probe and known to be — `BEFORE UPDATE OF <column>` would satisfy it while
+/// guarding one column. It applies only where there is nothing yet to protect, and the probe takes
+/// over the moment the table holds a row.
+async fn assert_guards_declared(
+    tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+    table: &str,
+) -> Result<()> {
+    let rows =
+        sqlx::query("SELECT sql FROM sqlite_master WHERE type = 'trigger' AND tbl_name = ?1")
+            .bind(table)
+            .fetch_all(&mut **tx)
+            .await
+            .map_err(|e| Error::new(codes::SCHEMA_MIGRATION_FAILED, e.to_string()))?;
+    let mut refuses_update = false;
+    let mut refuses_delete = false;
+    for row in rows {
+        let sql = row
+            .get::<Option<String>, _>(0)
+            .unwrap_or_default()
+            .to_uppercase();
+        if !sql.contains("RAISE(ABORT") {
+            continue;
+        }
+        refuses_update |= sql.contains("BEFORE UPDATE");
+        refuses_delete |= sql.contains("BEFORE DELETE");
+    }
+    if refuses_update && refuses_delete {
+        return Ok(());
+    }
+    Err(Error::new(
+        codes::SCHEMA_MIGRATION_FAILED,
+        format!(
+            "after migrating, {table} does not declare a BEFORE UPDATE and a BEFORE DELETE trigger \
+             that aborts. The migration has been rolled back: a chain-bearing table that can be \
+             rewritten is not a chain."
+        ),
+    ))
 }
 
 /// Every table the database holds, for the classification test.
@@ -321,6 +393,31 @@ pub async fn version(pool: &SqlitePool) -> Result<u32> {
         .await
         .map_err(|e| Error::new(codes::SCHEMA_MIGRATION_FAILED, e.to_string()))?;
     Ok(u32::try_from(value).unwrap_or(u32::MAX))
+}
+
+/// Put the version stamp back to `to` after a post-migration check refused the store.
+///
+/// [`run`] commits the step and its stamp before the chain can be re-verified: verification needs a
+/// `Store`, and the migration holds the only write transaction. So when that verification refuses,
+/// the stamp on disk already says "current" — and the next start would then find nothing to apply
+/// and skip the re-verification, which is exactly what makes skipping it safe when it is true.
+///
+/// Rewinding means every subsequent start re-applies the step (each is `IF NOT EXISTS`, so this is
+/// idempotent) and re-runs the check, so a refusal stays a refusal for as long as the chain stays
+/// broken. It matters most on the deployment this ships with: `restart: unless-stopped` makes the
+/// next start automatic and unattended, seconds later, with nobody reading the first one's log line.
+///
+/// # Errors
+///
+/// [`codes::SCHEMA_MIGRATION_FAILED`] if the pragma cannot be written.
+pub async fn rewind_version(pool: &SqlitePool, to: u32) -> Result<()> {
+    // As in `set_user_version`: `PRAGMA user_version` takes no bind parameter, and `to` is a `u32`
+    // this crate read out of the store's own header, never a caller's string.
+    sqlx::query(sqlx::AssertSqlSafe(format!("PRAGMA user_version = {to}")))
+        .execute(pool)
+        .await
+        .map_err(|e| Error::new(codes::SCHEMA_MIGRATION_FAILED, e.to_string()))?;
+    Ok(())
 }
 
 async fn user_version(tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>) -> Result<u32> {

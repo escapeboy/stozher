@@ -247,6 +247,35 @@ async fn an_upgrade_over_a_tampered_chain_is_refused() {
         "the upgrade refused for the wrong reason: {refused}"
     );
 
+    // And it refuses *again*, which is the half that was missing and the half that matters.
+    //
+    // The step and its version stamp commit before the chain can be re-verified — verification needs
+    // a `Store`, so it cannot run inside the migration's own transaction. While the stamp was left
+    // forward, the second start found nothing to apply, and re-verification is deliberately skipped
+    // when nothing was applied: boot two opened and served the chain boot one had just refused. The
+    // shipped compose file sets `restart: unless-stopped`, so boot two arrived by itself about a
+    // second later, with nobody reading boot one's log line. A refusal has to survive a restart or
+    // it is not a refusal.
+    Store::open_with_migrations(&database, REJECTION_STREAM, &next_version())
+        .await
+        .expect_err("the second start served a chain the first start refused");
+
+    // The mechanism, asserted directly rather than through the second refusal's code. The stamp is
+    // rewound, so the step is pending again and the check that refused runs again. Asserting the
+    // code here would assert something else: this test's fixture step is an `ALTER TABLE ADD
+    // COLUMN`, which SQLite cannot express idempotently, so re-applying it fails on the column
+    // before reaching the chain. Every step in the shipped registry is `CREATE ... IF NOT EXISTS`
+    // and re-applies cleanly — which is a property of that registry that nothing enforces, and a
+    // future non-idempotent step would turn this refusal into a different one.
+    let pool = raw(&database).await;
+    assert_eq!(
+        migrate::version(&pool).await.expect("reading the version"),
+        migrate::SCHEMA_VERSION,
+        "the refused upgrade left its version stamp forward, so the next start would find nothing \
+         to apply, skip re-verification, and serve the chain this one refused"
+    );
+    pool.close().await;
+
     pool.close().await;
     let _ = std::fs::remove_dir_all(database.parent().expect("a parent directory"));
 }
@@ -513,6 +542,59 @@ async fn reopening_at_the_current_version_applies_nothing() {
         before
     );
 
+    pool.close().await;
+    let _ = std::fs::remove_dir_all(database.parent().expect("a parent directory"));
+}
+
+/// A registry that *replaces* the UPDATE guard with a trigger that guards nothing.
+///
+/// The hostile migration above drops a trigger, which any check that looks for one will catch. This
+/// one keeps a trigger of the right name, on the right table, for the right operation — and gives it
+/// an empty body. Every structural check passes; the chain becomes writable.
+fn disarming_by_substitution() -> Vec<Migration> {
+    let mut registry = migrate::MIGRATIONS.to_vec();
+    registry.push(Migration {
+        to_version: migrate::SCHEMA_VERSION + 1,
+        name: "hostile: replace an append-only trigger with an empty one",
+        sql: &["DROP TRIGGER envelopes_are_append_only_no_update;
+                CREATE TRIGGER envelopes_are_append_only_no_update
+                BEFORE UPDATE ON envelopes
+                BEGIN
+                    SELECT 1;
+                END;"],
+    });
+    registry
+}
+
+/// A trigger that exists is not a trigger that refuses.
+///
+/// The guard this exercises has now been wrong twice, each time by asking a question adjacent to the
+/// one that matters. It first counted triggers per table and required two — which stopped meaning
+/// anything the moment `envelopes` gained two more. It then asserted the strings "BEFORE UPDATE" and
+/// "BEFORE DELETE" appeared in `sqlite_master.sql`, which an empty body satisfies exactly as well as
+/// a `RAISE(ABORT)` does. Both answered "a trigger exists". Neither answered "a write is refused",
+/// and that is the only property worth asserting.
+#[tokio::test]
+async fn a_migration_that_replaces_a_guard_with_an_empty_one_is_rolled_back() {
+    let database = scratch("substitution");
+    an_install_holding_records(&database).await;
+
+    let refused =
+        Store::open_with_migrations(&database, REJECTION_STREAM, &disarming_by_substitution())
+            .await
+            .expect_err("a migration that neutered an append-only trigger was allowed to commit");
+    assert_eq!(refused.code(), codes::SCHEMA_MIGRATION_FAILED);
+
+    // Rolled back, not merely reported: an ordinary client still cannot rewrite the chain.
+    let pool = raw(&database).await;
+    let error = sqlx::query("UPDATE envelopes SET canonical_json = '{}'")
+        .execute(&pool)
+        .await
+        .expect_err("the engine allowed a rewrite after a refused migration");
+    assert!(
+        error.to_string().contains("append-only"),
+        "the rewrite failed for the wrong reason: {error}"
+    );
     pool.close().await;
     let _ = std::fs::remove_dir_all(database.parent().expect("a parent directory"));
 }

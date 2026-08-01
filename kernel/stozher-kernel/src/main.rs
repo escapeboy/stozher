@@ -737,7 +737,10 @@ fn run(config_path: Option<PathBuf>, mode: Mode) -> ExitCode {
 }
 
 async fn verify(kernel: &Kernel) -> ExitCode {
-    let streams = match kernel.ingest.store().streams().await {
+    // From the chain, not from the `streams` projection: that table is rebuildable and carries no
+    // triggers, so a row deleted from it took a whole stream out of this loop and left the operator
+    // a clean report over records nobody looked at.
+    let streams = match kernel.ingest.store().streams_holding_envelopes().await {
         Ok(streams) => streams,
         Err(e) => {
             eprintln!("cannot list streams: {e}");
@@ -763,9 +766,7 @@ async fn verify(kernel: &Kernel) -> ExitCode {
     }
     let mut failures = 0usize;
     for stream in &streams {
-        let Some(name) = stream["stream"].as_str() else {
-            continue;
-        };
+        let name = stream.as_str();
         match checkpoint::verify_stream(&kernel.ingest, name).await {
             Ok(report) => println!(
                 "{name}: {} envelopes, head {}, anchored {}",

@@ -349,6 +349,8 @@ impl Store {
             .connect_with(options)
             .await
             .map_err(db)?;
+        // Read before migrating, so a re-verification that refuses can put the stamp back.
+        let before = crate::migrate::version(&pool).await?;
         let applied = crate::migrate::run(&pool, migrations).await?;
         let store = Self {
             pool,
@@ -360,7 +362,16 @@ impl Store {
         // has nothing new to be wrong about, and re-reading every stream on every start would turn
         // a startup into a full scan.
         if !applied.is_empty() {
-            store.verify_every_chain().await?;
+            if let Err(refusal) = store.verify_every_chain().await {
+                // The step and its version stamp are already committed — verification needs a
+                // `Store`, so it cannot run inside the migration's own transaction. Left forward,
+                // the stamp makes the *next* start find nothing to apply, and the check above is
+                // skipped when nothing was applied: the second boot would serve the very chain this
+                // one just refused. `restart: unless-stopped` in the shipped compose file makes that
+                // second boot automatic, unattended, and about a second later.
+                crate::migrate::rewind_version(&store.pool, before).await?;
+                return Err(refusal);
+            }
             tracing::info!(
                 versions = ?applied,
                 schema_version = crate::migrate::SCHEMA_VERSION,
@@ -382,10 +393,13 @@ impl Store {
     ///
     /// Any chain code, or [`codes::STORE_UNAVAILABLE`].
     async fn verify_every_chain(&self) -> Result<()> {
-        for stream in self.streams().await? {
-            let Some(name) = stream["stream"].as_str() else {
-                continue;
-            };
+        // Enumerated from the chain, not from the `streams` projection. `streams` is in
+        // `REBUILDABLE_TABLES` — a fold of the log, carrying no triggers and no chain of its own —
+        // so deleting one of its rows made this loop skip that stream in silence and report a clean
+        // verify over a store it had not looked at. "We did not check" and "it verifies" must never
+        // look the same, and enumerating from the thing being verified is what keeps them apart.
+        for name in self.streams_holding_envelopes().await? {
+            let name = name.as_str();
             let Some((head_seq, _)) = self.stream_head(name).await? else {
                 continue;
             };
@@ -490,6 +504,25 @@ impl Store {
             .await
             .map_err(db)?;
         Ok(row.map(|r| r.get::<String, _>("stream_kind")))
+    }
+
+    /// Every stream name that actually holds an envelope, read from the chain itself.
+    ///
+    /// [`Self::streams`] answers from the `streams` projection, which is the right source for the
+    /// operator-facing surface it feeds — it carries `first_seen_at` and `last_appended_at`, which
+    /// the chain does not. It is the wrong source for verification: a projection is rebuildable,
+    /// carries no triggers, and a row removed from it removes a whole stream from anything that
+    /// enumerates through it.
+    ///
+    /// # Errors
+    ///
+    /// [`codes::STORE_UNAVAILABLE`].
+    pub async fn streams_holding_envelopes(&self) -> Result<Vec<String>> {
+        let rows = sqlx::query("SELECT DISTINCT stream FROM envelopes ORDER BY stream")
+            .fetch_all(&self.pool)
+            .await
+            .map_err(db)?;
+        Ok(rows.iter().map(|r| r.get::<String, _>("stream")).collect())
     }
 
     /// Every stream, with its head and last append time — the quiet-stream surface of §09 §4.2.
