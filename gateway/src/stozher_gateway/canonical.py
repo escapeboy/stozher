@@ -86,6 +86,15 @@ def parse(text: str) -> Any:
         raise
     except ValueError as e:
         raise CanonicalizationError("jcs-malformed-json", str(e)) from e
+    except RecursionError as e:
+        # `RecursionError` is not a `ValueError`, so it escaped this function while `canonicalize`
+        # three lines down had been catching it since v0.1. The docstring promises a reason code a
+        # caller can put in a record; an interpreter exception is not one. Not reachable from
+        # foreign input today — the proxy path canonicalizes rather than parses — which is why it
+        # survived, and exactly why it is worth closing before something starts calling it.
+        raise CanonicalizationError(
+            "jcs-malformed-json", "nesting exceeds what this parser can represent"
+        ) from e
     _reject_lone_surrogates(value)
     return value
 

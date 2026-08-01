@@ -22,7 +22,11 @@ that starts from a map is worth more than one that starts from a README.
    (RUSTSEC-2026-0009) on a path that parses attacker-controlled input, rather than raising the
    minimum toolchain for one advisory. It is round-tripped exhaustively over every date from 1900 to
    2200 — but exhaustive round-tripping over *valid* dates proves nothing about the rejection of
-   malformed input. **This is the single highest-value target in the codebase.**
+   malformed input. **This is the single highest-value target in the codebase**, and an internal
+   review of exactly that gap found one (ADR-0020): a leap second was accepted here and refused by
+   the other implementation, giving one instant two spellings and letting an emitter choose which
+   verifiers agreed with it. `tests/timestamp_adversarial.rs` now attacks the rejection side; a
+   reviewer should assume it is not exhaustive.
 2. **`kernel/stozher-core/src/gate.rs` — the eleven-step authorization algorithm.** Everything the
    product claims rests on it. In particular: the binding of an approval to a specific effect, replay
    handling, and the self-approval check that compares *subjects* and not only keys.
@@ -68,6 +72,10 @@ that starts from a map is worth more than one that starts from a README.
   (`spec/08 §4`) now exists and produces a green cross-language run, but **both halves of that run
   were written here**: it proves the registration path works and that the harness catches the
   failures it enumerates. It does not answer whether the taxonomy survives a foreign domain.
+- **The only review performed has been internal.** ADR-0020 records one: six surfaces attacked, one
+  real cross-implementation defect found and fixed, two smaller ones, and a list of what held. It was
+  performed by the same party that wrote the code, which is the one property the required review has
+  and it does not. Read it as a map of what has been looked at, not as assurance.
 - **Payload decay has no second custodian.** Deleting a payload is the one destructive operation the
   kernel performs, and the property that makes it safe — chain verification never reads a payload —
   is enforced by the schema (no chain-bearing column in `payloads`) rather than by a separate

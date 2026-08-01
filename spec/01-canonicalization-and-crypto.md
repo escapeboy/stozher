@@ -30,6 +30,20 @@ defined for that position (`crypto-unsupported-alg`).
    the literal suffix `Z`: `2026-07-26T09:15:00.000Z`. Offsets other than `Z`, absent or differing
    fractional precision, and lowercase `z` MUST be rejected (`encoding-bad-timestamp`).
    Rationale: timestamps are compared as strings in indexes and in vectors; one format only.
+
+   **One instant, one spelling.** An implementation MUST reject any string of this shape that does
+   not render back to itself from the instant it denotes. Two consequences follow and both MUST be
+   rejected:
+
+   - **A leap second (`:60`) MUST be rejected.** It is a real UTC second and not a value of this
+     form: it has no distinct millisecond representation, so it renders as the following minute.
+   - **Year `0000` MUST be rejected.** The proleptic Gregorian calendar has one; this form's range
+     is `0001-01-01T00:00:00.000Z` to `9999-12-31T23:59:59.999Z`.
+
+   The round-trip rule is stated as the rule, and the two cases as its consequences, because it is
+   the property that matters and it decides the next case as well. Rule 3's own rationale is why: if
+   one instant has two spellings, comparing timestamps as strings stops being comparing instants —
+   and an emitter gets to choose which verifiers agree with it.
 4. Durations MUST be ISO 8601 durations restricted to `P[nD][T[nH][nM][nS]]` (for example `P30D`,
    `PT15M`). Months and years MUST NOT be used (`encoding-bad-duration`) — their length is
    ambiguous and retention windows are legal commitments.

@@ -1398,6 +1398,92 @@
       }
     },
     {
+      "name": "emitted-at-leap-second",
+      "description": "spec 01 section 2.3: a leap second is a real UTC second and not a value of this form: it renders back as the following minute",
+      "envelope": {
+        "v": "stozher/0.1",
+        "kind": "effect",
+        "emitted-at": "2026-07-26T23:59:60.000Z",
+        "stream": "gw:ivan-mbp:0001",
+        "seq": 0,
+        "prev-hash": null,
+        "identity": {
+          "subject": "agent:claude-code/ivan-mbp",
+          "key": "ed25519:4a0beffbc56f699c7fc1eb522d5298e2e4210d054a0a33dbeea70751f61e2bfc",
+          "component": "gateway"
+        },
+        "mandate-ref": "1111111111111111111111111111111111111111111111111111111111111111",
+        "policy-version": "2026.07.1",
+        "classification": "consequential",
+        "execution": {
+          "action": "github.create_issue",
+          "target": "repo:acme/backend",
+          "args-hash": "fe4edc2cdfcaee172af990012c944c32c884657dfb56dfce12e197597cb651f8",
+          "outcome": "applied",
+          "started-at": "2026-07-26T09:15:00.000Z",
+          "finished-at": "2026-07-26T09:15:01.250Z"
+        },
+        "evidence": {
+          "schema": "github.create_issue.v1",
+          "media-type": "application/json",
+          "payload-hash": "8ce5dc39ae3c21a22d1009d3ee3ec7e5c662d3d7e9c749f60f9264dcceb6d2d7",
+          "retain-until": "2027-07-26T00:00:00.000Z"
+        },
+        "sig": {
+          "alg": "ed25519",
+          "key": "ed25519:4a0beffbc56f699c7fc1eb522d5298e2e4210d054a0a33dbeea70751f61e2bfc",
+          "value": "b2b2a30f824782402f69739b8d79f578fcc7eb3f19f70c7cb3fd3236c0cc6aca1a5e1f9e64767c436c2e1b1aff3a494e1e66deaaf5d8201b4c72c3f2dd0b9e0b"
+        }
+      },
+      "expected": {
+        "valid": false,
+        "error": "encoding-bad-timestamp"
+      }
+    },
+    {
+      "name": "emitted-at-year-zero",
+      "description": "spec 01 section 2.3: the proleptic Gregorian calendar has a year 0; this form's range begins at 0001",
+      "envelope": {
+        "v": "stozher/0.1",
+        "kind": "effect",
+        "emitted-at": "0000-01-01T00:00:00.000Z",
+        "stream": "gw:ivan-mbp:0001",
+        "seq": 0,
+        "prev-hash": null,
+        "identity": {
+          "subject": "agent:claude-code/ivan-mbp",
+          "key": "ed25519:4a0beffbc56f699c7fc1eb522d5298e2e4210d054a0a33dbeea70751f61e2bfc",
+          "component": "gateway"
+        },
+        "mandate-ref": "1111111111111111111111111111111111111111111111111111111111111111",
+        "policy-version": "2026.07.1",
+        "classification": "consequential",
+        "execution": {
+          "action": "github.create_issue",
+          "target": "repo:acme/backend",
+          "args-hash": "fe4edc2cdfcaee172af990012c944c32c884657dfb56dfce12e197597cb651f8",
+          "outcome": "applied",
+          "started-at": "2026-07-26T09:15:00.000Z",
+          "finished-at": "2026-07-26T09:15:01.250Z"
+        },
+        "evidence": {
+          "schema": "github.create_issue.v1",
+          "media-type": "application/json",
+          "payload-hash": "8ce5dc39ae3c21a22d1009d3ee3ec7e5c662d3d7e9c749f60f9264dcceb6d2d7",
+          "retain-until": "2027-07-26T00:00:00.000Z"
+        },
+        "sig": {
+          "alg": "ed25519",
+          "key": "ed25519:4a0beffbc56f699c7fc1eb522d5298e2e4210d054a0a33dbeea70751f61e2bfc",
+          "value": "0c044301ed412aacb98122008db9f4603ad19b29f873a7286424528662a634b0e87542c37a0ae28b615d56eba5754781883d0b922933ee1b303cca0dea312005"
+        }
+      },
+      "expected": {
+        "valid": false,
+        "error": "encoding-bad-timestamp"
+      }
+    },
+    {
       "name": "effect-with-trigger",
       "description": "spec 02 section 2.1: effect MAY carry trigger",
       "envelope": {

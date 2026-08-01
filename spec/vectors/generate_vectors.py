@@ -1375,6 +1375,34 @@ def gen_envelope_shape() -> None:
         )
     )
 
+    # -- spec 01 section 2.3: one instant, one spelling --------------------------------------------
+    #
+    # Both were accepted by one implementation and refused by the other for the whole of v0.1, and
+    # nothing asked. A string of this shape that does not render back to itself gives one instant two
+    # spellings, which is what a fixed-width form exists to prevent.
+    for name, stamp, why in [
+        (
+            "emitted-at-leap-second",
+            "2026-07-26T23:59:60.000Z",
+            "a leap second is a real UTC second and not a value of this form: it renders back as the "
+            "following minute",
+        ),
+        (
+            "emitted-at-year-zero",
+            "0000-01-01T00:00:00.000Z",
+            "the proleptic Gregorian calendar has a year 0; this form's range begins at 0001",
+        ),
+    ]:
+        cases.append(
+            (
+                name,
+                sv(base_effect(0, None, key, **{"emitted-at": stamp})),
+                False,
+                "encoding-bad-timestamp",
+                f"spec 01 section 2.3: {why}",
+            )
+        )
+
     # -- spec 02 section 2.1: which members each kind may carry -----------------------------------
     #
     # Generated from the matrix rather than written out, so the corpus asks every question the

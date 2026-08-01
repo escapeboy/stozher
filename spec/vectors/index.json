@@ -67,7 +67,7 @@
       "path": "envelope-shape.json",
       "kind": "envelope-shape",
       "role": "primitive",
-      "count": 74,
+      "count": 76,
       "description": "Structural validation of envelopes (spec 02 section 9). Validate `envelope`; the result MUST match `expected.valid`, and on failure the reported code MUST equal `expected.error`. Signature verification is NOT part of this check except where the vector's error code says so."
     },
     {

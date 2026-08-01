@@ -71,5 +71,8 @@ fn the_rest_of_the_fixed_form_is_unchanged() {
     assert!(!is_timestamp("2026-07-26T11:15:01.300+02:00"), "not UTC");
     assert!(!is_timestamp("2026-13-26T09:15:01.300Z"), "month 13");
     assert!(!is_timestamp("2026-07-26t09:15:01.300z"), "lowercase");
-    assert!(is_timestamp("2026-07-26T23:59:60.000Z"), "leap second");
+    // A leap second is a real UTC second and not a value of this form: it renders back as the
+    // following minute, so accepting it would give one instant two spellings (ADR-0020).
+    assert!(!is_timestamp("2026-07-26T23:59:60.000Z"), "leap second");
+    assert!(!is_timestamp("0000-01-01T00:00:00.000Z"), "year zero");
 }

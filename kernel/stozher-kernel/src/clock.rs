@@ -125,10 +125,16 @@ pub fn parse_timestamp(text: &str) -> Result<i64> {
     let second = field(17..19)?;
     let millis = field(20..23)?;
 
-    if !(1..=12).contains(&month) || day < 1 || day > days_in_month(year, month) {
+    // Year 0 exists in the proleptic Gregorian calendar and not in this form: `format_millis`
+    // renders it, but the other implementation refuses it, and a value one side can express and the
+    // other cannot is a disagreement waiting for an envelope to carry it (§01 §2.3, ADR-0020).
+    if year < 1 || !(1..=12).contains(&month) || day < 1 || day > days_in_month(year, month) {
         return Err(bad());
     }
-    if hour > 23 || minute > 59 || second > 60 {
+    // `:60` is a real UTC second and not a value of this form. It has no distinct millisecond
+    // representation, so it renders back as the following minute: accepting it gives one instant
+    // two spellings, which is exactly what a fixed-width form exists to prevent.
+    if hour > 23 || minute > 59 || second > 59 {
         return Err(bad());
     }
 
@@ -170,7 +176,9 @@ pub fn shift(text: &str, seconds: i64) -> Result<String> {
         .ok_or_else(out_of_range)?;
     // Outside four-digit years the fixed form cannot represent the result, and silently widening it
     // would produce a string nothing else in the system accepts.
-    if !(-62_167_219_200_000..=253_402_300_799_999).contains(&shifted) {
+    // Year 0001-01-01T00:00:00.000Z to 9999-12-31T23:59:59.999Z. The lower bound is year *one*: a
+    // shift that produced year 0000 would emit a string this module's own parser refuses.
+    if !(-62_135_596_800_000..=253_402_300_799_999).contains(&shifted) {
         return Err(out_of_range());
     }
     Ok(format_millis(shifted))
@@ -374,14 +382,17 @@ mod tests {
     }
 
     #[test]
-    fn leap_seconds_are_accepted_and_ordered_monotonically() {
-        // The specification's own validator accepts `:60`; treating it as the following instant
-        // keeps comparison and arithmetic monotone.
+    fn a_leap_second_is_refused_rather_than_folded_into_the_next_minute() {
+        // This test used to assert the opposite, on the reasoning that "the specification's own
+        // validator accepts `:60`" — which cited `stozher_core::envelope::is_timestamp`, this
+        // project's own code, as if it were the specification. It was not: §01 §2.3 said nothing,
+        // and the Python implementation refused `:60` throughout. Folding it into the following
+        // minute gave one instant two spellings, and gave a foreign emitter a string the kernel
+        // would append and a verifier would reject. See ADR-0020.
+        assert!(parse_timestamp("2016-12-31T23:59:60.000Z").is_err());
         let before = parse_timestamp("2016-12-31T23:59:59.000Z").unwrap();
-        let leap = parse_timestamp("2016-12-31T23:59:60.000Z").unwrap();
         let after = parse_timestamp("2017-01-01T00:00:00.000Z").unwrap();
-        assert!(before < leap);
-        assert_eq!(leap, after);
+        assert!(before < after);
     }
 
     #[test]

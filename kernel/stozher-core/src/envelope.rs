@@ -629,12 +629,19 @@ pub fn is_timestamp(s: &str) -> bool {
     }
     let num = |range: std::ops::Range<usize>| s[range].parse::<u32>().unwrap_or(u32::MAX);
     let (year, month, day) = (num(0..4), num(5..7), num(8..10));
-    (1..=12).contains(&month)
+    // `:60` and year 0 are refused because neither round-trips (§01 §2.3): rendering the instant
+    // either denotes produces a different string, so the form would have two spellings for one
+    // moment and the audit would have two ways to say the same thing. Both were accepted here and
+    // refused by the Python implementation, which is the same defect this module's `days_in_month`
+    // comment records one layer down — two validators, and whether a value existed depended on
+    // which one a code path reached. See ADR-0020.
+    year >= 1
+        && (1..=12).contains(&month)
         && day >= 1
         && day <= days_in_month(year, month)
         && num(11..13) <= 23
         && num(14..16) <= 59
-        && num(17..19) <= 60
+        && num(17..19) <= 59
 }
 
 /// Days in a Gregorian month. `0` for a month outside `1..=12`, so an out-of-range month can never
