@@ -62,9 +62,17 @@ def refusal(
         "classification-tier": classification_tier,
         "request-hash": request_hash,
         "envelope-id": envelope_id,
-        # A refusal that invites an immediate retry teaches agents to loop against a human's
-        # decision. `blocked` is the only state a later call could legitimately resolve, and even
-        # there the answer is "the operator fixes something", not "call again now".
+        # False for every result, including `parked`, and that is not the over-strictness it looks
+        # like. §06 §4.1 mandates it only for `denied` and `prohibited` — but the same section ends
+        # "Being refused legibly is a feature: the agent can report accurately to its user instead
+        # of retrying blind", and §4.2 makes parking a *terminal answer*. The flag is addressed to
+        # the agent, and what the agent should do with a park is stop and tell its user. The human
+        # is the one who makes the call again, after approving it.
+        #
+        # This was briefly changed to `result == "parked"` on the reasoning that an approval binds a
+        # later identical request, so a retry is the protocol rather than a loop. The tests here
+        # refused it, and they were right: a caller that retried on the flag would hammer the gate,
+        # which is precisely how a user's ordinary loop filled the per-subject cap and dead-ended.
         "retryable": False,
     }
     if decided_by is not None:

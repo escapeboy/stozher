@@ -26,11 +26,19 @@ it (<code>spec/06 §1.3</code>).</div>
 <summary>How an answer is produced — Stozher holds no approver key</summary>
 <div class="note">
 Stozher holds no approver private key and has no route that produces an approver's signature, so it
-cannot manufacture an approval. Sign the request hash with your own owner-only seed file:
-<pre>stozher-kernel decide --request &lt;request-hash&gt; --key ~/.stozher/ivan.seed \
+cannot manufacture an approval. Sign the request hash with your own owner-only seed file — the one
+the ceremony wrote, or the copy you keep off this machine. The deployment's own operator seed is at
+<code>deploy/secrets/operator/operator.seed</code>; a root who keeps theirs elsewhere substitutes
+their path.
+<pre>deploy/bin/stozher-approve &lt;request-hash&gt; --root human:ivan</pre>
+<p>That is the shipped path and it signs in your own process, which is the property this page exists
+to preserve. It is one command because the signing and the submitting are both yours to do — not
+because a button does it for you; nothing here can sign on your behalf.</p>
+To sign and submit as separate steps, or to deny with a reason:
+<pre>stozher-kernel decide --request &lt;request-hash&gt; --key deploy/secrets/operator/operator.seed \
                       --role 0 --index 0 --approve
 
-stozher-kernel decide --request &lt;request-hash&gt; --key ~/.stozher/ivan.seed \
+stozher-kernel decide --request &lt;request-hash&gt; --key deploy/secrets/operator/operator.seed \
                       --role 0 --index 0 --deny "we don't file public issues for customers"</pre>
 then paste the object it prints into the form below. <code>--role 0</code> is the human root key of
 <code>spec/01 §6</code>; the default, role <code>1'</code>, is an agent subject key and is in no root

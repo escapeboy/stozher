@@ -15,7 +15,9 @@ docker compose up  →  root key ceremony  →  point your own Claude Code at th
                    →  the call proceeds, and the chain walks back to you
 ```
 
-**Clean machine to first audited envelope: 110 seconds.**
+**Wipe to first audited envelope: 169 seconds** on an M4 Pro with the base images already pulled,
+measured by `deploy/gate/clean-install.sh`. Not a clean *machine*: `git clone` and the base image
+pulls are outside it, so a first run on a new host is slower.
 
 **Status: v0.9 closed, 2026-08-01 (ADR-0022).** No engineering remains in the plan before v1.0. What
 remains is contact with reality — one design partner running this in anger for a month, and the two
@@ -114,7 +116,7 @@ compatible with chain integrity by construction.
 | Gateway (Python) | **120 tests** |
 | Cross-language vectors | **295 vectors / 517 assertions**, across 18 files |
 | Conformance harness (`spec/08 §4`) | **7 groups**, run cross-language: Rust harness × Python component |
-| Clean install → first audited envelope | **110 s** |
+| Wipe → first audited envelope | **169 s** on one M4 Pro, base images cached — a measurement, not a checked property: the gate asserts only its 1800 s budget |
 | `clippy -D warnings`, `cargo fmt`, `ruff`, `mypy --strict` | clean |
 | `cargo audit` | passes, **no vulnerabilities** — but carries one *unsoundness* advisory in a transitive dependency (RUSTSEC-2026-0221, `event-listener` via `sqlx`), which is reported rather than silenced |
 | `#[allow(...)]` anywhere, suppression baselines | **zero** |
@@ -219,6 +221,15 @@ why. Never silently.
 git clone https://github.com/escapeboy/stozher && cd stozher
 ./deploy/gate/clean-install.sh        # wipes, rebuilds, measures, and proves the chain
 ```
+
+**"Wipes" means the directory it is run in** — store, keys, config and ceremony output. Run it on a
+fresh clone, never on a deployment you want to keep.
+
+**And it leaves you with one root, permanently.** The gate bootstraps a single
+`human:gate-operator`, and there is no post-install enrolment: changing the root set requires two
+roots, so a deployment that starts with one cannot ever add the second. That is a deliberate
+property, not an oversight — but it means the quick start is for trying the system, and a
+deployment you intend to keep starts at `deploy/README.md` §0 with a second root in hand.
 
 Then point an agent at it:
 

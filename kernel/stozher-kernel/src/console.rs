@@ -67,6 +67,31 @@ const PAYLOAD_PREVIEW_BYTES: usize = 8_192;
 /// Rows the regulator export pulls per round trip. Not a cap on the export — it pages until the
 /// filtered set is exhausted — only a bound on how much of it is in flight at once.
 const EXPORT_PAGE_ROWS: i64 = 10_000;
+/// Every filter the regulator export accepts. Anything else is refused rather than ignored — see
+/// `export`. Kept beside `Filters::from_params`, which reads exactly these names.
+const EXPORT_FILTERS: [&str; 17] = [
+    "subject",
+    "mandate-ref",
+    "mandate-subtree-of",
+    "classification",
+    "kind",
+    "action",
+    "component",
+    "stream",
+    "outcome",
+    "human-root",
+    "commitment-id",
+    "correlation-ref",
+    "emitted-from",
+    "emitted-to",
+    "limit",
+    "violations-only",
+    // Accepted and deliberately ignored, which is the opposite of the bug above rather than an
+    // instance of it. The console links to this export from a paged view, so the page cursor rides
+    // along in the query string; honouring it would silently *drop* every record before page two.
+    // `the_export_carries_every_envelope_once_and_ignores_the_page_cursor` pins that.
+    "after",
+];
 /// How far a mandate walk follows `parent` looking for the human root, matching the envelope page.
 const MANDATE_CHAIN_LINKS: u32 = 16;
 
@@ -652,6 +677,33 @@ async fn export(
 ) -> Response {
     if let Caller::Refused(response) = console_caller(&kernel, &headers) {
         return response;
+    }
+    // An unrecognised filter is refused *here* and nowhere else. `Filters::from_params` reads the
+    // names it knows and ignores the rest, which is right for a page an operator is browsing — a
+    // typo in the address bar should not be an error page. It is wrong for the artefact that leaves
+    // the building: an auditor who asked for `?class=consequential` — the field is `classification`
+    // — was handed all 29 records with a header saying 29 and nothing saying the filter had been
+    // dropped. A regulator-facing export that silently widens is worse than one that refuses,
+    // because the file looks like the answer to the question that was asked.
+    let unknown: Vec<&str> = params
+        .keys()
+        .map(String::as_str)
+        .filter(|name| !EXPORT_FILTERS.contains(name))
+        .collect();
+    if !unknown.is_empty() {
+        let mut names: Vec<&str> = unknown;
+        names.sort_unstable();
+        return notice(
+            StatusCode::BAD_REQUEST,
+            "That filter does not exist, so the export was refused",
+            &format!(
+                "No such filter: {}. Nothing was exported. An unrecognised filter would otherwise \
+                 be ignored and you would receive every record — a file that looks like the answer \
+                 to the question you asked. The filters this export accepts are: {}.",
+                names.join(", "),
+                EXPORT_FILTERS.join(", ")
+            ),
+        );
     }
     let filters = Filters::from_params(&params);
     let store = kernel.ingest.store();

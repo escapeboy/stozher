@@ -22,7 +22,11 @@ from stozher_gateway.classify import Classifier, read_shaped
 from stozher_gateway.config import GatewayConfig
 from stozher_gateway.emitter import Emitter
 from stozher_gateway.enforce import Call, Enforcer, Session
-from stozher_gateway.kernel_client import KernelClient
+from stozher_gateway.kernel_client import (
+    KernelClient,
+    KernelResponse,
+    KernelUnreachableError,
+)
 from stozher_gateway.policy import Policy
 from stozher_gateway.refusal import RefusalError
 from stozher_gateway.signing import SigningKey
@@ -615,3 +619,46 @@ def test_the_target_names_the_boundary_the_gateway_actually_knows(harness: Harne
     assert parked.request["target"] == "mcp:github"
     assert parked.request["args-hash"] == object_hash({"title": "ship it"})
     assert len(parked.request["nonce"]) == 32
+
+
+def test_a_park_the_kernel_refused_does_not_blame_the_network(harness: Harness) -> None:
+    """Three ways to not reach the queue are three different things to say.
+
+    `_queue_with_kernel` returned a bool, so the hint read "the kernel was unreachable" for all of
+    them — including the one where the kernel answered, was healthy, and refused on purpose. A user
+    whose ordinary loop had filled the per-subject cap was told the network was down, went to debug
+    the network, and had no way to learn that the request they were told to wait for was in no
+    queue at all and never would be.
+    """
+    refusals = {
+        "the kernel refused": (429, {"reason-code": "gate-rate-limited"}, "refused to queue it"),
+        "the kernel is gone": (None, None, "unreachable"),
+    }
+    for label, (status, body, expected) in refusals.items():
+        if status is None:
+
+            def park(_request: dict[str, Any]) -> Any:
+                raise KernelUnreachableError("no route to host")
+        else:
+
+            def park(
+                _request: dict[str, Any], status: int = status, body: dict[str, Any] = body or {}
+            ) -> Any:
+                return KernelResponse(status=status, body=body)
+
+        harness.enforcer._kernel = type("Stub", (), {"park_gate_request": staticmethod(park)})()
+        with pytest.raises(RefusalError) as refused:
+            harness.call("create_issue", title=f"ship it {label}")
+        hint = refused.value.document["hint"]
+        assert expected in hint, f"{label}: {hint}"
+        assert "held locally" in hint, f"{label}: a park nobody can see must say so — {hint}"
+
+    # And the control: queued successfully, so the hint says nothing about being held locally.
+    harness.enforcer._kernel = type(
+        "Stub",
+        (),
+        {"park_gate_request": staticmethod(lambda _r: KernelResponse(status=201, body={}))},
+    )()
+    with pytest.raises(RefusalError) as refused:
+        harness.call("create_issue", title="ship it queued")
+    assert "held locally" not in refused.value.document["hint"]

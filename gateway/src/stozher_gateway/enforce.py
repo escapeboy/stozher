@@ -583,7 +583,7 @@ class Enforcer:
             first_call,
             self._clock.now(),
         )
-        queued = self._queue_with_kernel(request)
+        not_queued = self._queue_with_kernel(request)
         raise refusal(
             "parked",
             "gate-parked",
@@ -596,10 +596,15 @@ class Enforcer:
             # identical* request — the same call, not a similar one (ADR-0007 §5). The gateway does
             # not block: a sync wait inside a sync MCP handler would stall the whole server
             # (`docs/gateway-integration-constraints.md` §2).
+            # No command and no route around the gate: §06 §4.1 forbids a refusal from carrying
+            # guidance on obtaining approval by other means, and the first reader of this string is
+            # the agent, which would try it. What it may say is what the protocol already promises —
+            # that an approval binds a *later identical* request (§4.2), which is why `retryable` is
+            # true for a park.
             hint=(
-                f"pending request {request_hash}"
-                if queued
-                else f"pending request {request_hash} (held locally; the kernel was unreachable)"
+                f"pending request {request_hash}; once approved, the same call may be made again"
+                if not_queued is None
+                else f"pending request {request_hash} (held locally; {not_queued})"
             ),
         )
 
@@ -646,27 +651,37 @@ class Enforcer:
             envelope_id=envelope_id,
         )
 
-    def _queue_with_kernel(self, request: dict[str, Any]) -> bool:
-        """Put the park where a human can see it (§06 §4.3). Returns whether it got there.
+    def _queue_with_kernel(self, request: dict[str, Any]) -> str | None:
+        """Put the park where a human can see it (§06 §4.3). Returns why it did not get there.
+
+        `None` means queued. Anything else is the reason, and it is a *string* rather than a flag
+        because there are three ways to fail here and they are not the same thing to whoever reads
+        the refusal. This returned a bool, and the hint therefore said "the kernel was unreachable"
+        for all three — including the one where the kernel answered, was healthy, and refused on
+        purpose. A user whose calls had filled the approval queue was told the network was down,
+        went to debug the network, and had no way to discover that the request they were told to
+        wait for was in no queue at all.
 
         A kernel that cannot be reached does not turn a park into a proceed — the refusal above is
-        raised either way. What it costs is visibility, and that cost is stated in the refusal's
-        hint and logged, rather than leaving an operator to wonder why nothing appeared in the
-        console.
+        raised either way. What it costs is visibility, and that cost is stated rather than leaving
+        an operator to wonder why nothing appeared in the console.
         """
         if self._kernel is None:
-            return False
+            return "no kernel is configured, so nothing was queued for a human to see"
         try:
             answer = self._kernel.park_gate_request(request)
         except KernelUnreachableError:
             logger.exception("the parked request could not be queued with the kernel")
-            return False
+            return "the kernel was unreachable, so nothing was queued for a human to see"
         if answer.status not in (200, 201):
             logger.error(
                 "the kernel refused a parked request: %s %s", answer.status, answer.reason_code
             )
-            return False
-        return True
+            return (
+                f"the kernel refused to queue it ({answer.reason_code or answer.status}), "
+                "so no approver can see it"
+            )
+        return None
 
     def _collect_decisions(self, fields: dict[str, Any]) -> None:
         """Pull answers the kernel holds for this call's still-undecided local parks.

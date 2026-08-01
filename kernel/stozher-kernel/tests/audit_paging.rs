@@ -318,3 +318,33 @@ async fn the_export_carries_every_envelope_once_and_ignores_the_page_cursor() {
         "an export taken from a later page dropped the records before it"
     );
 }
+
+/// An export asked for a filter that does not exist is refused, not widened.
+///
+/// `Filters::from_params` reads the names it knows and ignores the rest, which is right for a page
+/// an operator is browsing: a typo in the address bar should not be an error. It is wrong for the
+/// artefact that leaves the building. An auditor asked for `?class=consequential` — the field is
+/// spelled `classification` — and was handed every record, with a header confirming the count and
+/// nothing saying the filter had been dropped. A regulator-facing export that silently widens is
+/// worse than one that refuses, because the file looks like the answer to the question that was
+/// asked, and nobody downstream can tell that it is not.
+#[tokio::test]
+async fn an_export_refuses_a_filter_it_does_not_recognise() {
+    let world = world().await;
+    append_effects(&world, 3).await;
+
+    let (status, body) = get(&world, "/console/audit/export?class=consequential").await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "body was: {body}");
+    assert!(
+        body.contains("class"),
+        "the refusal must name the filter it did not recognise: {body}"
+    );
+    assert!(
+        body.contains("classification"),
+        "and the ones it does, so the reader can see the near-miss: {body}"
+    );
+
+    // The correctly-spelled filter still works, so this refuses a typo rather than the feature.
+    let (status, _) = get(&world, "/console/audit/export?classification=read").await;
+    assert_eq!(status, StatusCode::OK);
+}

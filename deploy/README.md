@@ -37,13 +37,24 @@ their own machine** and send you the public identifier only:
 machine: they need this checkout and docker, and they run it out of the image the same way the
 ceremony does. From their own `deploy/`:
 
+**This is the second root, and they must not run the ceremony** — `bin/stozher-bootstrap` is the
+first root's, once. The second root only produces a key and reads its identifier.
+
+`docker compose` interpolates the whole file on every invocation and `user:` has no default, so a
+fresh clone with no `.env` refuses to build before anything else happens. Write the two lines it
+needs first; the ceremony rewrites the file later and preserves what matters.
+
 ```sh
+printf 'STOZHER_UID=%s\nSTOZHER_GID=%s\n' "$(id -u)" "$(id -g)" > .env
 mkdir -p ~/.stozher && docker compose build kernel
 docker run --rm -u "$(id -u):$(id -g)" -v ~/.stozher:/keys stozher-kernel:0.1.0 \
     keygen --out /keys/mira.seed
 docker run --rm -u "$(id -u):$(id -g)" -v ~/.stozher:/keys stozher-kernel:0.1.0 \
     identity --key /keys/mira.seed --role 0                     # -> ed25519:...
 ```
+
+If this host already runs an install, `stozher-kernel:0.1.0` is *its* tag and these commands would
+use its image. Set `STOZHER_KERNEL_IMAGE` in `.env` first and substitute it above.
 
 `--role 0` is the one that matters. `keygen` also prints a *checkpoint* key on its way out; that is
 role `3'`, it belongs to a kernel rather than to a human, and it is not what goes in a root set.
@@ -136,9 +147,18 @@ export STOZHER_KERNEL_IMAGE=stozher-kernel-staging:0.1.0
 export STOZHER_GATEWAY_IMAGE=stozher-gateway-staging:0.1.0
 ```
 
-Both default to the plain names, and every script here reads them, so exporting them in the shell
-that runs the ceremony is enough. `.env` is the wrong place for them: the ceremony rewrites it and
-only carries over the keys listed in `.env.example`.
+Both default to the plain names and every script here reads them, so **put them in `.env`** — the
+ceremony preserves both, alongside `COMPOSE_PROJECT_NAME`.
+
+Exporting them in your own shell is *not* enough, and the failure is a long way from its cause: the
+MCP client spawns `docker compose` from its own environment, where the defaults come back and
+resolve the other install's image. What a first-time operator then sees is the kernel crash-looping
+on `x-schema-version-ahead: the store is at schema version 5; this build understands 3` — a store
+written by one build being opened by another, with nothing pointing at the tag that selected it.
+
+(This paragraph said the opposite until an operator followed it and lost an afternoon to that
+message. `.env` was the wrong place when nothing preserved these two keys; `bin/stozher-bootstrap`
+now does.)
 
 ### What the ceremony actually is
 
