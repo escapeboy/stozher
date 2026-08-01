@@ -48,7 +48,9 @@ For each proxied MCP tool call, in this order:
    forward.
 5. **Verify the mandate** for (component, action, class, target) (§03 §5). Failure → refuse with
    `outcome: "blocked"`.
-6. **Gate rule?** → build the action request (§06 §1.1), park the call, notify approvers, wait.
+6. **Gate rule?** → build the action request (§06 §1.1), submit it with the arguments it commits to
+   (§06 §4.4 — a component that still holds the values MUST send them, or the approver signs a
+   digest with nothing behind it), park the call, notify approvers, wait.
    - approved → continue with the `authorization` object in hand;
    - denied → refuse with the denial `authorization`, `outcome: "denied"`;
    - request expiry or kernel unreachable → refuse, `outcome: "blocked"` (§05 §7). Never forward.
