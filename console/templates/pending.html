@@ -126,13 +126,24 @@ answering, get them from the component that built the request and check that the
 <p>The exact object a signature covers:</p>
 <pre>{{ r.request_json }}</pre>
 
-<form method="post" action="/console/pending/{{ r.request_hash }}/decide">
-<input type="hidden" name="csrf" value="{{ r.csrf }}">
-<label for="decision-{{ r.short }}">signed <code>gate-decision</code> object</label><br>
-<textarea id="decision-{{ r.short }}" name="decision" rows="6" cols="110"
-          placeholder='{"v":"stozher/0.1","kind":"gate-decision","request-hash":"{{ r.request_hash }}", ... ,"sig":{...}}'></textarea><br>
-<button type="submit">record this decision</button>
-</form>
+{# There was a form here, with a textarea and a button that said "record this decision". It could
+   not be submitted: `bin/stozher-console` — the only documented way to reach this page in a browser
+   — forwards `GET` only, on purpose (ADR-0009 §2: a browser proxy that could POST would be the
+   shortest path to re-inventing the thing that file exists to avoid). So the button returned
+   `501 Unsupported method`, and going back discarded whatever had been pasted into it.
+
+   Three people found it independently in one day, two of them on the demo path. A control that
+   cannot work is worse than no control: it teaches an approver that the product is broken at the
+   exact moment they are being asked to trust it. The decision belongs at a terminal, where the
+   signing key and the network stay in separate processes, and that is what this page now says. #}
+<div class="note" data-decide="/console/pending/{{ r.request_hash }}/decide" data-csrf="{{ r.csrf }}">
+<b>Answer it at a terminal.</b> This page cannot take your decision, and that is deliberate rather
+than missing: the console is served through a read-only proxy so that a browser never holds anything
+that can sign. Run <code>deploy/bin/stozher-approve {{ r.short }}…</code> with your own key, and
+refresh here to see it recorded.
+<p>The <code>/decide</code> route is unchanged and still accepts a signed decision from anything
+that can authenticate — its path and CSRF token are on this element as data. What is gone is the
+form, because the shipped browser path could never submit one.</p></div>
 {% endfor %}
 {% endif %}
 

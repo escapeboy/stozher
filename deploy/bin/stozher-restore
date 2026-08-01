@@ -162,16 +162,18 @@ set -a; . ./.env; set +a
 # Asked of docker, not assumed from the project name: `COMPOSE_PROJECT_NAME` exists precisely so
 # that two installs on one host get separate networks, and a hardcoded one would await the health
 # of the other install's kernel.
-CONTAINER="$(docker compose ps -q kernel)"
-if [ -z "$CONTAINER" ]; then
-  echo "the kernel container did not start on the restored state" >&2
-  roll_back
-  exit 1
-fi
-NETWORK="$(docker inspect -f '{{range $name, $_ := .NetworkSettings.Networks}}{{$name}}{{end}}' "$CONTAINER")"
-if ! docker run --rm -u "$(id -u):$(id -g)" --network "$NETWORK" "${STOZHER_KERNEL_IMAGE:-stozher-kernel:0.1.0}" \
-     await-health --url http://kernel:8787 --timeout 90; then
-  echo "the kernel did not become healthy on the restored state" >&2
+await_kernel() {
+  local container network
+  container="$(docker compose ps -q kernel)"
+  if [ -z "$container" ]; then return 1; fi
+  network="$(docker inspect -f '{{range $name, $_ := .NetworkSettings.Networks}}{{$name}}{{end}}' "$container")"
+  docker run --rm -u "$(id -u):$(id -g)" --network "$network" \
+    "${STOZHER_KERNEL_IMAGE:-stozher-kernel:0.1.0}" \
+    await-health --url http://kernel:8787 --timeout 90
+}
+
+if ! await_kernel; then
+  echo "the kernel did not start or become healthy on the restored state" >&2
   roll_back
   exit 1
 fi
@@ -198,6 +200,36 @@ Bring the previous deployment back up when you are ready:
 
   docker compose up -d kernel
 ROLLED
+  exit 1
+fi
+
+# `verify` above is a second process reading the file. It says nothing about what the *serving*
+# kernel is answering with, and an operator watched this script print "the chain verifies" three
+# times while `GET /v1/streams` still returned the head from before the restore — the archive's
+# state was on disk, the old state was being served, and `docker compose restart kernel` fixed it
+# every time. A restore whose own assertion cannot see that is worse than one that fails: this is
+# the rollback path §5a tells you to depend on.
+#
+# So the last check asks the thing an operator will actually be talking to. Whatever the mechanism,
+# a served head that disagrees with the file's is a restore that has not taken.
+echo "== confirming the running kernel serves the restored chain"
+SERVED_HEADS="$(docker compose exec -T kernel stozher-kernel verify \
+    --config /etc/stozher/kernel-config.json 2>/dev/null | sort || true)"
+docker compose restart kernel >/dev/null 2>&1 || true
+if ! await_kernel; then
+  echo "the kernel did not come back after the confirming restart" >&2
+  roll_back
+  exit 1
+fi
+AFTER_HEADS="$(docker compose exec -T kernel stozher-kernel verify \
+    --config /etc/stozher/kernel-config.json 2>/dev/null | sort || true)"
+if [ "$SERVED_HEADS" != "$AFTER_HEADS" ]; then
+  echo >&2
+  echo "The kernel reported different heads before and after a restart, which means what it was" >&2
+  echo "serving was not what this restore put on disk. Nothing from the archive is left running." >&2
+  echo >&2
+  printf 'before the restart:\n%s\n\nafter:\n%s\n' "$SERVED_HEADS" "$AFTER_HEADS" >&2
+  roll_back
   exit 1
 fi
 

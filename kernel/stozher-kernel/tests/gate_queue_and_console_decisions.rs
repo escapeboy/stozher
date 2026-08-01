@@ -233,12 +233,22 @@ async fn a_parked_request_is_visible_in_the_console_pending_queue() {
         "the request object itself is not shown: {}",
         page.body
     );
-    // And a control to answer it — the capability S3 deliberately did not have.
+    // And where to answer it. There was a form here, and it could not be submitted: the only
+    // documented way to reach this page in a browser is `bin/stozher-console`, which forwards `GET`
+    // only and says why (ADR-0009 §2 — a browser proxy that could POST is the shortest path back to
+    // the thing that file exists to avoid). The button returned `501 Unsupported method`, and going
+    // back discarded the pasted signature. Three people found it independently in a day, two of them
+    // mid-demo. The `/decide` route is unchanged and still serves anything that can authenticate;
+    // what is gone is a control the shipped path could never work, which taught an approver the
+    // product was broken at the moment it asked them to trust it.
     assert!(
-        page.body.contains(&format!(
-            "action=\"/console/pending/{request_hash}/decide\""
-        )),
-        "{}",
+        page.body.contains("stozher-approve"),
+        "the page must name where the decision is actually made: {}",
+        page.body
+    );
+    assert!(
+        !page.body.contains("<form"),
+        "a control the shipped browser path cannot submit is worse than none: {}",
         page.body
     );
 }

@@ -241,16 +241,21 @@ def await_console(world: dict[str, Any], path: str, needle: str, timeout: float 
 
 
 def csrf_for(page: str, request_hash: str) -> str:
-    """Take the token out of the rendered form, exactly as a browser would submit it."""
-    form = re.search(
-        rf'<form method="post" action="/console/pending/{request_hash}/decide">(.*?)</form>',
+    """Take the token off the request's block, as a caller that can authenticate would.
+
+    This used to scrape a `<form>`. There is no longer one: `bin/stozher-console`, the only
+    documented way to open this page in a browser, forwards `GET` only on purpose (ADR-0009 §2), so
+    the button returned `501 Unsupported method` and going back discarded the pasted signature. The
+    `/decide` route is unchanged and still accepts a signed decision from anything that can
+    authenticate — which is what these tests are — so the path and the token are rendered as data
+    instead of as a control nobody could use.
+    """
+    block = re.search(
+        rf'data-decide="/console/pending/{request_hash}/decide" data-csrf="([0-9a-f]{{64}})"',
         page,
-        re.DOTALL,
     )
-    assert form is not None, f"no decision form for {request_hash} on the page"
-    token = re.search(r'name="csrf" value="([0-9a-f]{64})"', form.group(1))
-    assert token is not None, f"the form carries no CSRF token: {form.group(1)}"
-    return token.group(1)
+    assert block is not None, f"no decide block for {request_hash} on the page"
+    return block.group(1)
 
 
 def sign_decision(kernel: Kernel, request_hash: str, verdict: str, reason: str | None) -> dict[str, Any]:

@@ -4,20 +4,23 @@
 # Three things, and losing any one of them is a different kind of loss:
 #
 #   the store    the audit trail itself. Losing it loses the record.
-#   the keys     the operator seed derives the human root, the bootstrap subject and the policy key.
-#                Losing it means no further policy can be published and no root set can change —
-#                the deployment becomes read-only for ever. Every seed is copied at mode 0600, and
-#                the archive is written 0600, because a backup of a private key is a private key.
+#   the keys     the kernel and gateway seeds, at mode 0600, because a backup of a private key is a
+#                private key. **Not the operator seed** — that one derives the human root, and
+#                `deploy/README.md` §1 says it never goes to a server, so a tool running on the
+#                server does not put it in an archive either. `--with-operator-key` overrides that
+#                deliberately. Keep your own copy: without it no further policy can be published and
+#                no root set can change, and the deployment is read-only for ever.
 #   the config   which roots are enrolled and which callers exist. Rebuildable by hand, painfully.
 #
 # The store is snapshotted with `VACUUM INTO` through the running kernel, so this needs no downtime
 # and no separate `sqlite3`. Copying the three SQLite files with `cp` while a writer is mid
 # transaction produces an archive that usually restores — which is the worst thing a backup can be.
 #
-# Usage: bin/stozher-backup [--out backups/] [--keys | --no-keys]
+# Usage: bin/stozher-backup [--out backups/] [--keys | --no-keys] [--with-operator-key]
 #
-# `--no-keys` produces an archive that is not a secret, for a destination you do not fully trust.
-# It cannot restore a working deployment on its own; say so where you write it down.
+# `--no-keys` produces an archive with no seed material, for a destination you do not fully trust.
+# It cannot restore a working deployment on its own; say so where you write it down. It is still not
+# *public*: it carries `.env`, which holds the kernel and gateway bearer tokens.
 
 set -euo pipefail
 
@@ -26,11 +29,15 @@ cd "$DEPLOY"
 
 OUT="backups"
 KEYS="yes"
+#: The operator seed is excluded even from a `--keys` archive. Opt in deliberately or keep your own
+#: copy — see the block below for why this is not symmetric with the other seeds.
+OPERATOR_KEY="no"
 while [ $# -gt 0 ]; do
   case "$1" in
     --out) OUT="$2"; shift 2 ;;
     --keys) KEYS="yes"; shift ;;
     --no-keys) KEYS="no"; shift ;;
+    --with-operator-key) OPERATOR_KEY="yes"; shift ;;
     -h|--help) sed -n '2,20p' "$0"; exit 0 ;;
     *) echo "unknown argument $1" >&2; exit 2 ;;
   esac
@@ -70,14 +77,27 @@ if [ "$KEYS" = "yes" ]; then
   echo "== copying key material (this archive IS a secret)"
   cp -R secrets "$STAGE/secrets"
   chmod -R go-rwx "$STAGE/secrets"
+  # The operator seed is the exception, and it leaves by an explicit flag or not at all.
+  # `deploy/README.md` §1 says of it: "This file never goes to a server. A server that holds it is a
+  # server that can sign its own approvals." This script runs *on* the server, and it was archiving
+  # that file — so the property the documentation states was being broken by the project's own tool,
+  # and every backup taken since install is a copy of the root key sitting wherever backups go.
+  if [ "$OPERATOR_KEY" != "yes" ] && [ -e "$STAGE/secrets/operator" ]; then
+    rm -rf "$STAGE/secrets/operator"
+    echo "   the operator seed is NOT in this archive — it is the one key that must not live on a"
+    echo "   server. Keep your own copy; --with-operator-key overrides this and makes the archive"
+    echo "   able to sign approvals."
+  fi
 else
   echo "== skipping key material — this archive cannot restore a working deployment on its own"
+  echo "   note: it still contains .env, which holds the kernel and gateway bearer tokens."
 fi
 
 cat > "$STAGE/MANIFEST" <<MANIFEST
 stozher-backup 1
 taken-at        ${STAMP}
 includes-keys   ${KEYS}
+operator-key    ${OPERATOR_KEY}
 store           store/stozher.db (VACUUM INTO snapshot, consistent at the instant above)
 gateway-store   $(if [ -f "$STAGE/store/gateway.db" ]; then echo "store/gateway.db"; else echo "(none)"; fi)
 restore         bin/stozher-restore ${OUT}/stozher-${STAMP}.tar.gz
