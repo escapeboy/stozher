@@ -80,6 +80,252 @@ impl Clock for FixedClock {
 /// A shared clock handle.
 pub type SharedClock = Arc<dyn Clock>;
 
+/// The largest advance this kernel will accept: ten years (ADR-0023).
+///
+/// Retention ceilings are expressed in days (§05 §6), so ten years crosses any commitment a policy
+/// can express and then some. The bound exists so the advance cannot be used to push the clock out
+/// of the fixed form's range, and so the number in the file is one a reader can weigh.
+pub const MAX_CLOCK_ADVANCE_SECONDS: i64 = 3_650 * 86_400;
+
+/// The reason code under which an advanced clock declares itself into the kernel's record stream.
+pub const CLOCK_ADVANCE_DECLARED: &str = "clock-advance-in-force";
+
+/// The refusal code for every way of asking for a clock this kernel will not run.
+pub const CLOCK_ADVANCE_REFUSED: &str = "clock-advance-refused";
+
+/// The sentence an operator must copy into the configuration for the advance to be honoured.
+///
+/// It is not a password and it stops nobody: an attacker who can write the configuration file can
+/// write this line too. It is there for the reader — the file gets diffed, pasted into tickets and
+/// attached to reports, and the one thing everybody downstream needs to know about a deployment
+/// running this way should be in the same paragraph as the number that made it true.
+pub const CLOCK_ADVANCE_ACKNOWLEDGEMENT: &str =
+    "records emitted by this deployment are not evidence of when anything happened";
+
+/// The last instant the fixed form can express, and where an advance saturates.
+const LAST_REPRESENTABLE_INSTANT: &str = "9999-12-31T23:59:59.999Z";
+
+/// A configured clock advance: how far forward, and the duration exactly as written.
+#[derive(Debug, Clone)]
+pub struct ClockAdvance {
+    /// The advance in whole seconds. Always strictly positive and at most
+    /// [`MAX_CLOCK_ADVANCE_SECONDS`].
+    pub seconds: i64,
+    /// The ISO 8601 duration as it appears in the configuration, for the record and the banner.
+    pub duration: String,
+}
+
+/// A clock advanced by a fixed, non-negative offset from another clock.
+///
+/// This is the one facility in the shipped binary that moves time, and its whole design is the
+/// direction it can move. The offset is an **advance**: `now()` is never earlier than the clock it
+/// wraps, on any input, in any configuration. That is not a check that could be bypassed — a
+/// negative advance cannot be constructed ([`AdvancedClock::new`]) and cannot be written
+/// (`spec/01 §2.4` durations have no sign), so no arrangement of configuration produces a kernel
+/// whose clock reads earlier than the host's.
+///
+/// The consequence is the property this exists to preserve: **an advance can never lengthen
+/// anybody's authority**. A mandate past its `not-after`, a revocation already published, a budget
+/// window already closed — all of them stay closed under every clock this type can produce. What it
+/// *can* do is bring a deadline forward, which is what makes retention, expiry and the checkpoint
+/// interval observable inside an engagement instead of only in a year's time. What it can also do,
+/// and this is the price, is erase a payload earlier than reality would have; ADR-0023 §4 weighs
+/// that and [`declare_advance`] is why it cannot be done quietly.
+#[derive(Debug)]
+pub struct AdvancedClock {
+    base: SharedClock,
+    advance: ClockAdvance,
+}
+
+impl AdvancedClock {
+    /// A clock reading `base + advance`.
+    ///
+    /// # Errors
+    ///
+    /// [`CLOCK_ADVANCE_REFUSED`] if the advance is not strictly positive, or exceeds
+    /// [`MAX_CLOCK_ADVANCE_SECONDS`]. Zero is refused too: the absence of the configuration member
+    /// is how a deployment says its clock is real, and a second spelling for that would be a
+    /// deployment that declares a moved clock while running an unmoved one.
+    pub fn new(base: SharedClock, advance: ClockAdvance) -> Result<Self> {
+        if advance.seconds <= 0 {
+            return Err(Error::new(
+                CLOCK_ADVANCE_REFUSED,
+                format!(
+                    "an advance must be strictly positive, {} is not — this clock moves forward or \
+                     it does not move",
+                    advance.seconds
+                ),
+            ));
+        }
+        if advance.seconds > MAX_CLOCK_ADVANCE_SECONDS {
+            return Err(Error::new(
+                CLOCK_ADVANCE_REFUSED,
+                format!(
+                    "an advance of {}s exceeds the bound of {MAX_CLOCK_ADVANCE_SECONDS}s",
+                    advance.seconds
+                ),
+            ));
+        }
+        Ok(Self { base, advance })
+    }
+
+    /// The advance in force.
+    #[must_use]
+    pub fn advance(&self) -> &ClockAdvance {
+        &self.advance
+    }
+
+    /// What the clock underneath reads — the host's own time, unmoved.
+    #[must_use]
+    pub fn base_now(&self) -> String {
+        self.base.now()
+    }
+
+    /// The line this kernel says on every start while the advance is in force.
+    #[must_use]
+    pub fn banner(&self) -> String {
+        format!(
+            "THE CLOCK IS ADVANCED BY {} ({}s). It reads {} while the host reads {}. {}.",
+            self.advance.duration,
+            self.advance.seconds,
+            self.now(),
+            self.base_now(),
+            CLOCK_ADVANCE_ACKNOWLEDGEMENT
+        )
+    }
+}
+
+impl Clock for AdvancedClock {
+    fn now(&self) -> String {
+        let base = self.base.now();
+        // Saturating at the last representable instant rather than falling back to `base`: the
+        // invariant callers rely on is that this clock is never *behind* the one it wraps, and
+        // returning the unmoved time to escape an arithmetic edge would break exactly that. The
+        // branch is unreachable for a bounded advance over any host clock this side of the year
+        // 9989; it is written so the invariant holds without depending on that.
+        shift(&base, self.advance.seconds).unwrap_or_else(|_| LAST_REPRESENTABLE_INSTANT.to_owned())
+    }
+}
+
+/// Build the clock a configuration describes.
+///
+/// # Errors
+///
+/// [`CLOCK_ADVANCE_REFUSED`].
+pub fn from_config(config: &crate::Config) -> Result<SharedClock> {
+    let base: SharedClock = Arc::new(SystemClock);
+    match &config.clock_advance {
+        None => Ok(base),
+        Some(advance) => Ok(Arc::new(AdvancedClock::new(base, advance.clone())?)),
+    }
+}
+
+/// Write the advance into the kernel's own record stream, and refuse to run if the clock has gone
+/// backwards since the last time it did (§04 §7.1, ADR-0023 §3).
+///
+/// Two things happen here, and both have to happen before the kernel serves anything.
+///
+/// **The advance is declared.** A record lands in the kernel's rejection stream — signed by the
+/// kernel key, chained to the record before it, in a table the storage engine will not let anything
+/// update or delete. Its `received-at` is the **host's** time while every record the process goes on
+/// to emit carries the advanced one, so the discontinuity is not merely visible, it is measurable:
+/// a reader subtracts one from the other and knows exactly how far ahead everything after this
+/// point was written. The declaration is not optional and not best-effort — if it cannot be written,
+/// [`crate::Kernel::open`] fails and there is no kernel.
+///
+/// It is in the rejection stream rather than in an envelope because `spec/02 §2`'s `kind` vocabulary
+/// is closed at nine and a tenth is a wire change that invalidates every existing document and every
+/// vector at once. That stream already exists for precisely this — the kernel's own durable records
+/// that are not envelopes ([`crate::store::Store::record_rejection`]) — and this is one: the kernel
+/// recording that it is refusing to let its own timestamps be read as evidence of when.
+///
+/// **The advance ratchets.** If the store already carries a declaration whose effective instant is
+/// later than the one this process would start at, the kernel refuses to start. So a deployment
+/// cannot be run forward, used, and quietly returned to reality: once moved, the only clocks it will
+/// ever accept are ones at least as far ahead. Moving a deployment forward costs you that
+/// deployment, permanently, which is the intended price of pointing this at anything real.
+///
+/// Returns the id of the declaration when one was written.
+///
+/// # Errors
+///
+/// [`CLOCK_ADVANCE_REFUSED`] if the clock has gone backwards, or
+/// [`crate::codes::STORE_UNAVAILABLE`].
+pub async fn declare_advance(
+    store: &crate::Store,
+    signer: &crate::keys::SigningKey,
+    clock: &SharedClock,
+    advance: Option<&ClockAdvance>,
+) -> Result<Option<String>> {
+    let effective = clock.now();
+    // The check runs whether or not this process is advanced: returning to the real clock is itself
+    // a move backwards, and it is the one an attacker would make to cover the trip.
+    if let Some(prior) = last_declared_instant(store).await? {
+        // Both are the fixed form, whose lexical order is its chronological order (§01 §2.3).
+        if effective < prior {
+            return Err(Error::new(
+                CLOCK_ADVANCE_REFUSED,
+                format!(
+                    "this deployment has already run at {prior} and would now start at {effective}. \
+                     Its clock does not go backwards: the records it holds were written ahead of \
+                     real time and moving back would put new ones behind them. Configure a \
+                     clock-advance that reaches {prior} or later, or start from a fresh store"
+                ),
+            ));
+        }
+    }
+    let Some(advance) = advance else {
+        return Ok(None);
+    };
+
+    let detail = stozher_core::jcs::canonicalize(&serde_json::json!({
+        "acknowledged": CLOCK_ADVANCE_ACKNOWLEDGEMENT,
+        "advance": advance.duration,
+        "advance-seconds": advance.seconds,
+        "effective": effective,
+        "real": unmoved(&effective, advance.seconds),
+    }))?;
+    let record = store
+        .record_rejection(
+            signer,
+            &crate::store::RejectionInput {
+                reason: CLOCK_ADVANCE_DECLARED.to_owned(),
+                detail: detail.clone(),
+                object_hash: stozher_core::crypto::sha256_hex(detail.as_bytes()),
+                submitted_by: Some("agent:kernel".to_owned()),
+                // The host's time, not the advanced one. This is the single field in the store that
+                // still says when any of this actually happened.
+                received_at: unmoved(&effective, advance.seconds),
+                claimed_stream: None,
+                claimed_seq: None,
+                claimed_kind: None,
+            },
+        )
+        .await?;
+    Ok(Some(record.id))
+}
+
+/// The effective instant of the most recent declaration, if this store carries one.
+async fn last_declared_instant(store: &crate::Store) -> Result<Option<String>> {
+    let records = store.rejections(Some(CLOCK_ADVANCE_DECLARED), 1).await?;
+    Ok(records.first().and_then(|record| {
+        serde_json::from_str::<serde_json::Value>(record["detail"].as_str()?)
+            .ok()?
+            .get("effective")?
+            .as_str()
+            .map(str::to_owned)
+    }))
+}
+
+/// The unmoved instant behind `effective`.
+///
+/// Derived by subtraction rather than by reading the base clock again, so the two timestamps in one
+/// declaration are exactly one advance apart instead of one advance plus however long the write
+/// took.
+fn unmoved(effective: &str, advance_seconds: i64) -> String {
+    shift(effective, -advance_seconds).unwrap_or_else(|_| effective.to_owned())
+}
+
 /// Parse a timestamp in the fixed form, returning milliseconds since the Unix epoch.
 ///
 /// Any other shape is a rejection, not a repair: offsets other than `Z`, absent or differing
@@ -442,5 +688,84 @@ mod tests {
     fn the_system_clock_produces_a_parseable_instant() {
         let now = SystemClock.now();
         assert_eq!(format_millis(parse_timestamp(&now).unwrap()), now);
+    }
+
+    fn advance(duration: &str) -> Result<ClockAdvance> {
+        Ok(ClockAdvance {
+            seconds: parse_duration_seconds(duration)?,
+            duration: duration.to_owned(),
+        })
+    }
+
+    #[test]
+    fn an_advanced_clock_reads_ahead_of_the_one_it_wraps() {
+        let base = Arc::new(FixedClock::new("2026-07-26T09:00:00.000Z").unwrap());
+        let clock = AdvancedClock::new(Arc::clone(&base) as SharedClock, advance("P400D").unwrap())
+            .unwrap();
+        assert_eq!(clock.base_now(), "2026-07-26T09:00:00.000Z");
+        assert_eq!(clock.now(), "2027-08-30T09:00:00.000Z");
+        // It tracks the clock underneath rather than standing still at a computed instant.
+        base.advance_seconds(3_600);
+        assert_eq!(clock.now(), "2027-08-30T10:00:00.000Z");
+        assert!(clock.banner().contains("P400D"));
+    }
+
+    #[test]
+    fn the_clock_advance_has_no_way_to_point_backwards() {
+        // The whole safety argument is this direction, so it is asserted at both layers that could
+        // produce a negative: the duration grammar, which has no sign, and the constructor, which
+        // refuses one anyway for callers who build a `ClockAdvance` by hand.
+        for spelling in ["-P400D", "-PT1H", "P-400D", "PT-1H"] {
+            assert_eq!(
+                parse_duration_seconds(spelling).unwrap_err().code(),
+                "encoding-bad-duration",
+                "{spelling:?} must not parse as a duration"
+            );
+        }
+        let base: SharedClock = Arc::new(FixedClock::new("2026-07-26T09:00:00.000Z").unwrap());
+        for seconds in [-1, -86_400, i64::MIN] {
+            let hostile = ClockAdvance {
+                seconds,
+                duration: "forged".to_owned(),
+            };
+            assert_eq!(
+                AdvancedClock::new(Arc::clone(&base), hostile)
+                    .unwrap_err()
+                    .code(),
+                CLOCK_ADVANCE_REFUSED,
+                "an advance of {seconds}s was accepted"
+            );
+        }
+    }
+
+    #[test]
+    fn an_advance_is_bounded_and_never_zero() {
+        let base: SharedClock = Arc::new(FixedClock::new("2026-07-26T09:00:00.000Z").unwrap());
+        for refused in ["PT0S", "P0D"] {
+            assert_eq!(
+                AdvancedClock::new(Arc::clone(&base), advance(refused).unwrap())
+                    .unwrap_err()
+                    .code(),
+                CLOCK_ADVANCE_REFUSED,
+                "a zero advance was accepted as {refused:?}"
+            );
+        }
+        assert_eq!(
+            AdvancedClock::new(Arc::clone(&base), advance("P3651D").unwrap())
+                .unwrap_err()
+                .code(),
+            CLOCK_ADVANCE_REFUSED
+        );
+        assert!(AdvancedClock::new(Arc::clone(&base), advance("P3650D").unwrap()).is_ok());
+    }
+
+    #[test]
+    fn an_advance_saturates_rather_than_reading_behind_the_host() {
+        // Unreachable with a real host clock, and asserted because the failure mode if it were
+        // reachable is the one thing this type must never do: report a time earlier than reality.
+        let base: SharedClock = Arc::new(FixedClock::new("9999-01-01T00:00:00.000Z").unwrap());
+        let clock = AdvancedClock::new(Arc::clone(&base), advance("P3650D").unwrap()).unwrap();
+        assert_eq!(clock.now(), LAST_REPRESENTABLE_INSTANT);
+        assert!(clock.now() > clock.base_now());
     }
 }

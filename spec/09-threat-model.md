@@ -100,6 +100,30 @@ components, least-privilege credentials at the boundary) and are explicitly not 
   answer is "visible, not prevented".
 - **Timestamps are never used for chain order** (§04 §2). Ordering is `prev-hash`.
 
+### 5.1 The kernel's own clock
+
+Everything above concerns an emitter's `emitted-at`. The kernel's own clock is a separate question,
+and the answer is that a deployment MAY be configured to run it **ahead** of the host's — never
+behind (ADR-0023). The asymmetry is the whole control, so it is normative:
+
+- An implementation MUST NOT offer any means — configuration member, environment variable, flag,
+  request or administrative route — by which the kernel's clock reads **earlier** than the host's. A
+  clock behind the host revives expired mandates, un-publishes revocations and reopens closed budget
+  windows; there is no legitimate use that requires it.
+- Where an advance is offered it MUST be expressed as a duration of §01 §2.4, which carries no sign,
+  MUST be bounded, and MUST be fixed for the lifetime of the process — an advance that can be changed
+  while running is a clock that can go backwards.
+- It MUST be declared per §04 §7.1 before the kernel serves anything, and MUST ratchet: see that
+  section for both MUSTs.
+
+The residual is stated rather than closed. An advance brings deadlines **forward**, so it can cause
+a payload to be erased before its retention ceiling would have been reached in real time, and it can
+activate a mandate whose `not-before` had not yet passed. Neither is prevented. Both are bounded,
+both are preceded in the same chain by a declaration stamped with the host's own time, and the
+deployment that did it cannot afterwards return to a clock on which its records mean what they say.
+The honest answer is again "visible, not prevented" — and the alternative, a deployment on which
+retention enforcement cannot be observed at all within any engagement, was measured and found worse.
+
 ## 6. Prompt injection (A5) — the residual is scope-shaped
 
 The architecture removes the *escalation* path (§07 §3): injected content cannot obtain a mandate,

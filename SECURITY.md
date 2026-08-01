@@ -44,6 +44,15 @@ that starts from a map is worth more than one that starts from a README.
    the other implementation, giving one instant two spellings and letting an emitter choose which
    verifiers agreed with it. `tests/timestamp_adversarial.rs` now attacks the rejection side; a
    reviewer should assume it is not exhaustive.
+
+   **As of v1.0 this file also holds the one facility that deliberately moves the kernel's clock**
+   (`clock-advance`, ADR-0023), added because retention enforcement was otherwise unobservable
+   inside any engagement. It is forward-only — the configuration language has no way to express a
+   negative duration, so a clock behind the host is not a sentence it can say — bounded at ten years,
+   declared into the kernel's chained record stream before the kernel serves anything, and ratcheted
+   so a deployment that has run ahead cannot return. Attack it in that order: try to reach a clock
+   earlier than the host's by any route; try to run advanced without the declaration; try to get back.
+   ADR-0023 §4 states the two residuals it does **not** close.
 2. **`kernel/stozher-core/src/gate.rs` — the eleven-step authorization algorithm.** Everything the
    product claims rests on it. In particular: the binding of an approval to a specific effect, replay
    handling, and the self-approval check that compares *subjects* and not only keys.
@@ -95,6 +104,13 @@ that starts from a map is worth more than one that starts from a README.
   list of what held. It was performed by the same party that wrote the code, which is the one
   property an external review has and it does not. The external review is attested (above) but its
   scope is not held here, so this remains the only place a reader can see *what was looked at*.
+- **An advanced clock can erase a payload early.** `clock-advance` brings `retain-until` forward, so
+  an attacker who can write `config.json` — the file through which root trust already enters — gains
+  a way to destroy evidence sooner than reality would have. It is not prevented, because preventing
+  it means refusing to demonstrate decay, which is the finding that produced the facility. It is
+  bounded, preceded by the §04 §5.4 checkpoint, and preceded in the same chain by a signed
+  declaration stamped with the host's real time. The chain cannot lie about it afterwards; the
+  payload is still gone. ADR-0023 §4.
 - **Payload decay has no second custodian.** Deleting a payload is the one destructive operation the
   kernel performs, and the property that makes it safe — chain verification never reads a payload —
   is enforced by the schema (no chain-bearing column in `payloads`) rather than by a separate

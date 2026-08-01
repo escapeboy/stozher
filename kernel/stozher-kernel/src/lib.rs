@@ -132,15 +132,29 @@ impl Kernel {
     ///
     /// # Errors
     ///
-    /// `key-file-permissions` if the seed file is not owner-only, any `key-file-*` code, or
-    /// [`codes::STORE_UNAVAILABLE`].
+    /// `key-file-permissions` if the seed file is not owner-only, any `key-file-*` code,
+    /// [`clock::CLOCK_ADVANCE_REFUSED`], or [`codes::STORE_UNAVAILABLE`].
     pub async fn open(config: Config) -> Result<Self> {
         let seed = keys::Seed::load(&config.kernel_seed)?;
         let kernel_key = seed.derive(keys::ROLE_KERNEL_CHECKPOINT, 0)?;
         let store = Store::open(&config.database, &config.rejection_stream).await?;
         let notifier = config.notifier();
-        let mut kernel =
-            Self::assemble(config, store, kernel_key, Arc::new(clock::SystemClock)).await?;
+        // Before anything is served: the clock the configuration asks for, the record saying so, and
+        // the refusal if this deployment has already run further ahead than this. `declare_advance`
+        // is fallible on purpose — a kernel that could not write the declaration must not start,
+        // because a moved clock nobody can see afterwards is worse than no facility at all
+        // (ADR-0023 §3).
+        let clock = clock::from_config(&config)?;
+        clock::declare_advance(&store, &kernel_key, &clock, config.clock_advance.as_ref()).await?;
+        if let Some(advance) = &config.clock_advance {
+            tracing::warn!(
+                advance = %advance.duration,
+                effective = %clock.now(),
+                "{}",
+                clock::CLOCK_ADVANCE_ACKNOWLEDGEMENT
+            );
+        }
+        let mut kernel = Self::assemble(config, store, kernel_key, clock).await?;
         kernel.notifier = notifier;
         Ok(kernel)
     }

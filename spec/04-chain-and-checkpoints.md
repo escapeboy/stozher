@@ -212,6 +212,34 @@ received, the submitting connection's authenticated subject (if any), and the ti
 - MUST be visible in the console. A component that suddenly emits invalid envelopes is either broken
   or hostile, and in both cases the audit is the place it becomes visible.
 
+### 7.1 The kernel's own records
+
+The rejection stream is the kernel's stream of durable records that are **not** envelopes. §02 §2's
+`kind` vocabulary is closed at nine and holds no member for one, so anything the kernel must record
+durably and cannot express as an envelope belongs here, chained and signed like everything else. An
+ingest rejection is the first such record; it is not the only one.
+
+**A kernel whose clock is not the host's MUST declare it here before serving anything** (ADR-0023).
+The record's `reason` is `clock-advance-in-force`, and its `detail` is a JCS object carrying:
+
+- `advance` — the ISO 8601 duration, and `advance-seconds`, its value in seconds;
+- `effective` — the instant the kernel's clock reads;
+- `real` — the instant the **host's** clock reads, which is also the record's `received-at`;
+- `acknowledged` — the operator's acknowledgement, verbatim.
+
+Two rules follow, and both are MUSTs:
+
+- If the declaration cannot be written, the kernel MUST NOT start. A moved clock that leaves no
+  record is indistinguishable afterwards from an unmoved one, which is a worse position than having
+  no facility at all.
+- The kernel MUST NOT start at an instant earlier than the `effective` of the newest declaration its
+  store holds. A clock that has been moved forward does not come back: records already written ahead
+  of real time must not be followed by records written behind them.
+
+A consumer reading a stream from a deployment that carries such a declaration MUST treat every
+`emitted-at` at or after it as offset by `advance-seconds`, and MUST NOT read those timestamps as
+evidence of when anything happened.
+
 ## 8. Storage schema notes (informative)
 
 SQLite first, Postgres later, same schema (ADR-0003). Sketch:

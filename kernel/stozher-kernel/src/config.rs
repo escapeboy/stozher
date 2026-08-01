@@ -79,6 +79,19 @@ pub struct Config {
     /// anything longer — retention is policy's — it would only stop the product doing what it
     /// advertises, which is the failure `deploy/README.md` §5 was written about.
     pub decay_interval_seconds: i64,
+    /// How far ahead of the host this deployment's clock runs (`clock-advance`), when it does.
+    ///
+    /// `None` — the absence of the member — is the only spelling of a real clock, and is what every
+    /// deployment that has not deliberately opted out of being evidence has.
+    ///
+    /// This is the one member that changes what the kernel's own records *mean*, so ADR-0023
+    /// records why it exists at all: without it, retention enforcement, mandate expiry and the
+    /// checkpoint interval are unobservable inside any engagement shorter than the deadlines
+    /// themselves, and an auditor's report says so. It is bounded, it is forward-only — see
+    /// [`crate::clock::AdvancedClock`] for why that is a property of the type and not a check — and
+    /// [`crate::clock::declare_advance`] puts it in the audit trail before the kernel serves
+    /// anything.
+    pub clock_advance: Option<crate::clock::ClockAdvance>,
 }
 
 /// How many gate requests one subject may park in one window (§09 §7).
@@ -145,7 +158,7 @@ pub enum ConfiguredChannel {
     },
 }
 
-const MEMBERS: [&str; 14] = [
+const MEMBERS: [&str; 15] = [
     "bind",
     "database",
     "kernel-seed",
@@ -160,6 +173,7 @@ const MEMBERS: [&str; 14] = [
     "console-base-url",
     "gate-rate-limit",
     "decay-interval",
+    "clock-advance",
 ];
 
 /// Once a day. Retention deadlines in this system are expressed in days (§05 §6), so a sweep an
@@ -325,6 +339,7 @@ impl Config {
                 .map(str::to_owned),
             gate_rate_limit: parse_rate_limit(map.get("gate-rate-limit"))?,
             decay_interval_seconds: parse_decay_interval(map.get("decay-interval"))?,
+            clock_advance: parse_clock_advance(map.get("clock-advance"))?,
         })
     }
 
@@ -485,6 +500,77 @@ fn parse_decay_interval(entry: Option<&Value>) -> Result<i64> {
         ));
     }
     Ok(seconds)
+}
+
+/// Parse `clock-advance`, the deployment's declaration that its clock is not the host's (ADR-0023).
+///
+/// It is an object rather than a bare duration for one reason: an object has room for the
+/// acknowledgement, and the acknowledgement is the point. A deployment running this way emits
+/// records whose timestamps are not when anything happened, and the sentence saying so belongs in
+/// the same three lines as the number that made it true — in the file that gets diffed, reviewed and
+/// pasted into the ticket. It stops no attacker and is not meant to; see
+/// [`crate::clock::CLOCK_ADVANCE_ACKNOWLEDGEMENT`].
+///
+/// The direction is not enforced here. It is enforced by the grammar: `advance` is an ISO 8601
+/// duration of §01 §2.4, which has no sign, so "move the clock back an hour" is not a sentence this
+/// configuration language can say. That is why the member is an advance rather than an offset.
+fn parse_clock_advance(entry: Option<&Value>) -> Result<Option<crate::clock::ClockAdvance>> {
+    let Some(entry) = entry else {
+        return Ok(None);
+    };
+    let map = entry.as_object().ok_or_else(|| {
+        Error::new(
+            "config-malformed",
+            "clock-advance must be an object with advance and acknowledged",
+        )
+    })?;
+    for key in map.keys() {
+        if !["advance", "acknowledged"].contains(&key.as_str()) {
+            return Err(Error::new(
+                "config-malformed",
+                format!("clock-advance has no member {key:?}"),
+            ));
+        }
+    }
+    let acknowledged = map.get("acknowledged").and_then(Value::as_str);
+    if acknowledged != Some(crate::clock::CLOCK_ADVANCE_ACKNOWLEDGEMENT) {
+        return Err(Error::new(
+            "config-malformed",
+            format!(
+                "clock-advance.acknowledged must read exactly {:?} — a deployment whose clock is \
+                 not the host's says so in its own configuration, or it does not get one",
+                crate::clock::CLOCK_ADVANCE_ACKNOWLEDGEMENT
+            ),
+        ));
+    }
+    let duration = map
+        .get("advance")
+        .and_then(Value::as_str)
+        .ok_or_else(|| {
+            Error::new(
+                "config-malformed",
+                "clock-advance.advance must be an ISO 8601 duration",
+            )
+        })?
+        .to_owned();
+    let seconds = crate::clock::parse_duration_seconds(&duration)?;
+    if seconds <= 0 {
+        return Err(Error::new(
+            "config-malformed",
+            "clock-advance.advance must be a positive duration. Leaving the member out is how a \
+             deployment says its clock is the host's; there is no second spelling for it",
+        ));
+    }
+    if seconds > crate::clock::MAX_CLOCK_ADVANCE_SECONDS {
+        return Err(Error::new(
+            "config-malformed",
+            format!(
+                "clock-advance.advance of {seconds}s exceeds the bound of {}s",
+                crate::clock::MAX_CLOCK_ADVANCE_SECONDS
+            ),
+        ));
+    }
+    Ok(Some(crate::clock::ClockAdvance { seconds, duration }))
 }
 
 /// Parse one `notifications[]` entry.
@@ -722,6 +808,107 @@ mod tests {
         let error = Config::parse(&document).unwrap_err();
         assert_eq!(error.code(), "config-malformed");
         assert!(error.detail().contains("slack, smtp, webhook"));
+    }
+
+    fn acknowledged() -> &'static str {
+        crate::clock::CLOCK_ADVANCE_ACKNOWLEDGEMENT
+    }
+
+    #[test]
+    fn a_deployment_that_says_nothing_about_the_clock_gets_the_hosts() {
+        // The default must remain "this deployment's timestamps mean what they say". Every other
+        // test in this repository depends on it, and so does every deployment.
+        assert!(Config::parse(&document()).unwrap().clock_advance.is_none());
+    }
+
+    #[test]
+    fn a_clock_advance_is_a_positive_bounded_duration_with_the_acknowledgement() {
+        let mut document = document();
+        document["clock-advance"] =
+            serde_json::json!({ "advance": "P400D", "acknowledged": acknowledged() });
+        let advance = Config::parse(&document).unwrap().clock_advance.unwrap();
+        assert_eq!(advance.seconds, 400 * 86_400);
+        assert_eq!(advance.duration, "P400D");
+
+        // Ten years is the bound; a day past it is a startup failure rather than a clock in the
+        // year 2036.
+        document["clock-advance"]["advance"] = Value::from("P3651D");
+        assert_eq!(
+            Config::parse(&document).unwrap_err().code(),
+            "config-malformed"
+        );
+        // Zero would be a deployment declaring a moved clock while running an unmoved one.
+        document["clock-advance"]["advance"] = Value::from("PT0S");
+        assert_eq!(
+            Config::parse(&document).unwrap_err().code(),
+            "config-malformed"
+        );
+        document["clock-advance"]["advance"] = Value::from("P1Y");
+        assert_eq!(
+            Config::parse(&document).unwrap_err().code(),
+            "encoding-bad-duration"
+        );
+    }
+
+    #[test]
+    fn no_configuration_can_ask_for_a_clock_that_reads_behind_the_host() {
+        // This is the attack the whole design exists to refuse: a clock earlier than reality is a
+        // clock on which an expired mandate is live again. The configuration language has no way to
+        // ask for one — a duration carries no sign — and every spelling that tries is a startup
+        // failure with a code, not a kernel running an hour in the past.
+        let mut document = document();
+        for spelling in ["-P400D", "-PT1H", "P-1D", "PT-3600S"] {
+            document["clock-advance"] =
+                serde_json::json!({ "advance": spelling, "acknowledged": acknowledged() });
+            assert_eq!(
+                Config::parse(&document).unwrap_err().code(),
+                "encoding-bad-duration",
+                "{spelling:?} was accepted as a clock advance"
+            );
+        }
+        // Nor by handing it a signed number instead of a duration.
+        for spelling in [Value::from(-3600), Value::from(3600)] {
+            document["clock-advance"] =
+                serde_json::json!({ "advance": spelling, "acknowledged": acknowledged() });
+            assert_eq!(
+                Config::parse(&document).unwrap_err().code(),
+                "config-malformed"
+            );
+        }
+    }
+
+    #[test]
+    fn a_clock_advance_without_the_acknowledgement_is_refused() {
+        let mut document = document();
+        document["clock-advance"] = serde_json::json!({ "advance": "P400D" });
+        assert_eq!(
+            Config::parse(&document).unwrap_err().code(),
+            "config-malformed"
+        );
+        // Near enough is not enough: the sentence is quoted back, so an operator who paraphrased it
+        // is told what to write rather than left guessing.
+        document["clock-advance"] = serde_json::json!({
+            "advance": "P400D",
+            "acknowledged": "records emitted by this deployment are not evidence"
+        });
+        let error = Config::parse(&document).unwrap_err();
+        assert_eq!(error.code(), "config-malformed");
+        assert!(error.detail().contains(acknowledged()));
+
+        // And the member set is closed, so a deployment cannot smuggle in a third key.
+        document["clock-advance"] = serde_json::json!({
+            "advance": "P400D", "acknowledged": acknowledged(), "quiet": true
+        });
+        assert_eq!(
+            Config::parse(&document).unwrap_err().code(),
+            "config-malformed"
+        );
+        // A bare duration is not the shape either: there is nowhere in it to say the sentence.
+        document["clock-advance"] = Value::from("P400D");
+        assert_eq!(
+            Config::parse(&document).unwrap_err().code(),
+            "config-malformed"
+        );
     }
 
     #[test]
