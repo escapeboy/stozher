@@ -87,11 +87,17 @@ through an ambient container binding — a flag any code could flip. Here:
   to satisfy it.* The honest cost: approving involves a copy-paste from a CLI that signs in your own
   process. That friction is what buys the property.
 - **One write path.** `Store::append` is crate-private with `Ingest::submit` its only caller — a
-  guarantee of the type system. At the storage layer, triggers refuse every UPDATE and DELETE, and
-  refuse an INSERT that does not extend its stream. Tests *actively attempt* all three rather than
-  assuming they are impossible. The residue is stated rather than implied: a forged **new** stream
-  begins at seq 0 with a null `prev-hash`, which no SQL predicate distinguishes from a real one, so
-  catching it needs off-box checkpoints and knowing which streams ought to exist — not a trigger.
+  guarantee of the type system. At the storage layer, triggers refuse every UPDATE and DELETE on
+  chain-bearing tables, and refuse an INSERT into `envelopes` that does not extend its stream. Tests
+  *actively attempt* all three, and the migration runner probes the refusals by performing them
+  rather than by looking for triggers.
+- **What the storage layer does not catch, stated because it matters more than what it does.**
+  The INSERT guard enforces *linkage*, not authenticity: a correctly-linked forged tail, or a forged
+  new stream at seq 0, is accepted by SQLite and survives `verify` — because chain verification reads
+  the signing key from the object it is verifying, by design, and asks no mandate or gate question.
+  Only guards on `envelopes` exist; the other chain-bearing tables have none. Detecting either needs
+  off-box checkpoints and an independent notion of which streams and which keys ought to exist. If
+  someone can write your database file, signatures tell you who signed, not who was allowed to.
 
 ## Retention: closed loops decay to signed hashes
 

@@ -460,11 +460,16 @@ start. The procedure is:
 ```sh
 # from deploy/
 bin/stozher-backup                      # 1. a consistent copy, before anything changes
-git pull && docker compose build kernel # 2. the new image
+git pull && docker compose build kernel gateway  # 2. both images — see below
 docker compose up -d kernel             # 3. it migrates on start
 docker compose logs kernel | tail -20   # 4. read what it did
 docker compose exec -T kernel stozher-kernel verify --config /etc/stozher/kernel-config.json
 ```
+
+**Name the gateway in step 2, or it is not rebuilt.** It sits behind `profiles: ["mcp"]`, and a bare
+`docker compose build` skips profiled services — so an upgrade that only named `kernel` left the old
+gateway image in place, emitting against a kernel that had already migrated. That mismatch is silent:
+both halves start, both look healthy, and the disagreement shows up only in the audit trail.
 
 **Step 1 is not optional.** A migration is forward-only — there is no downgrade, because a downgrade
 would have to discard records — so the backup is the only way back to the previous version.

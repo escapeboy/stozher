@@ -159,7 +159,12 @@ compose_network() {
 # that was in fact serving the other one's store and the other one's keys — with `bin/stozher-backup`
 # snapshotting whichever one won. So the operator's keys are read back out first, and re-emitted
 # verbatim into both writes.
-PRESERVED_KEYS="COMPOSE_PROJECT_NAME STOZHER_SLACK_WEBHOOK STOZHER_WEBHOOK_URL STOZHER_WEBHOOK_TOKEN STOZHER_SMTP_PASSWORD"
+# `STOZHER_KERNEL_IMAGE`/`STOZHER_GATEWAY_IMAGE` are here for the same reason as
+# `COMPOSE_PROJECT_NAME`: image tags are the docker daemon's, not the compose project's, so a second
+# install on one host needs its own or it resolves — and rebuilds — the first install's. Dropping
+# them on re-bootstrap sent every later `docker compose` back to the shared `:0.1.0` tags, which is
+# exactly the collision `gate/clean-install.sh` documents them as the cure for.
+PRESERVED_KEYS="COMPOSE_PROJECT_NAME STOZHER_KERNEL_IMAGE STOZHER_GATEWAY_IMAGE STOZHER_SLACK_WEBHOOK STOZHER_WEBHOOK_URL STOZHER_WEBHOOK_TOKEN STOZHER_SMTP_PASSWORD"
 operator_env() {
   [ -f .env ] || return 0
   local key line
