@@ -24,7 +24,7 @@ disagreement this module removes.
 from __future__ import annotations
 
 import re
-from decimal import Decimal
+from decimal import Decimal, localcontext
 
 __all__ = ["MAX_LEN", "MoneyFormatError", "add", "at_most", "compare", "parse"]
 
@@ -99,7 +99,14 @@ def add(left: object, right: object) -> str:
     """
     a, b = parse(left), parse(right)
     scale = max(-a.as_tuple().exponent, -b.as_tuple().exponent, 0)  # type: ignore[operator]
-    total = a + b
+    # `Decimal.__add__` rounds to the *context's* precision, 28 significant digits by default, and
+    # rounds silently. Two operands of `MAX_LEN` digits cannot need more than 2 * MAX_LEN, so the
+    # sum here is exact. Without this, `add("1111111111111111111111111111.12", "0")` returned
+    # `"1111111111111111111111111111.00"` — a spend figure that silently got smaller, which is the
+    # one direction this module's own docstring says a budget must never be wrong in.
+    with localcontext() as context:
+        context.prec = 2 * MAX_LEN
+        total = a + b
     rendered = f"{total:.{scale}f}" if scale else str(total)
     if len(rendered) > MAX_LEN:
         raise MoneyFormatError(f"the sum of {left!r} and {right!r} exceeds {MAX_LEN} characters")

@@ -80,8 +80,31 @@ def parse(text: str) -> Any:
             )
         return value
 
+    def integer(literal: str) -> int:
+        # §01 §3.1: a numeric literal whose value lies outside the binary64 range has no canonical
+        # form and is malformed *input*. Python parses `1` + 400 zeros into an arbitrary-precision
+        # `int` and only failed later, in `canonicalize`, reporting `jcs-non-finite-number` — the
+        # code §3.1 reserves for the in-memory entry point. The other implementation reports
+        # `jcs-malformed-json` here, and the two codes are how a reader tells the entry points apart.
+        value = int(literal)
+        try:
+            representable = math.isfinite(float(value))
+        except OverflowError:
+            representable = False
+        if not representable:
+            raise CanonicalizationError(
+                "jcs-malformed-json", f"{literal} has no binary64 representation"
+            )
+        return value
+
     try:
-        value = json.loads(text, object_pairs_hook=pairs, parse_constant=constant, parse_float=number)
+        value = json.loads(
+            text,
+            object_pairs_hook=pairs,
+            parse_constant=constant,
+            parse_float=number,
+            parse_int=integer,
+        )
     except CanonicalizationError:
         raise
     except ValueError as e:

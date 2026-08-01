@@ -22,9 +22,12 @@ __all__ = ["CLASSES", "EnvelopeError", "is_timestamp", "validate"]
 CLASSES = ("read", "benign", "consequential", "prohibited")
 _OUTCOMES = ("applied", "failed", "denied", "blocked", "attempted")
 _MAX_SAFE_INTEGER = 2**53 - 1
+#: The most distinct actions one `aggregate` window may fold (§02 §9.1, `aggregate-cardinality`).
+_AGGREGATE_MAX_ACTIONS = 1024
 
 _TIMESTAMP = re.compile(r"\A\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z\Z")
 _HEX64 = re.compile(r"\A[0-9a-f]{64}\Z")
+_KEY_ID = re.compile(r"\Aed25519:[0-9a-f]{64}\Z")
 _STREAM = re.compile(r"\A[A-Za-z0-9._:-]{1,128}\Z")
 _MONEY = re.compile(r"\Amoney-[a-z]{3}\Z")
 
@@ -81,6 +84,15 @@ _NESTED: dict[str, tuple[tuple[str, ...], tuple[str, ...]]] = {
     # §07 §4. Absent here for the whole of v0.1, so a `trigger` was permitted on an effect and its
     # members were never looked at — the one implementation checked them, this one accepted anything.
     "trigger": (("signal-ref", "standing-mandate-ref"), ("rule",)),
+    # §07 §2. Absent here since v0.1, so a `signal` envelope's one required member was never looked
+    # at: the other implementation checks it, this one accepted `"signal": {}` and any member inside
+    # it — including one an implementation might read as an instruction (§07 §3).
+    "signal": (
+        ("source", "received-at", "media-type", "payload-hash", "sender-verified"),
+        ("source-ref", "retain-until", "sender-verification"),
+    ),
+    # §02 §8. Likewise: the member was permitted on an effect and its shape never checked.
+    "commitment-ref": (("object-type", "object-id", "transition"), ()),
     "authorization": (("request", "decision"), ()),
     "sig": (("alg", "key", "value"), ()),
     "resource": (("kind", "name"), ()),
@@ -111,10 +123,22 @@ def validate(envelope: Any) -> None:
     """Raise :class:`EnvelopeError` unless `envelope` is structurally valid (§02 §9)."""
     if not isinstance(envelope, dict):
         raise EnvelopeError("schema-type-mismatch", "an envelope must be an object")
-    if envelope.get("v") != "stozher/0.1":
-        raise EnvelopeError("envelope-version-unsupported", repr(envelope.get("v")))
-    kind = envelope.get("kind")
-    if not isinstance(kind, str) or kind not in _KINDS:
+    # §02 §9.1 gives `envelope-version-unsupported` for "`v` is not stozher/0.1" and
+    # `schema-missing-member` for an absent REQUIRED member: absence and a wrong *value* are two
+    # conditions with two codes, and collapsing them here made an envelope with no `v` at all report
+    # a version this implementation does not support. The same for `kind`.
+    if "v" not in envelope:
+        raise EnvelopeError("schema-missing-member", "v")
+    if not isinstance(envelope["v"], str):
+        raise EnvelopeError("schema-type-mismatch", "v must be a string")
+    if envelope["v"] != "stozher/0.1":
+        raise EnvelopeError("envelope-version-unsupported", repr(envelope["v"]))
+    if "kind" not in envelope:
+        raise EnvelopeError("schema-missing-member", "kind")
+    kind = envelope["kind"]
+    if not isinstance(kind, str):
+        raise EnvelopeError("schema-type-mismatch", "kind must be a string")
+    if kind not in _KINDS:
         raise EnvelopeError("envelope-unknown-kind", repr(kind))
 
     if kind == "cognition":
@@ -135,6 +159,13 @@ def validate(envelope: Any) -> None:
     _timestamp(envelope["emitted-at"], "emitted-at")
     if not _STREAM.match(str(envelope["stream"])):
         raise EnvelopeError("stream-id-malformed", str(envelope["stream"]))
+    if isinstance(envelope["seq"], bool) or (
+        isinstance(envelope["seq"], int) and envelope["seq"] < 0
+    ):
+        # §04 §2: a position in a stream starts at 0 and increases by one. A negative `seq` is not a
+        # position, and it satisfies neither genesis rule below — so it was accepted here and
+        # refused by the kernel, which reads the member as an unsigned integer or not at all.
+        raise EnvelopeError("schema-type-mismatch", "seq must be a non-negative integer")
     seq = _integer(envelope["seq"], "seq")
 
     prev = envelope["prev-hash"]
@@ -150,6 +181,11 @@ def validate(envelope: Any) -> None:
 
     if envelope["identity"]["key"] != envelope["sig"]["key"]:
         raise EnvelopeError("identity-key-sig-mismatch", "identity.key must equal sig.key")
+    # §01 §4: a key identifier is `ed25519:` and 64 lowercase hex. Unchecked here, an envelope whose
+    # subject is named by a string that identifies no key passed this validator and was refused by
+    # the kernel — the one failure mode this module exists to prevent.
+    if not _KEY_ID.match(str(envelope["identity"]["key"])):
+        raise EnvelopeError("key-id-malformed", str(envelope["identity"]["key"]))
 
     for name in ("mandate-ref", "revokes", "decision-of"):
         if name in envelope:
@@ -165,6 +201,8 @@ def validate(envelope: Any) -> None:
         _evidence(envelope["evidence"])
     if "trigger" in envelope:
         _trigger(envelope["trigger"])
+    if "signal" in envelope:
+        _signal(envelope["signal"])
     if kind == "aggregate":
         _aggregate(envelope)
     if kind == "cognition":
@@ -224,6 +262,14 @@ def _trigger(trigger: dict[str, Any]) -> None:
         raise EnvelopeError("schema-type-mismatch", "trigger.rule must be a string")
 
 
+def _signal(signal: dict[str, Any]) -> None:
+    """§07 §2: the receipt record's own members, checked like `evidence`'s."""
+    _hash(signal["payload-hash"], "signal.payload-hash")
+    _timestamp(signal["received-at"], "signal.received-at")
+    if "retain-until" in signal:
+        _timestamp(signal["retain-until"], "signal.retain-until")
+
+
 def _evidence(evidence: dict[str, Any]) -> None:
     _strings(evidence, ("schema", "media-type", "retain-until"))
     _hash(evidence["payload-hash"], "evidence.payload-hash")
@@ -238,9 +284,19 @@ def _aggregate(envelope: dict[str, Any]) -> None:
     if not isinstance(by_action, dict):
         raise EnvelopeError("schema-type-mismatch", "counts.by-action must be an object")
     total = _integer(counts["total"], "counts.total")
+    # §02 §9.1 tabulates both of these and this implementation had neither: without the sign rule
+    # §7.3's sum is satisfiable by cancellation (one entry of 1000000 and one of -999999 sum to 1),
+    # and without the bound one envelope is unbounded work for every consumer that iterates it.
+    if total < 0:
+        raise EnvelopeError("aggregate-count-negative", f"counts.total is {total}")
+    if len(by_action) > _AGGREGATE_MAX_ACTIONS:
+        raise EnvelopeError("aggregate-cardinality", f"{len(by_action)} distinct actions")
     folded = 0
     for action, count in by_action.items():
-        folded += _integer(count, f"counts.by-action.{action}")
+        value = _integer(count, f"counts.by-action.{action}")
+        if value < 0:
+            raise EnvelopeError("aggregate-count-negative", f"counts.by-action.{action} is {value}")
+        folded += value
     if total != folded:
         raise EnvelopeError("aggregate-count-mismatch", f"{total} != {folded}")
     samples = envelope["sample-hashes"]
