@@ -902,15 +902,48 @@ impl Store {
     /// Idempotent by `request_hash`, because a component that retries a submission after a lost
     /// response is doing the right thing and must not be answered with a refusal.
     ///
+    /// `cap` is `(per_subject, since)`, and it is counted **inside this transaction**. Counting it
+    /// outside made the §09 §7 approval-fatigue limit hold only for a caller that waited for each
+    /// answer: sixty-four parks offered one at a time were capped at thirty, and the same
+    /// sixty-four offered at once put sixty-three in the queue, because every one of them read the
+    /// count before any of them had written a row. A limit that yields under concurrency is absent
+    /// in the one circumstance it exists for — a runaway component spraying requests at a human.
+    ///
     /// # Errors
     ///
+    /// [`crate::codes::GATE_RATE_LIMITED`] when the subject is at or over `cap`,
     /// [`codes::STORE_UNAVAILABLE`], or a canonicalization failure.
     pub async fn queue_gate_request(
         &self,
         request: &crate::gatequeue::GateRequest,
         submitted_by: &str,
         received_at: &str,
+        cap: Option<(u32, &str)>,
     ) -> Result<bool> {
+        let mut tx = self.pool.begin_with("BEGIN IMMEDIATE").await.map_err(db)?;
+        if let Some((per_subject, since)) = cap {
+            let row = sqlx::query(
+                "SELECT COUNT(*) AS parked FROM gate_requests \
+                 WHERE subject = ?1 AND received_at >= ?2",
+            )
+            .bind(&request.subject)
+            .bind(since)
+            .fetch_one(&mut *tx)
+            .await
+            .map_err(db)?;
+            let parked = u32::try_from(as_u64(&row, "parked")).unwrap_or(u32::MAX);
+            if parked >= per_subject {
+                tx.rollback().await.map_err(db)?;
+                return Err(Error::new(
+                    crate::codes::GATE_RATE_LIMITED,
+                    format!(
+                        "{} has parked {parked} requests in this window, at or above the \
+                         configured cap of {per_subject}",
+                        request.subject
+                    ),
+                ));
+            }
+        }
         let inserted = sqlx::query(
             "INSERT INTO gate_requests (request_hash, request_json, submitted_by, received_at, \
              subject, subject_key, component, mandate_ref, policy_version, classification, action, \
@@ -932,13 +965,18 @@ impl Store {
         .bind(&request.args_hash)
         .bind(&request.requested_at)
         .bind(&request.not_after)
-        .execute(&self.pool)
+        .execute(&mut *tx)
         .await;
-        match inserted {
-            Ok(_) => Ok(true),
-            Err(e) if is_unique_violation(&e) => Ok(false),
-            Err(e) => Err(db(e)),
-        }
+        let fresh = match inserted {
+            Ok(_) => true,
+            Err(e) if is_unique_violation(&e) => false,
+            Err(e) => {
+                tx.rollback().await.map_err(db)?;
+                return Err(db(e));
+            }
+        };
+        tx.commit().await.map_err(db)?;
+        Ok(fresh)
     }
 
     /// How many requests this subject has parked since `since`, and how many other subjects are

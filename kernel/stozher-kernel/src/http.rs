@@ -328,12 +328,16 @@ async fn post_gate_request(
         Ok(existing) => existing.is_some(),
         Err(e) => return unavailable(&e),
     };
+    let limit = kernel.config.gate_rate_limit;
+    let since = match crate::clock::shift(&now, -limit.window_seconds) {
+        Ok(since) => since,
+        Err(e) => return unavailable(&e),
+    };
+    // This pre-check is the *message*, not the enforcement: it can name the count and point at the
+    // console spike. The enforcement is inside `queue_gate_request`'s transaction, because a count
+    // read on its own connection and an insert issued afterwards are two moments, and sixty-four
+    // callers arriving together all read the first one.
     if !already_queued {
-        let limit = kernel.config.gate_rate_limit;
-        let since = match crate::clock::shift(&now, -limit.window_seconds) {
-            Ok(since) => since,
-            Err(e) => return unavailable(&e),
-        };
         let parked = match store.gate_requests_since(&queued.subject, &since).await {
             Ok(parked) => parked,
             Err(e) => return unavailable(&e),
@@ -358,8 +362,25 @@ async fn post_gate_request(
         }
     }
 
-    let fresh = match store.queue_gate_request(&queued, &submitted_by, &now).await {
+    let cap = (!already_queued).then_some((limit.per_subject, since.as_str()));
+    let fresh = match store
+        .queue_gate_request(&queued, &submitted_by, &now, cap)
+        .await
+    {
         Ok(fresh) => fresh,
+        Err(e) if e.code() == crate::codes::GATE_RATE_LIMITED => {
+            tracing::warn!(
+                subject = %queued.subject,
+                window_seconds = limit.window_seconds,
+                "gate requests refused under contention: the per-subject rate limit was reached"
+            );
+            return refusal(
+                StatusCode::TOO_MANY_REQUESTS,
+                crate::codes::GATE_RATE_LIMITED,
+                e.detail(),
+                None,
+            );
+        }
         Err(e) => return unavailable(&e),
     };
 

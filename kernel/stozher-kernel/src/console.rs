@@ -1005,7 +1005,12 @@ async fn submit_decision(
     let unavailable = |e: stozher_core::error::Error| (e.code().to_owned(), e.detail().to_owned());
     let stream = kernel.config.kernel_core_stream.clone();
     let mut last = None;
-    for _ in 0..ATTEMPTS {
+    for attempt in 0..ATTEMPTS {
+        // Eight immediate re-reads of the same head is eight writers colliding at the same instant.
+        // A short escalating pause between them is what turns a burst of approvals into a queue.
+        if attempt > 0 {
+            tokio::time::sleep(std::time::Duration::from_millis(2 << attempt.min(6))).await;
+        }
         let head = kernel
             .ingest
             .store()
@@ -1053,12 +1058,21 @@ async fn submit_decision(
             }
         }
     }
-    Err(last.unwrap_or_else(|| {
-        (
-            crate::codes::STORE_UNAVAILABLE.to_owned(),
-            "the kernel's core stream is too contended to record the decision".to_owned(),
-        )
-    }))
+    // Running out of attempts is contention, not a defect in what the approver signed. Returning
+    // the last chain code made the handler answer 422 with `retryable: false`, which is the one
+    // thing a caller must not be told here: the decision was *not* recorded, and the human who
+    // pressed approve was told their approval was permanently rejected. `STORE_UNAVAILABLE` is
+    // what the handler already maps to 503 with `retryable: true`, which is the truth.
+    let detail = last.map_or_else(
+        || "the kernel's core stream is too contended to record the decision".to_owned(),
+        |(code, detail)| {
+            format!(
+                "the kernel's core stream is too contended to record the decision: \
+                 {ATTEMPTS} attempts, last {code} ({detail})"
+            )
+        },
+    );
+    Err((crate::codes::STORE_UNAVAILABLE.to_owned(), detail))
 }
 
 /// Pull `(csrf, decision)` out of a JSON or form-encoded submission.
