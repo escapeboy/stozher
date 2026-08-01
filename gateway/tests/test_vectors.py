@@ -32,6 +32,7 @@ from stozher_gateway.canonical import (
     parse,
     sha256_hex,
 )
+from stozher_gateway.enforce import ARGUMENTS_MAX_BYTES, GateArgumentsError, check_arguments
 from stozher_gateway.envelope import EnvelopeError
 from stozher_gateway.envelope import validate as validate_shape
 from stozher_gateway.gate import Approver, GateRefusedError, verify_authorization
@@ -334,6 +335,25 @@ def handle_policy_evaluation(doc: dict[str, Any], vector: dict[str, Any], label:
     equal(policy.decision_for(classification).kind, vector["expected"]["decision"], f"{label}/decision")
 
 
+def handle_gate_arguments(doc: dict[str, Any], vector: dict[str, Any], label: str) -> None:
+    """`spec/06 §4.4` rules 3 and 4 — may these argument values be shown to an approver?
+
+    The gateway runs this file rather than declining it as kernel-role work: a component decides
+    whether to submit the values *before* the kernel ever sees them, so both sides hold the
+    predicate and this is what keeps their answers the same. The cap is in bytes of the canonical
+    form and Python's `len` counts characters, which is exactly the divergence the multibyte vector
+    is here to catch.
+    """
+    equal(ARGUMENTS_MAX_BYTES, doc["arguments-max-bytes"], f"{label}/cap")
+    try:
+        canonical = check_arguments(vector["arguments"], vector["args-hash"])
+    except GateArgumentsError as e:
+        equal(e.code, vector["expected"], label)
+        return
+    equal("accept", vector["expected"], label)
+    equal(len(canonical.encode("utf-8")), vector["canonical-bytes"], f"{label}/canonical-bytes")
+
+
 HANDLERS: dict[str, Callable[[dict[str, Any], dict[str, Any], str], None]] = {
     "jcs": handle_jcs,
     "jcs-invalid": handle_jcs_invalid,
@@ -350,6 +370,7 @@ HANDLERS: dict[str, Callable[[dict[str, Any], dict[str, Any], str], None]] = {
     "money-compare": handle_money_compare,
     "parity": handle_parity,
     "policy-evaluation": handle_policy_evaluation,
+    "gate-arguments": handle_gate_arguments,
 }
 
 

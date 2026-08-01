@@ -301,19 +301,34 @@ async fn post_gate_request(
         Caller::Refused(response) => return response,
     };
     let now = kernel.ingest.clock().now();
-    let request = match std::str::from_utf8(&body)
+    let submitted = match std::str::from_utf8(&body)
         .map_err(|e| {
             stozher_core::error::Error::new("jcs-malformed-json", format!("body is not UTF-8: {e}"))
         })
         .and_then(stozher_core::jcs::parse)
+        .and_then(|body| crate::gatequeue::submission(&body))
     {
-        Ok(request) => request,
+        Ok(submitted) => submitted,
         Err(e) => {
             return refusal(StatusCode::UNPROCESSABLE_ENTITY, e.code(), e.detail(), None);
         }
     };
+    let (request, arguments) = submitted;
     let queued = match crate::gatequeue::validate(&request, &now) {
         Ok(queued) => queued,
+        Err(e) => {
+            return refusal(StatusCode::UNPROCESSABLE_ENTITY, e.code(), e.detail(), None);
+        }
+    };
+    // §06 §4.4 rule 4. The values are checked against the digest the approver's signature will
+    // cover *before* anything is recorded, so the queue never holds a list that would show a human
+    // one call while the effect executes another.
+    let arguments = match arguments
+        .as_ref()
+        .map(|arguments| crate::gatequeue::check_arguments(arguments, &queued.args_hash))
+        .transpose()
+    {
+        Ok(arguments) => arguments,
         Err(e) => {
             return refusal(StatusCode::UNPROCESSABLE_ENTITY, e.code(), e.detail(), None);
         }
@@ -364,7 +379,7 @@ async fn post_gate_request(
 
     let cap = (!already_queued).then_some((limit.per_subject, since.as_str()));
     let fresh = match store
-        .queue_gate_request(&queued, &submitted_by, &now, cap)
+        .queue_gate_request(&queued, &submitted_by, &now, cap, arguments.as_deref())
         .await
     {
         Ok(fresh) => fresh,
@@ -499,6 +514,21 @@ async fn get_gate_request(
         Ok(decision) => decision,
         Err(e) => return unavailable(&e),
     };
+    // §06 §4.4. Served only while the request can still be answered, and paired with the boolean
+    // that separates "the component supplied none" from "the call took none".
+    let now = kernel.ingest.clock().now();
+    let arguments = match store
+        .gate_request_arguments(&request_hash, &now)
+        .await
+        .and_then(|arguments| {
+            arguments
+                .as_deref()
+                .map(stozher_core::jcs::parse)
+                .transpose()
+        }) {
+        Ok(arguments) => arguments,
+        Err(e) => return unavailable(&e),
+    };
     json(
         StatusCode::OK,
         &serde_json::json!({
@@ -506,6 +536,8 @@ async fn get_gate_request(
             "request-hash": request_hash,
             "request": request,
             "submitted-by": submitted_by,
+            "arguments-supplied": arguments.is_some(),
+            "arguments": arguments,
             "decision": decision
         }),
     )

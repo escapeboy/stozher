@@ -23,6 +23,7 @@ use axum::http::{Request, StatusCode};
 use http_body_util::BodyExt;
 use serde_json::{Value, json};
 use stozher_core::jcs;
+use stozher_kernel::clock::Clock;
 use stozher_kernel::notify::{Channel, Ping};
 use stozher_kernel::store::EnvelopeQuery;
 use stozher_kernel::{http, notify};
@@ -1061,5 +1062,260 @@ async fn a_spike_is_surfaced_as_a_finding_and_not_as_a_longer_queue() {
         page.body.contains(world.agent.subject.as_str()),
         "the finding must name the subject: {}",
         page.body
+    );
+}
+
+// -- 6. the arguments an approver reads (§06 §4.4) -----------------------------------------------
+//
+// A parked request carried `args-hash` and nothing else, so two requests — one writing "revenue
+// down 12%", one promoting a build to production — rendered identically in the console but for a
+// digest, and the page told the approver to get the values from the component that built the
+// request. That component is a stdio process which has already exited. Every approval was therefore
+// on trust, by construction, which is the one thing this product exists not to ask for.
+
+/// An action request whose `args-hash` commits to `arguments`, so a submission carrying them is
+/// well formed. §06 §4.4 rule 4 refuses any other pairing.
+fn request_for(world: &World, arguments: &Value) -> Value {
+    world.action_request(&Ask {
+        requester: &world.agent,
+        component: "gateway",
+        mandate_ref: &world.standing_mandate,
+        policy_version: &world.policy_version,
+        classification: "consequential",
+        action: "github.create_issue",
+        target: "repo:acme/backend",
+        args_hash: &jcs::object_hash(arguments).expect("hashing the arguments"),
+    })
+}
+
+fn submission(request: &Value, arguments: &Value) -> Value {
+    json!({ "request": request, "arguments": arguments })
+}
+
+/// What the template does to a string on its way into the page.
+///
+/// Spelled out rather than taken from the renderer, so that an escaping change is something this
+/// test notices: the approver is told to hash the block they see, and the bytes they see are these
+/// unescaped by their browser. If the two ever stop matching, the recipe on the page stops working.
+fn escaped(text: &str) -> String {
+    text.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&#34;")
+        .replace('\'', "&#39;")
+}
+
+#[tokio::test]
+async fn an_approver_can_read_the_arguments_and_recompute_the_digest_their_signature_binds() {
+    let world = world().await;
+    // Written with `title` first, so that the page showing `body` first is the page showing the
+    // canonical form (§01 §2 sorts members) rather than whatever the submitter happened to send.
+    let arguments = json!({"title": "Q3 numbers", "body": "revenue down 12%"});
+    let request = request_for(&world, &arguments);
+    let request_hash = park(&world, &submission(&request, &arguments)).await;
+
+    let page = get(&world, "/console/pending").await;
+    let canonical = jcs::canonicalize(&arguments).expect("canonicalizing");
+    assert!(
+        page.body.contains("revenue down 12%"),
+        "the approver still cannot read what they are approving: {}",
+        page.body
+    );
+    // Canonical, byte for byte, because the recipe the page gives them is to hash exactly these
+    // bytes — a pretty-printed copy would hash to something else and fail for the wrong reason.
+    assert!(
+        page.body.contains(&escaped(&canonical)),
+        "the arguments are not shown in the form that hashes: {}",
+        page.body
+    );
+    // And the digest they compare against, in full. Shown short, it was a hash nobody could check.
+    let args_hash = request["args-hash"].as_str().expect("args-hash");
+    assert!(
+        page.body.contains(args_hash),
+        "the full args-hash is not on the page, so the check cannot be repeated: {}",
+        page.body
+    );
+    assert!(
+        !page.body.contains("The arguments were not supplied"),
+        "a request that carried its arguments is being described as one that did not: {}",
+        page.body
+    );
+
+    // The same for a component polling the route rather than a human reading the page.
+    let fetched = get(&world, &format!("/v1/gate/requests/{request_hash}")).await;
+    let body = fetched.json();
+    assert_eq!(body["arguments-supplied"].as_bool(), Some(true));
+    assert_eq!(body["arguments"], arguments);
+}
+
+#[tokio::test]
+async fn arguments_that_are_not_what_the_request_commits_to_never_reach_an_approver() {
+    // The check is the whole reason showing them is safe: without it a component could display one
+    // call to a human and execute another, and the display would be worth less than the blank.
+    let world = world().await;
+    let approved = json!({"title": "ship it"});
+    let request = request_for(&world, &approved);
+    let answer = post_json(
+        &world,
+        "/v1/gate/requests",
+        &submission(&request, &json!({"title": "ship it to production"})),
+    )
+    .await;
+    assert_eq!(
+        answer.status,
+        StatusCode::UNPROCESSABLE_ENTITY,
+        "{}",
+        answer.body
+    );
+    assert_eq!(
+        answer.json()["reason-code"].as_str(),
+        Some("gate-arguments-hash-mismatch")
+    );
+    // Refused before anything was recorded: a queue holding a request whose arguments were a lie
+    // would be worse than one holding none.
+    let queued = get(&world, "/v1/gate/requests").await;
+    assert_eq!(queued.json()["count"].as_u64(), Some(0), "{}", queued.body);
+}
+
+#[tokio::test]
+async fn arguments_over_the_cap_are_refused_rather_than_stored() {
+    let world = world().await;
+    let arguments = json!({"a": "x".repeat(20_000)});
+    let request = request_for(&world, &arguments);
+    let answer = post_json(
+        &world,
+        "/v1/gate/requests",
+        &submission(&request, &arguments),
+    )
+    .await;
+    assert_eq!(
+        answer.status,
+        StatusCode::UNPROCESSABLE_ENTITY,
+        "{}",
+        answer.body
+    );
+    assert_eq!(
+        answer.json()["reason-code"].as_str(),
+        Some("gate-arguments-too-large")
+    );
+    // A component meeting this refusal parks without the values instead — the request itself is
+    // never the thing that is lost, because a park nobody can see is a gate nobody can answer.
+    let bare = post_json(&world, "/v1/gate/requests", &request).await;
+    assert_eq!(bare.status, StatusCode::CREATED, "{}", bare.body);
+}
+
+#[tokio::test]
+async fn a_call_that_took_no_arguments_is_not_rendered_as_one_nobody_described() {
+    // §06 §4.4 rule 8. "The component did not tell us" and "the call took no arguments" are
+    // different facts about what is being approved, and a page that renders them alike is telling
+    // the approver something it does not know.
+    let world = world().await;
+    let empty = json!({});
+    let request = request_for(&world, &empty);
+    park(&world, &submission(&request, &empty)).await;
+    let page = get(&world, "/console/pending").await;
+    assert!(
+        !page.body.contains("The arguments were not supplied"),
+        "a call that took no arguments is being shown as one whose arguments are unknown: {}",
+        page.body
+    );
+
+    // And the contrast, in the same world: a submission that carried none says so.
+    let (_, undescribed) = draft_and_request(&world, "github.close_issue").await;
+    park(&world, &undescribed).await;
+    let page = get(&world, "/console/pending").await;
+    assert!(
+        page.body.contains("The arguments were not supplied"),
+        "a request with no arguments does not say so: {}",
+        page.body
+    );
+}
+
+#[tokio::test]
+async fn a_later_submission_cannot_add_arguments_an_approver_never_saw() {
+    // §06 §4.4 rule 7 over §4.3 rule 5: the queue is append-only, and a request whose displayed
+    // arguments could appear after a human read it is not the request they read.
+    let world = world().await;
+    let arguments = json!({"title": "ship it"});
+    let request = request_for(&world, &arguments);
+    let request_hash = park(&world, &request).await;
+
+    let again = post_json(
+        &world,
+        "/v1/gate/requests",
+        &submission(&request, &arguments),
+    )
+    .await;
+    assert_eq!(again.status, StatusCode::OK, "{}", again.body);
+    assert_eq!(again.json()["idempotent"].as_bool(), Some(true));
+
+    let fetched = get(&world, &format!("/v1/gate/requests/{request_hash}")).await;
+    assert_eq!(
+        fetched.json()["arguments-supplied"].as_bool(),
+        Some(false),
+        "the second submission wrote values into a request already in the queue: {}",
+        fetched.body
+    );
+}
+
+#[tokio::test]
+async fn the_arguments_go_when_the_request_can_no_longer_be_answered() {
+    // §06 §4.4 rule 7. An expired request is refused a decision by §06 §2 step (8), so values kept
+    // past that instant are readable only by someone who cannot act on them — and the queue is not
+    // a place for a component's unsigned bytes to accumulate indefinitely.
+    let world = world().await;
+    let arguments = json!({"body": "revenue down 12%"});
+    let request = request_for(&world, &arguments);
+    let request_hash = park(&world, &submission(&request, &arguments)).await;
+
+    let store = world.ingest().store();
+    let before = store
+        .erase_expired_gate_arguments(&world.clock.now())
+        .await
+        .expect("the sweep runs");
+    assert_eq!(before, 0, "a live request lost its arguments");
+
+    world.clock.advance_seconds(43_200);
+    let page = get(&world, "/console/pending").await;
+    assert!(
+        !page.body.contains("revenue down 12%"),
+        "an expired request is still serving its arguments: {}",
+        page.body
+    );
+    let fetched = get(&world, &format!("/v1/gate/requests/{request_hash}")).await;
+    assert_eq!(fetched.json()["arguments-supplied"].as_bool(), Some(false));
+
+    let erased = store
+        .erase_expired_gate_arguments(&world.clock.now())
+        .await
+        .expect("the sweep runs");
+    assert_eq!(erased, 1, "the values were still in the store");
+
+    // The request itself remains, with the digest that binds it: erasing the preimage changes no
+    // signed byte, which is why this is not §04 §5 decay and owes no checkpoint.
+    let after = get(&world, &format!("/v1/gate/requests/{request_hash}")).await;
+    assert_eq!(after.status, StatusCode::OK);
+    assert_eq!(after.json()["request"]["args-hash"], request["args-hash"]);
+}
+
+#[tokio::test]
+async fn a_submission_carrying_a_member_nothing_reads_is_refused() {
+    // The same strictness the action request gets, for the same reason: a member this kernel does
+    // not understand is a member the approver was never shown.
+    let world = world().await;
+    let arguments = json!({"title": "ship it"});
+    let request = request_for(&world, &arguments);
+    let mut body = submission(&request, &arguments);
+    body["approved"] = Value::Bool(true);
+    let answer = post_json(&world, "/v1/gate/requests", &body).await;
+    assert_eq!(
+        answer.status,
+        StatusCode::UNPROCESSABLE_ENTITY,
+        "{}",
+        answer.body
+    );
+    assert_eq!(
+        answer.json()["reason-code"].as_str(),
+        Some("schema-unknown-member")
     );
 }

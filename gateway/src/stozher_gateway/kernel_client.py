@@ -101,14 +101,24 @@ class KernelClient:
     def ingest(self, envelope: dict[str, Any], payloads: list[dict[str, Any]]) -> KernelResponse:
         return self._request("POST", "/v1/ingest", {"envelope": envelope, "payloads": payloads})
 
-    def park_gate_request(self, request: dict[str, Any]) -> KernelResponse:
+    def park_gate_request(
+        self, request: dict[str, Any], arguments: dict[str, Any] | None = None
+    ) -> KernelResponse:
         """Put a parked request into the kernel's pending queue (§06 §4.3).
 
         This is the route ADR-0008 §A asked for and `spec/06 §1.1` already implied: the action
         request is submitted over the authenticated channel, not signed and not an envelope. It
         appends nothing and it authorizes nothing — it is how a human comes to *see* the park.
+
+        The body is the submission of §06 §4.4: the request, and beside it the argument values
+        `args-hash` commits to, so the human seeing the park can read what they are approving.
+        `arguments` is omitted when there are none to send, which is a different statement from
+        sending `{}` — that is a call that took no arguments.
         """
-        return self._request("POST", "/v1/gate/requests", request)
+        body: dict[str, Any] = {"request": request}
+        if arguments is not None:
+            body["arguments"] = arguments
+        return self._request("POST", "/v1/gate/requests", body)
 
     def gate_request(self, request_hash: str) -> KernelResponse:
         """The parked request and, once a human has answered, the signed decision.

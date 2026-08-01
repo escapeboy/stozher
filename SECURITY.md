@@ -78,7 +78,7 @@ that starts from a map is worth more than one that starts from a README.
 - **No independent implementation has been written from `spec/` alone, and the requirement was
   withdrawn** (ADR-0022 §3). It was the project's own definition of done for a protocol product and
   the one gate it could not grade itself. The corpus
-  (`spec/vectors/`, 293 vectors) is what such an implementation would be measured against, and the
+  (`spec/vectors/`, 306 vectors) is what such an implementation would be measured against, and the
   three most recent releases were largely spent making it able to catch things: eleven concrete
   disagreements between this repository's own two implementations were found in v0.9 by reading
   clauses rather than by running tests, each one a place the specification decided nothing and two

@@ -42,7 +42,7 @@ const SCHEMA: &str = include_str!("sql/schema.sql");
 const APPEND_ONLY_SQLITE: &str = include_str!("sql/append_only.sqlite.sql");
 
 /// The schema version this build writes and expects.
-pub const SCHEMA_VERSION: u32 = 5;
+pub const SCHEMA_VERSION: u32 = 6;
 
 /// One forward-only step. There is no `down`: a downgrade would have to discard rows, and the rows
 /// in question are an audit trail.
@@ -210,6 +210,31 @@ pub const MIGRATIONS: &[Migration] = &[
                     WHERE NOT EXISTS (SELECT 1 FROM envelopes WHERE id = NEW.envelope_id);
                 END;"],
     },
+    Migration {
+        to_version: 6,
+        name: "the arguments an approver reads (§06 §4.4), erasable and outside the chain",
+        // A separate table rather than a column on `gate_requests`, for two reasons that both point
+        // the same way. `gate_requests` is chain-bearing: its rows are immutable and undeletable, so
+        // an `arguments` column there could never be erased, and §06 §4.4 rule 7 requires exactly
+        // that once the request expires. And the values are not part of the request — they are not
+        // covered by `request-hash` and no signature reaches them — so putting them in the row whose
+        // whole point is "this is the object the approver signed over" would misfile them.
+        //
+        // Content, in the sense `payloads` is content: erasing a row here changes no signed byte,
+        // and nothing in the chain can put it back. Hence `CONTENT_TABLES`, hence a `BEFORE UPDATE`
+        // guard and deliberately no `BEFORE DELETE` one — immutable while it exists, erasable when
+        // it should not.
+        sql: &["CREATE TABLE IF NOT EXISTS gate_request_arguments (
+                    request_hash TEXT PRIMARY KEY,
+                    arguments    TEXT NOT NULL,
+                    recorded_at  TEXT NOT NULL
+                );
+                CREATE TRIGGER IF NOT EXISTS gate_request_arguments_no_update
+                BEFORE UPDATE ON gate_request_arguments
+                BEGIN
+                    SELECT RAISE(ABORT, 'the arguments an approver read are immutable: an edited argument list is not the one they were shown');
+                END;"],
+    },
 ];
 
 /// Tables whose rows are chained, or are signed attestations about a chain, or record a human
@@ -242,10 +267,14 @@ pub const REBUILDABLE_TABLES: [&str; 7] = [
     "spend",
 ];
 
-/// Evidence octets. Neither chained nor rebuildable: deleting a row here changes no signed byte
-/// (§04 §5.1), and nothing in the chain can put the content back. Decay is the one deletion the
-/// system performs and it touches exactly this table.
-pub const CONTENT_TABLES: [&str; 1] = ["payloads"];
+/// Content. Neither chained nor rebuildable: deleting a row here changes no signed byte (§04 §5.1),
+/// and nothing in the chain can put it back.
+///
+/// `payloads` is evidence octets, erased by decay (§04 §5.4). `gate_request_arguments` is the
+/// argument values an approver reads beside a parked request (§06 §4.4), erased when the request
+/// they belong to expires — which is a different erasure with a different trigger and no checkpoint,
+/// because no envelope ever committed to them.
+pub const CONTENT_TABLES: [&str; 2] = ["payloads", "gate_request_arguments"];
 
 /// Bring the store at `pool` up to [`SCHEMA_VERSION`], returning the steps applied.
 ///

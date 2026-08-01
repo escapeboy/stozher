@@ -196,6 +196,20 @@ pub async fn run_decay_interval(ingest: Ingest, checkpoint_stream: String, inter
             }
             Err(e) => tracing::error!(error = %e, "the decay sweep failed"),
         }
+        // §06 §4.4 rule 7, on the same timer and deliberately not inside the function above: the
+        // argument values beside a parked request are not evidence, no envelope committed to them,
+        // and erasing them owes no checkpoint. Sharing the interval is all these two sweeps share.
+        let now = ingest.clock().now();
+        match ingest.store().erase_expired_gate_arguments(&now).await {
+            Ok(erased) if erased > 0 => {
+                tracing::info!(
+                    erased,
+                    "the arguments of expired gate requests were erased; the requests remain"
+                );
+            }
+            Ok(_) => {}
+            Err(e) => tracing::error!(error = %e, "expired gate-request arguments were not erased"),
+        }
     }
 }
 

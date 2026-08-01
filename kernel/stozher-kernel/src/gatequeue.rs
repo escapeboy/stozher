@@ -66,6 +66,97 @@ const MEMBERS: [&str; 14] = [
 /// of an otherwise identical one (§06 §1.1).
 const NONCE_HEX_DIGITS: usize = 32;
 
+/// The members of a submission (§06 §4.4 rule 1). Closed, and only `request` is required.
+const SUBMISSION_MEMBERS: [&str; 2] = ["request", "arguments"];
+
+/// §06 §4.4 rule 3 — the canonical form of `arguments` may not exceed this.
+///
+/// Far above what an approver reads and what a call needs, and the number that can be held at once
+/// is already bounded by the per-subject cap of §09 §7.
+pub const ARGUMENTS_MAX_BYTES: usize = 16_384;
+
+/// Split a `POST /v1/gate/requests` body into the action request and the argument values.
+///
+/// §06 §4.4 rule 1 admits two spellings and they mean the same thing: a submission object, and a
+/// bare action request, which *is* a submission with `arguments` absent. There is one hashed object
+/// under either — always `object-hash(request)`, never of the submission — so the ambiguity this
+/// project usually refuses (one instant, one spelling) does not arise: no signature covers the outer
+/// shape, and the two forms cannot disagree about what was asked.
+///
+/// The older spelling is kept because refusing it would make an upgrade in which the kernel moves
+/// before its components empty the queue, and a request that does not park is a gate no human can
+/// see while the call it belongs to stays blocked.
+///
+/// # Errors
+///
+/// `schema-type-mismatch` for a body that is not an object or a `request` that is not one, and
+/// `schema-unknown-member` for a submission carrying a third member.
+pub fn submission(body: &Value) -> Result<(Value, Option<Value>)> {
+    let map = body.as_object().ok_or_else(|| {
+        Error::new(
+            "schema-type-mismatch",
+            "a gate-request submission must be an object",
+        )
+    })?;
+    // The two forms are told apart by `request`, which §06 §1.1's closed member set does not
+    // contain and a submission requires. Dispatching on its absence rather than on `kind`'s presence
+    // keeps every malformed *action request* reaching `validate`, and therefore refused by the code
+    // that names the member it is actually missing.
+    if !map.contains_key("request") {
+        return Ok((body.clone(), None));
+    }
+    for key in map.keys() {
+        if !SUBMISSION_MEMBERS.contains(&key.as_str()) {
+            return Err(Error::new("schema-unknown-member", key.clone()));
+        }
+    }
+    let request = map
+        .get("request")
+        .ok_or_else(|| Error::new("schema-missing-member", "request"))?;
+    if !request.is_object() {
+        return Err(Error::new(
+            "schema-type-mismatch",
+            "submission.request must be an action-request object",
+        ));
+    }
+    Ok((request.clone(), map.get("arguments").cloned()))
+}
+
+/// Check submitted argument values against the digest the approver's signature will cover, and
+/// return the canonical bytes to record — §06 §4.4 rules 3 and 4.
+///
+/// This is the whole of what makes displaying them safe. Without the hash check a component could
+/// show a human one call and execute another, and the display would be worth less than the blank it
+/// replaced; with it, what the approver reads is what §06 §2 step (10) enforces, and they can repeat
+/// the check themselves with a canonicalizer and SHA-256.
+///
+/// # Errors
+///
+/// `gate-arguments-too-large` past [`ARGUMENTS_MAX_BYTES`], `gate-arguments-hash-mismatch` when the
+/// values are not what `args-hash` commits to, or a canonicalization failure for values with no
+/// canonical form.
+pub fn check_arguments(arguments: &Value, args_hash: &str) -> Result<String> {
+    let canonical = jcs::canonicalize(arguments)?;
+    if canonical.len() > ARGUMENTS_MAX_BYTES {
+        return Err(Error::new(
+            "gate-arguments-too-large",
+            format!(
+                "{} bytes of canonical arguments, above the cap of {ARGUMENTS_MAX_BYTES}. Park \
+                 without them rather than not parking.",
+                canonical.len()
+            ),
+        ));
+    }
+    let hash = stozher_core::crypto::sha256_hex(canonical.as_bytes());
+    if hash != args_hash {
+        return Err(Error::new(
+            "gate-arguments-hash-mismatch",
+            format!("the arguments hash to {hash}, and the request commits to {args_hash}"),
+        ));
+    }
+    Ok(canonical)
+}
+
 /// A validated action request, flattened into the columns the queue indexes.
 #[derive(Debug, Clone)]
 pub struct GateRequest {

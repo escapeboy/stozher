@@ -182,11 +182,12 @@ async fn the_pending_queue_answers_on_whose_authority() {
         "the human root is not named: {}",
         page.body
     );
-    // And the page says plainly that it cannot show what `args-hash` commits to, rather than
-    // presenting the hash as if it were the arguments.
+    // This submission carried no arguments, and the page says so in those words (§06 §4.4 rule 8)
+    // rather than presenting the hash as if it were the arguments, and rather than rendering the
+    // absence as an empty argument list — which is what a call that genuinely took none looks like.
     assert!(
-        page.body.contains("has never held what it commits to"),
-        "the args-hash commitment is not explained: {}",
+        page.body.contains("The arguments were not supplied"),
+        "the missing arguments are not named as missing: {}",
         page.body
     );
 }

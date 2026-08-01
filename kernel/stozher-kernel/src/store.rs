@@ -934,12 +934,18 @@ impl Store {
     ///
     /// [`crate::codes::GATE_RATE_LIMITED`] when the subject is at or over `cap`,
     /// [`codes::STORE_UNAVAILABLE`], or a canonicalization failure.
+    /// `arguments` is the canonical form of the values the approver will read (§06 §4.4), already
+    /// checked against the request's `args-hash` by [`crate::gatequeue::check_arguments`]. It is
+    /// written only alongside a *fresh* request: §06 §4.4 rule 7 makes the first accepted
+    /// submission's values the recorded ones, so a later submission of the same `request-hash`
+    /// cannot add, replace or remove what an approver may already have read.
     pub async fn queue_gate_request(
         &self,
         request: &crate::gatequeue::GateRequest,
         submitted_by: &str,
         received_at: &str,
         cap: Option<(u32, &str)>,
+        arguments: Option<&str>,
     ) -> Result<bool> {
         let mut tx = self.pool.begin_with("BEGIN IMMEDIATE").await.map_err(db)?;
         if let Some((per_subject, since)) = cap {
@@ -996,8 +1002,75 @@ impl Store {
                 return Err(db(e));
             }
         };
+        if let (true, Some(arguments)) = (fresh, arguments) {
+            sqlx::query(
+                "INSERT INTO gate_request_arguments (request_hash, arguments, recorded_at) \
+                 VALUES (?1, ?2, ?3)",
+            )
+            .bind(&request.request_hash)
+            .bind(arguments)
+            .bind(received_at)
+            .execute(&mut *tx)
+            .await
+            .map_err(db)?;
+        }
         tx.commit().await.map_err(db)?;
         Ok(fresh)
+    }
+
+    /// The argument values recorded beside a parked request, canonical, or `None` when there are
+    /// none to serve.
+    ///
+    /// `None` covers two facts and the caller must not conflate them (§06 §4.4 rule 8): the
+    /// component supplied nothing, or the request has expired and §06 §4.4 rule 7 forbids serving
+    /// what a human can no longer act on. Both are "not shown"; neither is "the call had no
+    /// arguments", which is a recorded `{}`.
+    ///
+    /// # Errors
+    ///
+    /// [`codes::STORE_UNAVAILABLE`].
+    pub async fn gate_request_arguments(
+        &self,
+        request_hash: &str,
+        at: &str,
+    ) -> Result<Option<String>> {
+        let row = sqlx::query(
+            "SELECT a.arguments AS arguments FROM gate_request_arguments a \
+             JOIN gate_requests q ON q.request_hash = a.request_hash \
+             WHERE a.request_hash = ?1 AND q.not_after > ?2",
+        )
+        .bind(request_hash)
+        .bind(at)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(db)?;
+        Ok(row.map(|r| r.get::<String, _>("arguments")))
+    }
+
+    /// Erase the argument values of every request that can no longer be answered (§06 §4.4 rule 7).
+    ///
+    /// Returns how many rows went. This is the storage half of a rule the read paths already
+    /// enforce: an expired request is refused a decision by §06 §2 step (8), so values kept past
+    /// that instant are readable only by someone who could not act on them, and the queue is not a
+    /// place to accumulate a component's unsigned bytes indefinitely.
+    ///
+    /// **Nothing chained is touched.** The request object, its `request-hash` and its `args-hash`
+    /// all remain, so no signed byte moves and no checkpoint is owed — this is not §04 §5 decay and
+    /// must not be mistaken for it.
+    ///
+    /// # Errors
+    ///
+    /// [`codes::STORE_UNAVAILABLE`].
+    pub async fn erase_expired_gate_arguments(&self, now: &str) -> Result<u64> {
+        let erased = sqlx::query(
+            "DELETE FROM gate_request_arguments WHERE request_hash IN \
+             (SELECT request_hash FROM gate_requests WHERE not_after <= ?1)",
+        )
+        .bind(now)
+        .execute(&self.pool)
+        .await
+        .map_err(db)?;
+        Ok(erased.rows_affected())
     }
 
     /// How many requests this subject has parked since `since`, and how many other subjects are
@@ -1114,8 +1187,10 @@ impl Store {
              (SELECT COUNT(*) FROM gate_notifications n WHERE n.request_hash = q.request_hash \
               AND n.outcome = 'failed') AS failed, \
              (SELECT n.detail FROM gate_notifications n WHERE n.request_hash = q.request_hash \
-              AND n.outcome = 'failed' ORDER BY n.attempted_at DESC LIMIT 1) AS last_failure \
+              AND n.outcome = 'failed' ORDER BY n.attempted_at DESC LIMIT 1) AS last_failure, \
+             CASE WHEN q.not_after > ?1 THEN a.arguments END AS arguments \
              FROM gate_requests q LEFT JOIN gate_decisions d ON d.request_hash = q.request_hash \
+             LEFT JOIN gate_request_arguments a ON a.request_hash = q.request_hash \
              WHERE d.request_hash IS {} NULL ORDER BY q.requested_at DESC LIMIT {}",
             if answered { "NOT" } else { "" },
             limit.clamp(1, 10_000)
@@ -1123,13 +1198,23 @@ impl Store {
         // Audited for injection as `SqlSafeStr` requires: the two interpolations are a literal
         // chosen from a boolean and a clamped integer. Every value reaches the statement by `bind`.
         let rows = sqlx::query(sqlx::AssertSqlSafe(sql))
+            .bind(at)
             .fetch_all(&self.pool)
             .await
             .map_err(db)?;
         rows.iter()
             .map(|r| {
                 let not_after = r.get::<String, _>("not_after");
+                // §06 §4.4 rule 8: "the component supplied none" and "the call took none" are
+                // different facts, and `arguments: null` cannot carry both — a submitted JSON
+                // `null` is a value that hashes. The boolean says which, structurally.
+                let arguments = r.get::<Option<String>, _>("arguments");
                 Ok(serde_json::json!({
+                    "arguments-supplied": arguments.is_some(),
+                    "arguments": arguments
+                        .as_deref()
+                        .map(stozher_core::jcs::parse)
+                        .transpose()?,
                     "request-hash": r.get::<String, _>("request_hash"),
                     "request": stozher_core::jcs::parse(&r.get::<String, _>("request_json"))?,
                     "submitted-by": r.get::<String, _>("submitted_by"),

@@ -112,16 +112,32 @@ human. Stated rather than left to look like silence.</div>
 </tbody>
 </table>
 
-{# Said plainly rather than left for the approver to discover. `spec/06 §1.1`'s request carries
-   `args-hash` and no arguments, so this kernel does not hold the preimage and cannot show it. The
-   honest move is to name the gap; inventing a preimage would be worse than the gap. #}
-<div class="note"><b>What <code>args-hash</code> does not tell you.</b> It is a commitment to the
-call's arguments, not the arguments. The action request of <code>spec/06 §1.1</code> carries the
-hash only, so this kernel has never held what it commits to and cannot show it here. Your signature
-<i>binds</i> those arguments — an effect executed with any others fails step (10) of
-<code>spec/06 §2</code> — but it does not tell you what they were. If you need to read them before
-answering, get them from the component that built the request and check that they hash to
-<code>{{ r.args_hash }}</code>.</div>
+{# The arguments themselves, which `spec/06 §4.4` puts beside the request rather than inside it. The
+   kernel checked them against `args-hash` before recording them, so what is rendered here is the
+   preimage of the digest the signature binds — and the recipe below is how an approver stops taking
+   that on trust. They are canonical bytes, not pretty-printed, because a reformatted copy hashes to
+   something else and would make the check fail for the wrong reason. #}
+{% if r.arguments_supplied %}
+<p>What it would be done <b>with</b> — the arguments, as the digest below commits to them:</p>
+<pre>{{ r.arguments }}</pre>
+<div class="note"><b>Check that yourself, rather than trusting this page.</b> Your signature binds
+<code>args-hash</code>, and an effect executed with any other arguments fails step (10) of
+<code>spec/06 §2</code>. Paste the block above into a file and run
+<pre>printf %s "$(cat FILE)" | shasum -a 256   # or sha256sum</pre>
+It must print <code>{{ r.args_hash }}</code>, which is the value inside the request object below,
+which is what your key signs over. If it prints anything else, do not approve this: refuse it and say
+why. The command substitution strips a trailing newline an editor may add; nothing else about the
+bytes may differ.</div>
+{% else %}
+<div class="note"><b class="violation">The arguments were not supplied.</b> This request carries a
+commitment to its arguments (<code>args-hash</code> above) and this kernel does not hold what that
+commits to — either the component chose not to submit the values, they were over the cap
+<code>spec/06 §4.4</code> puts on them, or the request has expired and they have been erased. Said
+plainly rather than shown as an empty argument list: a call that takes <i>no</i> arguments renders as
+<code>{}</code>, and this is not that. You would be approving an action whose arguments you cannot
+read. If you need them, get them from the component that built the request and check that they hash
+to <code>{{ r.args_hash }}</code>.</div>
+{% endif %}
 
 <p>The exact object a signature covers:</p>
 <pre>{{ r.request_json }}</pre>

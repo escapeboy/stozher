@@ -233,6 +233,11 @@ fn replay_vectors(report: &mut Report) -> BTreeSet<String> {
                 // checkpoint rows here.
                 | "trigger"
                 | "checkpoint"
+                // A predicate over a submission to `POST /v1/gate/requests`, which is not the
+                // ingest path and appends nothing (§06 §4.3). Run against the real
+                // `gatequeue::check_arguments` by `tests/kernel_vectors.rs`, and its route
+                // behaviour by `tests/gate_queue_and_console_decisions.rs`.
+                | "gate-arguments"
         ) {
             continue;
         }

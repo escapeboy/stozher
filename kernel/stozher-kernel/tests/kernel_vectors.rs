@@ -139,3 +139,63 @@ fn every_manifest_vector_matches_this_implementation() {
         failures.join("\n  ")
     );
 }
+
+fn gate_arguments_corpus() -> Value {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../spec/vectors/gate-arguments.json");
+    let text = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("reading the corpus: {e}"));
+    serde_json::from_str(&text).unwrap_or_else(|e| panic!("parsing the corpus: {e}"))
+}
+
+/// §06 §4.4 rules 3 and 4 — the predicate that decides whether an approver may be shown a call's
+/// arguments at all.
+///
+/// The gateway holds the same predicate, because a component has to decide before it submits, and
+/// this file is what keeps the two answering alike. The cap is the interesting half: it is stated in
+/// bytes of the canonical form, and the two implementations count length in different units
+/// natively, so `over-the-cap-by-multibyte` is the vector that fails on the side that counted wrong.
+#[test]
+fn every_gate_arguments_vector_matches_this_implementation() {
+    let corpus = gate_arguments_corpus();
+    assert_eq!(
+        corpus["arguments-max-bytes"].as_u64(),
+        Some(stozher_kernel::gatequeue::ARGUMENTS_MAX_BYTES as u64),
+        "the corpus and this build disagree about the cap itself, so every size vector below is \
+         asking a question neither of them settles"
+    );
+    let vectors = corpus["vectors"].as_array().expect("vectors");
+    assert!(
+        vectors.len() >= 11,
+        "the corpus shrank to {} vectors",
+        vectors.len()
+    );
+
+    let mut failures: Vec<String> = Vec::new();
+    for vector in vectors {
+        let name = vector["name"].as_str().unwrap_or("?");
+        let args_hash = vector["args-hash"].as_str().unwrap_or_default();
+        let expected = vector["expected"].as_str().unwrap_or_default();
+        match stozher_kernel::gatequeue::check_arguments(&vector["arguments"], args_hash) {
+            Ok(canonical) if expected == "accept" => {
+                let bytes = u64::try_from(canonical.len()).unwrap_or(u64::MAX);
+                if Some(bytes) != vector["canonical-bytes"].as_u64() {
+                    failures.push(format!(
+                        "{name}: {bytes} canonical bytes, the corpus says {}",
+                        vector["canonical-bytes"]
+                    ));
+                }
+            }
+            Ok(_) => failures.push(format!("{name}: accepted, the corpus says {expected}")),
+            Err(e) if e.code() == expected => {}
+            Err(e) => failures.push(format!(
+                "{name}: refused {}, the corpus says {expected}",
+                e.code()
+            )),
+        }
+    }
+    assert!(
+        failures.is_empty(),
+        "{} gate-arguments vectors disagree with this implementation:\n  {}",
+        failures.len(),
+        failures.join("\n  ")
+    );
+}

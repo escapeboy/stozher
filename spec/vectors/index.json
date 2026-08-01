@@ -139,6 +139,13 @@
       "role": "kernel",
       "count": 17,
       "description": "Manifest validation (spec 08 section 1). Validate `manifest` as a signed object and against section 1's rules; the result MUST match `expected.valid` and on failure the code MUST equal `expected.error`. Registration conditions (section 3) are not part of this check."
+    },
+    {
+      "path": "gate-arguments.json",
+      "kind": "gate-arguments",
+      "role": "primitive",
+      "count": 11,
+      "description": "spec 06 section 4.4 rules 3 and 4 — argument values submitted beside a parked request. Canonicalize `arguments`; if the canonical form exceeds 16384 BYTES the result is `gate-arguments-too-large`; otherwise if its SHA-256 differs from `args-hash` the result is `gate-arguments-hash-mismatch`; otherwise `accept`. `canonical-bytes` is the length that decides the first test, and is given so a harness measuring characters fails visibly."
     }
   ]
 }

@@ -44,6 +44,9 @@ carries both).
   authenticated channel (§10 §1) and is bound into the effect envelope, which *is* signed by the
   subject. Its integrity as an object comes from `request-hash` being covered by the approver's
   signature.
+- `args-hash` commits to the call's arguments; the request does not carry them and MUST NOT be
+  extended to. The values travel beside it in the submission of §4.4, which checks them against this
+  digest, and they expire with the request rather than with the envelope that cites it.
 - `nonce` (32 hex, ≥ 128 bits of entropy) makes two otherwise identical requests distinct objects,
   so an approval of one is not an approval of the other.
 - `not-after` bounds how long the request may sit in the queue. The kernel MUST reject a decision
@@ -279,10 +282,11 @@ approver's lunch break into an outage, and it would do so while looking like it 
 A parked request is **not** an envelope. §02 §2's `kind` vocabulary is closed, and its admission rule
 covers what changes what the system will permit; an action request changes nothing. Accordingly:
 
-1. The kernel MUST expose `POST /v1/gate/requests`, taking an action-request object (§1.1), and it
-   MUST be idempotent by `request-hash`. It MUST validate the request against §1.1's closed member
-   set, MUST reject an unknown member (`schema-unknown-member`), and MUST reject a request whose
-   `not-after` has already passed (`gate-request-expired`).
+1. The kernel MUST expose `POST /v1/gate/requests`, taking a **submission** (§4.4) carrying an
+   action-request object (§1.1), and it MUST be idempotent by `request-hash`. It MUST validate the
+   request against §1.1's closed member set, MUST reject an unknown member
+   (`schema-unknown-member`), and MUST reject a request whose `not-after` has already passed
+   (`gate-request-expired`).
 2. That route MUST NOT append an envelope and MUST NOT be reachable from any code path that can.
 3. The kernel MUST record the authenticated caller alongside the request. **The caller need not be
    the subject the request names**: the approval binds `request.key`, so a caller that does not hold
@@ -297,6 +301,72 @@ covers what changes what the system will permit; an action request changes nothi
    distinguish "no channel is configured" and "no channel delivered" from "an approver was notified"
    (§4 rule 3's `notify-failed`).
 7. At most one decision may be recorded per request (`gate-decision-already-recorded`).
+
+### 4.4 The arguments an approver reads
+
+`args-hash` is a commitment to the arguments, not the arguments, and §1.1 carries nothing else. Read
+literally, an approver is therefore asked to sign over a call they cannot read: a request that writes
+"revenue down 12%" and a request that promotes a build to production differ in the queue by a digest.
+The component that holds the preimage is often a process that has already exited by the time a human
+looks — a stdio gateway is the ordinary case — so "ask the component" is not an answer, and an
+approval given without it is a signature over a hash and nothing more. The values therefore travel
+with the request.
+
+1. The body of `POST /v1/gate/requests` is a **submission**:
+
+   ```json
+   { "request": { …the action-request object (§1.1)… }, "arguments": { …the argument values… } }
+   ```
+
+   Its member set is closed and an unknown member MUST be rejected (`schema-unknown-member`). It
+   carries no `v` and no `kind`, exactly as `authorization` (§1.3) — which is the same shape, a
+   container for objects that carry their own — does not. A body that is *itself* an action-request
+   object MUST also be accepted and is exactly a submission with `arguments` absent. There is one
+   hashed object under either spelling and it is the same one: `request-hash` is
+   `object-hash(submission.request)`, never of the submission. The older spelling is kept because a
+   refused submission is a gate no human can see while the call it belongs to stays blocked, and an
+   upgrade in which the kernel moves before its components must not be able to empty the queue.
+
+2. `arguments` is OPTIONAL on the wire and obligatory of a component that can supply it: a component
+   that computed `args-hash` from a value it still holds MUST submit that value, unless rule 3
+   forbids it. A component that never held the preimage MUST omit the member rather than send a
+   stand-in — a plausible-looking argument list nobody executed is worse than none.
+
+3. **Size.** The canonical form (§01 §2) of `arguments` MUST NOT exceed 16384 bytes. A submission
+   over that MUST be rejected (`gate-arguments-too-large`), and a component whose values exceed it
+   MUST park **without** them rather than not park: losing the display costs an approver context,
+   losing the request costs them the gate. The bound is far above what a human reads and what a call
+   needs, and the number of requests that can hold one at a time is already bounded by §09 §7.
+
+4. **The commitment is checked, not trusted.** Where `arguments` is present the kernel MUST verify
+   `object-hash(arguments) == request["args-hash"]` and MUST reject the submission otherwise
+   (`gate-arguments-hash-mismatch`). Without this rule nothing stops a component showing a human one
+   call and executing another, and the display would be worth less than the blank it replaced.
+
+5. **An approver MUST be able to repeat that check**, and an interface showing the arguments MUST
+   show them in canonical form (§01 §2) and state how — the arguments' `object-hash` is the
+   `args-hash` inside the request their signature covers, so the whole chain from what they read to
+   what §2 step (10) enforces is recomputable with a JSON canonicalizer and SHA-256. The verifier
+   that matters is the one at the point of use, and here that is the human.
+
+6. `arguments` is **not** part of the action request. It is absent from §1.1's member set, it is not
+   covered by `request-hash`, and an implementation MUST NOT copy it into `authorization.request`, an
+   envelope, or evidence. What a signature binds is `args-hash`; the values are how the signer came
+   to know what that digest meant.
+
+7. **Retention falls out of the queue, and adds nothing to it.** The recorded arguments are those of
+   the first accepted submission; a later submission of the same `request-hash` MUST NOT replace,
+   extend or remove them (rule 5 of §4.3 — the queue is append-only). Once the request's `not-after`
+   has passed the kernel MUST NOT serve them and MUST erase them: an expired request can no longer be
+   answered (§2 step 8), so values kept past that instant are readable only by someone who cannot act
+   on them. Erasing them changes no signed byte — the request object, its `request-hash` and its
+   `args-hash` all remain — so this is not §04 §5 decay, requires no checkpoint, and interacts with
+   neither.
+
+8. An interface MUST distinguish **arguments that were never supplied** from **arguments that were
+   supplied and are empty**, and MUST NOT render the first as the second. "The component did not tell
+   us" and "the call took no arguments" are different facts about what is being approved, exactly as
+   §4.3 rule 6 separates a notification nobody attempted from one that failed.
 
 ## 5. Approvers
 

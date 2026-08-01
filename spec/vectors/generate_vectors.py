@@ -3631,6 +3631,78 @@ def gen_manifest() -> None:
     )
 
 
+def gen_gate_arguments() -> None:
+    """spec 06 section 4.4 — the argument values submitted beside a parked request.
+
+    The whole reason those values may be shown to an approver is that the kernel checks them against
+    the `args-hash` the approval signature covers, so an implementation that got this predicate wrong
+    would be displaying an unverified argument list next to a digest it does not match. Both halves
+    are here: the digest, and the byte cap that decides whether a component submits at all.
+
+    The cap is stated in **bytes of the canonical form**, not characters, which is the divergence
+    this file exists to catch — the two implementations count length in different units natively.
+    `over-the-cap-by-multibyte` is under 16384 characters and over 16384 bytes, so an implementation
+    measuring the wrong one accepts it and this vector fails.
+    """
+    cap = 16384
+
+    def case(name: str, arguments: Any, expected: str, args_hash: str | None = None) -> dict:
+        canonical = canonicalize(arguments)
+        return {
+            "name": name,
+            "arguments": arguments,
+            "args-hash": args_hash if args_hash is not None else sha256_hex(canonical.encode()),
+            "canonical-bytes": len(canonical.encode("utf-8")),
+            "expected": expected,
+        }
+
+    # 16384 bytes of canonical form exactly: `{"a":"<pad>"}` is 8 bytes of frame plus the padding.
+    at_cap = {"a": "x" * (cap - 8)}
+    over_cap = {"a": "x" * (cap - 7)}
+    # Under the cap in characters, over it in bytes: every `é` canonicalizes to two UTF-8 bytes.
+    multibyte = {"a": "é" * (cap // 2 - 3)}
+
+    vectors = [
+        case("empty-object-is-a-value", {}, "accept"),
+        case("ordinary-arguments", {"title": "ship it", "draft": True, "labels": []}, "accept"),
+        case("unicode-arguments", {"note": "revenue down 12% — Q3 свод"}, "accept"),
+        case("nested-arguments", {"b": [1, {"c": None}], "a": {"deep": {"deeper": "x"}}}, "accept"),
+        case("null-is-a-value-not-an-absence", None, "accept"),
+        case("at-the-cap", at_cap, "accept"),
+        case("over-the-cap", over_cap, "gate-arguments-too-large"),
+        case("over-the-cap-by-multibyte", multibyte, "gate-arguments-too-large"),
+        case(
+            "not-what-the-request-commits-to",
+            {"title": "ship it"},
+            "gate-arguments-hash-mismatch",
+            args_hash=object_hash({"title": "ship it to production"}),
+        ),
+        case(
+            "member-order-does-not-change-the-digest",
+            {"b": 2, "a": 1},
+            "accept",
+            args_hash=object_hash({"a": 1, "b": 2}),
+        ),
+        case(
+            "a-reformatted-copy-is-a-different-preimage",
+            {"title": "ship it "},
+            "gate-arguments-hash-mismatch",
+            args_hash=object_hash({"title": "ship it"}),
+        ),
+    ]
+    emit(
+        "gate-arguments.json",
+        "gate-arguments",
+        "spec 06 section 4.4 rules 3 and 4 — argument values submitted beside a parked request. "
+        "Canonicalize `arguments`; if the canonical form exceeds 16384 BYTES the result is "
+        "`gate-arguments-too-large`; otherwise if its SHA-256 differs from `args-hash` the result is "
+        "`gate-arguments-hash-mismatch`; otherwise `accept`. `canonical-bytes` is the length that "
+        "decides the first test, and is given so a harness measuring characters fails visibly.",
+        vectors,
+        {"arguments-max-bytes": cap},
+    )
+
+
 def gen_index() -> None:
     index = {
         "v": V,
@@ -3679,6 +3751,7 @@ def main() -> int:
     gen_checkpoint()
     gen_trigger()
     gen_manifest()
+    gen_gate_arguments()
     gen_index()
     return 0
 

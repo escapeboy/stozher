@@ -27,7 +27,7 @@ from typing import Any, NamedTuple
 
 from . import budget as budget_module
 from . import clock as clock_module
-from .canonical import CanonicalizationError, object_hash
+from .canonical import CanonicalizationError, canonicalize, object_hash, sha256_hex
 from .classify import TIER_MANIFEST, Classification, Classifier
 from .config import GatewayConfig
 from .emitter import Emitter, WindowKey
@@ -39,12 +39,51 @@ from .refusal import RefusalError, refusal
 from .signing import SigningKey, object_id
 from .store import GatewayStore
 
-__all__ = ["Call", "Enforcer", "Session"]
+__all__ = ["ARGUMENTS_MAX_BYTES", "Call", "Enforcer", "GateArgumentsError", "Session", "check_arguments"]
 
 logger = logging.getLogger(__name__)
 
 #: How long a parked request may sit in the queue before it must be re-asked.
 _REQUEST_LIFETIME_SECONDS = 3600.0
+
+#: §06 §4.4 rule 3 — the cap on the canonical form of the arguments submitted beside a request.
+ARGUMENTS_MAX_BYTES = 16384
+
+
+class GateArgumentsError(ValueError):
+    """Argument values that may not be submitted beside a parked request, with its reason code."""
+
+    def __init__(self, code: str, detail: str) -> None:
+        super().__init__(f"{code}: {detail}")
+        self.code = code
+        self.detail = detail
+
+
+def check_arguments(arguments: Any, args_hash: str) -> str:
+    """The canonical arguments to submit beside a parked request — §06 §4.4 rules 3 and 4.
+
+    The same predicate the kernel applies on receipt, held on both sides on purpose: a component
+    that submitted values the kernel then refused would have parked without them and never learnt
+    why, and the approver would see the blank rather than the arguments. The corpus pins the two
+    against each other (`spec/vectors/gate-arguments.json`).
+
+    Raises :class:`GateArgumentsError` with `gate-arguments-too-large` or
+    `gate-arguments-hash-mismatch`; the caller parks without the values rather than not parking.
+    """
+    canonical = canonicalize(arguments)
+    if len(canonical.encode("utf-8")) > ARGUMENTS_MAX_BYTES:
+        raise GateArgumentsError(
+            "gate-arguments-too-large",
+            f"{len(canonical.encode('utf-8'))} bytes of canonical arguments, above the cap of "
+            f"{ARGUMENTS_MAX_BYTES}",
+        )
+    hashed = sha256_hex(canonical.encode("utf-8"))
+    if hashed != args_hash:
+        raise GateArgumentsError(
+            "gate-arguments-hash-mismatch",
+            f"the arguments hash to {hashed}, and the request commits to {args_hash}",
+        )
+    return canonical
 
 
 class Session:
@@ -583,7 +622,22 @@ class Enforcer:
             first_call,
             self._clock.now(),
         )
-        not_queued = self._queue_with_kernel(request)
+        # §06 §4.4 rule 2. This component holds the values `args-hash` commits to and is the only
+        # party that will: it is a stdio process that exits with the session, and an approver
+        # reading the queue an hour later cannot ask it anything. So the values go with the request.
+        # Rule 3 caps them, and a call over the cap parks *without* them rather than not parking —
+        # losing the display costs an approver context, losing the park costs them the gate.
+        # `check_arguments` cannot fail on canonicalization here: `_args_hash` canonicalized these
+        # same arguments above and refused the call if it could not.
+        try:
+            check_arguments(call.arguments, args_hash)
+            arguments: dict[str, Any] | None = call.arguments
+        except GateArgumentsError as e:
+            logger.warning(
+                "the parked request will carry no arguments for a human to read: %s", e.code
+            )
+            arguments = None
+        not_queued = self._queue_with_kernel(request, arguments)
         raise refusal(
             "parked",
             "gate-parked",
@@ -651,7 +705,9 @@ class Enforcer:
             envelope_id=envelope_id,
         )
 
-    def _queue_with_kernel(self, request: dict[str, Any]) -> str | None:
+    def _queue_with_kernel(
+        self, request: dict[str, Any], arguments: dict[str, Any] | None
+    ) -> str | None:
         """Put the park where a human can see it (§06 §4.3). Returns why it did not get there.
 
         `None` means queued. Anything else is the reason, and it is a *string* rather than a flag
@@ -669,7 +725,7 @@ class Enforcer:
         if self._kernel is None:
             return "no kernel is configured, so nothing was queued for a human to see"
         try:
-            answer = self._kernel.park_gate_request(request)
+            answer = self._kernel.park_gate_request(request, arguments)
         except KernelUnreachableError:
             logger.exception("the parked request could not be queued with the kernel")
             return "the kernel was unreachable, so nothing was queued for a human to see"

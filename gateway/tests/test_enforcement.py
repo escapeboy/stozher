@@ -16,12 +16,19 @@ from typing import Any
 import pytest
 
 from stozher_gateway import clock as clock_module
-from stozher_gateway.canonical import object_hash
+from stozher_gateway.canonical import canonicalize, object_hash
 from stozher_gateway.chain import ChainError
 from stozher_gateway.classify import Classifier, read_shaped
 from stozher_gateway.config import GatewayConfig
 from stozher_gateway.emitter import Emitter
-from stozher_gateway.enforce import Call, Enforcer, Session
+from stozher_gateway.enforce import (
+    ARGUMENTS_MAX_BYTES,
+    Call,
+    Enforcer,
+    GateArgumentsError,
+    Session,
+    check_arguments,
+)
 from stozher_gateway.kernel_client import (
     KernelClient,
     KernelResponse,
@@ -637,12 +644,15 @@ def test_a_park_the_kernel_refused_does_not_blame_the_network(harness: Harness) 
     for label, (status, body, expected) in refusals.items():
         if status is None:
 
-            def park(_request: dict[str, Any]) -> Any:
+            def park(_request: dict[str, Any], _arguments: Any = None) -> Any:
                 raise KernelUnreachableError("no route to host")
         else:
 
             def park(
-                _request: dict[str, Any], status: int = status, body: dict[str, Any] = body or {}
+                _request: dict[str, Any],
+                _arguments: Any = None,
+                status: int = status,
+                body: dict[str, Any] = body or {},
             ) -> Any:
                 return KernelResponse(status=status, body=body)
 
@@ -657,8 +667,75 @@ def test_a_park_the_kernel_refused_does_not_blame_the_network(harness: Harness) 
     harness.enforcer._kernel = type(
         "Stub",
         (),
-        {"park_gate_request": staticmethod(lambda _r: KernelResponse(status=201, body={}))},
+        {"park_gate_request": staticmethod(lambda _r, _a=None: KernelResponse(status=201, body={}))},
     )()
     with pytest.raises(RefusalError) as refused:
         harness.call("create_issue", title="ship it queued")
     assert "held locally" not in refused.value.document["hint"]
+
+
+def _capturing_kernel(harness: Harness) -> list[dict[str, Any]]:
+    """Replace the kernel with one that records the submission body and accepts it."""
+    bodies: list[dict[str, Any]] = []
+
+    def park(request: dict[str, Any], arguments: Any = None) -> Any:
+        body: dict[str, Any] = {"request": request}
+        if arguments is not None:
+            body["arguments"] = arguments
+        bodies.append(body)
+        return KernelResponse(status=201, body={})
+
+    harness.enforcer._kernel = type("Stub", (), {"park_gate_request": staticmethod(park)})()
+    return bodies
+
+
+def test_the_parked_request_carries_the_arguments_a_human_has_to_read(harness: Harness) -> None:
+    """`spec/06 §4.4` rule 2 — the approver cannot read a digest.
+
+    This component is the only party that ever holds the preimage of `args-hash`: it is a stdio
+    process that exits with the session, so an approver reading the queue an hour later has nobody
+    to ask. Before this, the queue showed the hash and the console told them to ask the process that
+    had exited, which made every approval an act of trust in the thing being approved.
+    """
+    bodies = _capturing_kernel(harness)
+    with pytest.raises(RefusalError):
+        harness.call("create_issue", title="ship it", body="revenue down 12%")
+
+    assert len(bodies) == 1, "the park did not reach the queue"
+    submitted = bodies[0]
+    assert submitted["arguments"] == {"title": "ship it", "body": "revenue down 12%"}
+    # And they are what the request commits to, which is the only reason the kernel will show them.
+    assert object_hash(submitted["arguments"]) == submitted["request"]["args-hash"]
+
+
+def test_arguments_too_large_to_show_cost_the_display_and_never_the_park(
+    harness: Harness,
+) -> None:
+    """`spec/06 §4.4` rule 3. Losing the display costs an approver context; losing the park costs
+    them the gate, and the call is blocked either way."""
+    bodies = _capturing_kernel(harness)
+    with pytest.raises(RefusalError) as refused:
+        harness.call("create_issue", title="x" * (ARGUMENTS_MAX_BYTES + 1))
+
+    assert len(bodies) == 1, "an oversize argument list stopped the request being parked at all"
+    assert "arguments" not in bodies[0], "the cap was not applied before submitting"
+    assert refused.value.document["result"] == "parked"
+
+
+def test_the_component_never_submits_arguments_the_request_does_not_commit_to() -> None:
+    """`spec/06 §4.4` rule 4, held on this side too.
+
+    The kernel checks it on receipt, but a component that only learnt of the mismatch from a refusal
+    would have parked without the values and never known why — so the predicate lives on both sides
+    and the corpus (`spec/vectors/gate-arguments.json`) pins them to each other.
+    """
+    approved = {"title": "ship it"}
+    assert check_arguments(approved, object_hash(approved)) == canonicalize(approved)
+
+    with pytest.raises(GateArgumentsError) as refused:
+        check_arguments({"title": "ship it to production"}, object_hash(approved))
+    assert refused.value.code == "gate-arguments-hash-mismatch"
+
+    with pytest.raises(GateArgumentsError) as refused:
+        check_arguments({"a": "x" * ARGUMENTS_MAX_BYTES}, "0" * 64)
+    assert refused.value.code == "gate-arguments-too-large"

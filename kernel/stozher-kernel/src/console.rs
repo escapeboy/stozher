@@ -267,8 +267,17 @@ pub struct PendingRow {
     pub action: String,
     /// Thing acted upon.
     pub target: String,
-    /// `object-hash` of the call's arguments — what the approval pins, not what it displays.
+    /// `object-hash` of the call's arguments — what the approval pins. Shown in full, because it is
+    /// the digest an approver recomputes from the arguments below (§06 §4.4 rule 5); a short form
+    /// would be a hash nobody can check.
     pub args_hash: String,
+    /// The argument values, canonical, as submitted with the request (§06 §4.4). Empty when none
+    /// are being shown — which [`Self::arguments_supplied`] distinguishes from a call that took no
+    /// arguments, since the second is the two characters `{}` and the first is nothing at all.
+    pub arguments: String,
+    /// Whether there are values to show. False covers both "the component supplied none" and "the
+    /// request has expired, so they are no longer served" (§06 §4.4 rules 7 and 8).
+    pub arguments_supplied: bool,
     /// The mandate the effect will cite.
     pub mandate_ref: String,
     /// Short form of the mandate.
@@ -1561,7 +1570,12 @@ async fn pending_row(
         class: text(&record["classification"]),
         action: text(&record["action"]),
         target: text(&record["target"]),
-        args_hash: short(&text(&record["args-hash"])),
+        args_hash: text(&record["args-hash"]),
+        // Canonicalized here for the same reason `request_json` is: the approver is being asked to
+        // hash exactly these bytes and compare the result with `args_hash`, so what the page renders
+        // has to *be* the preimage, not a pretty-printed cousin of it (§06 §4.4 rule 5).
+        arguments: stozher_core::jcs::canonicalize(&record["arguments"]).unwrap_or_default(),
+        arguments_supplied: record["arguments-supplied"].as_bool().unwrap_or(false),
         mandate_short: short(&mandate_ref),
         human_root: human_root_of(kernel.ingest.store(), &mandate_ref).await,
         mandate_ref,
