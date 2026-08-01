@@ -28,7 +28,7 @@ usage:
   stozher-kernel grant    --key <path> --root <human:name> --grantee <subject>
                           --grantee-key <ed25519:...> --out <path>
                           [--days <n>] [--components <a,b>] [--actions <a,b>]
-                          [--classes <a,b>] [--resources <a,b>]
+                          [--classes <a,b>] [--resources <a,b>] [--config <path>]
                           sign the standing mandate a component acts under
   stozher-kernel token                     print a fresh caller token and the digest to configure
   stozher-kernel genesis  --key <path> --root <human:name> --out <dir>
@@ -48,7 +48,7 @@ usage:
                           consistent copy of the store, service still running
   stozher-kernel verify   --config <path>  verify every stream and its checkpoints, then exit
   stozher-kernel decide   --request <64 hex> --key <path> [--approve | --deny <reason>]
-                          [--minutes <n>] [--role <n>] [--index <n>]
+                          [--minutes <n>] [--role <n>] [--index <n>] [--config <path>]
                           sign a gate decision and print it; submit it to
                           POST /console/pending/<request-hash>/decide
   stozher-kernel conformance --manifest <path> --component <command>
@@ -69,6 +69,11 @@ route that produces an approver's signature, so it cannot manufacture an approva
 here is what buys that.
 
 An approver enrolled by `genesis` holds the root key at role 0': sign with `--role 0 --index 0`.
+
+`grant` and `decide` take an optional `--config`, and only a deployment running a `clock-advance`
+needs it (ADR-0023): the kernel is then ahead of the host, and a mandate or an approval stamped
+with real time is expired before it can be submitted. `genesis` deliberately has no such flag —
+its two documents are the deployment's founding record and outlive any demonstration.
 ";
 
 /// An approval is a permission to act now, not a licence (spec 06 section 1.2).
@@ -359,6 +364,26 @@ fn ceremony(arguments: &[String]) -> ExitCode {
 /// approver's own seed file, signs, and writes the object to stdout. The approver then submits it
 /// through the console. Keeping the two apart is what makes "the kernel cannot manufacture an
 /// approval" a structural fact rather than a policy the kernel promises to follow.
+/// The clock these offline commands stamp documents with.
+///
+/// Without `--config` this is the host's. With it, the deployment's — which matters only when that
+/// deployment declares a `clock-advance` (ADR-0023): the kernel would then be running ahead, and a
+/// mandate or an approval minted on real time is expired before it can be submitted. An auditor
+/// demonstrating retention hits exactly that.
+///
+/// `genesis` deliberately does **not** take this. Its documents outlive the demonstration — the root
+/// mandate and the first policy are the deployment's founding record, and stamping them with a time
+/// chosen to make decay observable would put the advance into the one pair of documents that must
+/// mean what they say for the deployment's whole life.
+fn offline_clock(arguments: &[String]) -> Result<stozher_kernel::clock::SharedClock, String> {
+    let Some(path) = value(arguments, "--config") else {
+        return Ok(std::sync::Arc::new(stozher_kernel::clock::SystemClock));
+    };
+    let config = stozher_kernel::Config::load(std::path::Path::new(path))
+        .map_err(|e| format!("reading {path}: {e}"))?;
+    stozher_kernel::clock::from_config(&config).map_err(|e| format!("clock: {e}"))
+}
+
 fn decide(arguments: &[String]) -> ExitCode {
     let value = |name: &str| -> Option<&str> {
         arguments
@@ -417,7 +442,13 @@ fn decide(arguments: &[String]) -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
-    let now = stozher_kernel::clock::SystemClock.now();
+    let now = match offline_clock(arguments) {
+        Ok(clock) => clock.now(),
+        Err(e) => {
+            eprintln!("{e}");
+            return ExitCode::FAILURE;
+        }
+    };
     let not_after = match stozher_kernel::clock::shift(&now, minutes * 60) {
         Ok(not_after) => not_after,
         Err(e) => {
@@ -456,6 +487,13 @@ fn decide(arguments: &[String]) -> ExitCode {
 /// from the gateway itself because §03 §1 forbids self-grant.
 fn grant(arguments: &[String]) -> ExitCode {
     let value = |name: &str| value(arguments, name);
+    let grant_now = match offline_clock(arguments) {
+        Ok(clock) => clock.now(),
+        Err(e) => {
+            eprintln!("{e}");
+            return ExitCode::FAILURE;
+        }
+    };
     let (Some(key_path), Some(root_subject), Some(grantee), Some(grantee_key), Some(out)) = (
         value("--key"),
         value("--root"),
@@ -505,7 +543,7 @@ fn grant(arguments: &[String]) -> ExitCode {
                 &["read", "benign", "consequential", "prohibited"],
             ),
             resources: list(arguments, "--resources", &["*"]),
-            now: &stozher_kernel::clock::SystemClock.now(),
+            now: &grant_now,
         },
     );
     let mandate = match mandate {
