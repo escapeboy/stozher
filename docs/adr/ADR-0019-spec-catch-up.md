@@ -1,13 +1,13 @@
 # ADR-0019: the normative text that had been living in ADRs
 
 **Status:** Accepted · **Date:** 2026-07-31 · **Arises from** `docs/product-completion-design.md`
-§3 (v0.9) · **Follows** ADR-0018 · **Closes** asks recorded in ADR-0006 §§4–6, ADR-0009 §1(a)–(c),
-ADR-0012 §§1–2
+§3 (v0.9) · **Follows** ADR-0018 · **Closes** asks recorded in ADR-0006 §§2–6, ADR-0008 §§B, D, E,
+ADR-0009 §1(a)–(c), ADR-0010, ADR-0012 §§1–2
 
 An ADR that says "`spec/06 §5` should gain a clause" and is then filed is a rule that exists only for
 people who have read the ADRs. v0.9's gate is an implementation written **from `spec/` alone**, so
 every such sentence is a way for that implementation to be correct and fail anyway — or worse, to be
-wrong in a way the corpus does not catch. Nine of them are folded in here.
+wrong in a way the corpus does not catch. Sixteen of them are folded in here.
 
 ---
 
@@ -24,6 +24,12 @@ wrong in a way the corpus does not catch. Nine of them are folded in here.
 | Policy cannot lower the bar on the mechanism that enforces policy: five actions are root-approved whatever class policy assigns them | §05 §5 rule 6 | ADR-0012 §1 |
 | A conformance run is itself root-approved and commits to the manifest in `target` as well as `args-hash` — with the operational cost stated | §08 §3.3 | ADR-0012 §1 |
 | An aggregation record carries no `resource`, so a narrowly-scoped read mandate cannot cover aggregated reads | §02 §7 rule 7 | ADR-0006 §6 |
+| The ceremony is two envelopes and neither is exempt: an interactive root mandate at `seq` 0, the first policy change at `seq` 1 | §05 §5 rule 2 | ADR-0006 §2 |
+| A named human acting directly still acts under a mandate another human granted — so changing the root set needs two enrolled roots | §03 §6 | ADR-0006 §3 |
+| The revocation feed is published with a monotonic `revocation-epoch` as its entity tag, which §03 §5's cache key already named | §03 §7 | ADR-0008 §E |
+| What a revocation costs the emitter: its stream wedges until an operator intervenes, and the only kernel-side record is the rejection | §03 §7 | ADR-0008 §B |
+| When the `revoke-cached` duty ends — once discharged for that version, not before every action | §05 §6 | ADR-0008 §D |
+| The gate rate-limit lives in kernel configuration, not policy, and §09 §7 no longer says otherwise | §09 §7 | ADR-0010 |
 
 Two of them deserve their reasoning repeated here, because the naive reading points the other way in
 both cases.
@@ -52,6 +58,20 @@ kernel does not hold.
 Recording the non-adoption matters as much as the adoptions. A catch-up that silently skipped it
 would leave the next reader unable to tell "considered and deferred" from "missed".
 
+## 2a. The first pass was not complete, and the count is why
+
+Nine were folded in on the first pass, from an inventory built by grepping the ADRs for `MUST` and
+checking a handful by hand. `docs/product-completion-design.md` §3 had said **~20**. The gap between
+those two numbers was the whole signal, and taking it seriously turned up seven more: the ceremony's
+two-envelope sequence, the direct-human mandate rule and its two-root consequence, the revocation
+feed's endpoint and epoch, what a revocation costs the emitter, when the `revoke-cached` duty ends,
+and the rate-limit's home.
+
+Recorded because the failure mode was mine and it is a common one: an inventory built from a grep
+answers the question the grep asked. The asks were phrased as *"spec text needed"*, *"should gain"*,
+*"spec decision needed"* — prose, not `MUST`. The number in the design note was the only thing that
+disagreed with the conclusion, and it was right.
+
 ## 3. What this does not close
 
 `spec/` is not now the complete record of every decision — ADRs still hold reasoning, alternatives
@@ -59,14 +79,21 @@ rejected, and the history of how a rule came to be worded. That is what an ADR i
 changed is that they no longer hold rules an implementer needs and cannot find.
 
 The standing test is the one ADR-0017 §5 states: a clause no vector exercises is a clause two
-implementations will disagree about. Six of the nine rules above are checkable only against a running
-kernel — the queue's append-only property, the root-approved floor, the idempotence of
-`POST /v1/gate/requests` — and are covered by `reject_accept_matrix` and the gate-queue tests rather
-than by the corpus. The three that are corpus-checkable (the closed decision set, accept-and-flag,
-the aggregate's missing resource) reach it through `envelope-shape` and the matrix's replay.
+implementations will disagree about. **Most of the sixteen are not corpus-checkable**, and that is
+the honest residue of this work: the queue's append-only property, the root-approved floor, the
+idempotence of `POST /v1/gate/requests`, the ceremony's two envelopes, the wedged stream after a
+revocation, the `revoke-cached` duty's end — each of those is a claim about a *running kernel over
+time*, not about a document, and they are covered by `reject_accept_matrix`, the gate-queue tests and
+`bootstrap.rs` rather than by vectors. Only the closed decision set, accept-and-flag and the
+aggregate's missing resource reach the corpus, through `envelope-shape` and the matrix's replay.
+
+So an independent implementation can pass every vector and still get most of these wrong. That is
+not an argument for writing worse rules; it is the reason the external review and a real second
+implementation are the gate rather than the corpus alone.
 
 ## Related
 
-`spec/02 §7` · `spec/05 §3`, `§5` · `spec/06 §1.2`, `§2`, `§4.2`, `§4.3` · `spec/08 §3.3` ·
-ADR-0006 §§4–6 · ADR-0009 §1 · ADR-0011 §2 (deferred, deliberately) · ADR-0012 · ADR-0017 (the
-clauses that were under-specified rather than absent) · ADR-0018 (the reason codes)
+`spec/02 §7` · `spec/03 §6`, `§7` · `spec/05 §3`, `§5`, `§6` · `spec/06 §1.2`, `§2`, `§4.2`, `§4.3` ·
+`spec/08 §3.3` · `spec/09 §7` · ADR-0006 §§2–6 · ADR-0008 §§B, D, E · ADR-0009 §1 · ADR-0010 ·
+ADR-0011 §2 (deferred, deliberately) · ADR-0012 · ADR-0017 (the clauses that were under-specified
+rather than absent) · ADR-0018 (the reason codes)

@@ -233,7 +233,15 @@ Notes:
 operator bootstrap ceremony (build plan S5) and changed only by an envelope of
 `kind: "effect"`, `action: "kernel.enroll_root"` / `kernel.retire_root`, classification
 `consequential`, which MUST itself be gated and MUST be signed by an existing root. Its evidence
-MUST identify a well-formed key to enrol or retire (`root-enrollment-malformed`). The first root
+MUST identify a well-formed key to enrol or retire (`root-enrollment-malformed`).
+
+**A named human acting directly still acts under a mandate.** Effect kinds require `mandate-ref`,
+and §1 forbids self-grant, so a human's own effect cites a mandate **another** human granted. The
+consequence is deliberate and is stated here rather than discovered during an incident: **changing
+the root set requires at least two enrolled roots.** That makes the most privileged action in the
+system a two-person operation, which is the right posture for it — but an organization that enrols
+one root and expects to retire it later will find it cannot, and it should find that out while
+reading this rather than at the moment it needs to. The first root
 is the ceremony's trust anchor: it is self-asserted at initialization and MUST be recorded as
 `seq: 0` of the kernel's own stream.
 
@@ -262,6 +270,18 @@ Revocation is itself an envelope (`kind: "revocation"`):
   `emitted-at` is ≥ `T`, and so MUST every mandate delegated beneath it. Effects already recorded
   with `emitted-at < T` remain valid — the audit records what was permitted at the time, and
   rewriting history is not a feature.
+- **A revocation is preventive only once the emitter has seen it, and the kernel MUST publish it.**
+  An implementation MUST expose the revocation feed for reading, with a **monotonic
+  `revocation-epoch`** as its entity tag, so a component can ask "has anything changed" at the cost
+  of a conditional request and no rows. §5's cache key names that epoch; without an endpoint that
+  serves it, the cache key names something no component can obtain.
+- **State what a revocation costs the emitter, because it is not nothing.** Between the revocation
+  and the emitter's next feed pull, the emitter keeps building its local chain under a mandate the
+  kernel will refuse. Every one of those envelopes is rejected, the only kernel-side record is the
+  rejection record of §04 §7, and **the emitter's stream is wedged at that position until an
+  operator intervenes** — §04 §3 admits no gap, so it cannot simply skip past them. Nothing is lost
+  and nothing is silently accepted; but an operator who expects revocation to be free will find a
+  stopped component and no explanation, and that is worth one sentence here rather than one incident.
 - `revoked-at` MUST NOT be earlier than the revoked mandate's `issued-at`
   (`revocation-before-issue`). Backdating a revocation to erase a window of authority is a
   rejection, not a workflow.

@@ -122,7 +122,11 @@ is not immunity, and §07 says so in the same words.
 - Approval fatigue is an availability attack: an adversary that generates many gate-worthy actions can
   train an approver to click through. Requirements: the kernel MUST rate-limit gate requests per
   subject per interval (`gate-rate-limited`) and MUST surface a spike as a finding rather than as a
-  longer queue. Refusing a *request* is not refusing an *action*: the call is still gated and still
+  longer queue. **The cap lives in the kernel's own configuration, not in policy.** §05 §1's member
+  set is closed and every member of it is REQUIRED, so a new policy member is a breaking wire change
+  that invalidates every existing document and every vector at once; and a queue-depth bound is the
+  wrong thing to put there anyway, because it authorizes nothing and changes nobody's rights. It is
+  a resource bound on kernel-side state that no component pulls or evaluates. Refusing a *request* is not refusing an *action*: the call is still gated and still
   blocked, and what the flooding subject loses is the ability to keep growing the queue a human has
   to read.
 - A malicious approver acting within scope is not an attack the audit prevents — it is an attack the

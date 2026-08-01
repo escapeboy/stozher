@@ -187,6 +187,20 @@ Normative:
    `gate-authorization-missing` like any other gated effect. Policy is audited by the mechanism it
    enforces — there is no bootstrap exception except the ceremony's first policy, which MUST be
    `seq` 1 of `kernel:core`, signed by the first root, and MUST be recorded as such.
+
+   **The ceremony is two envelopes and neither is exempt.** A gated effect needs a mandate to be
+   judged against, and §03 §1 forbids self-grant, so the mandate cannot come from the subject
+   publishing the policy. Therefore:
+
+   - `seq` 0 of `kernel:core` is an **interactive mandate**: a named human root grants a bootstrap
+     subject authority over `kernel.*` for the length of the ceremony and no longer.
+   - `seq` 1 is the **first policy change**, carrying an approval that root signed over the exact
+     `object-hash` of the policy document.
+
+   Both are fully validated by the same ingest path as everything after them. Nothing is
+   pre-installed, and no code path writes either of them without the checks. A bootstrap that
+   skipped validation would make the first two records the only two nobody verified — which is the
+   pair an attacker would most want to choose.
 3. `execution.args-hash` MUST equal `object-hash` of the new policy document
    (`policy-change-document-unbound`), so the approval
    signature binds the exact bytes of the policy that took effect. Approving "a policy change" in the
@@ -217,6 +231,11 @@ Normative:
   performing its next `consequential` action, regardless of pull interval and regardless of
   staleness. A component that cannot re-pull MUST treat `consequential` as offline-blocked. It is set
   when policy **tightens** (a class raised, a gate added, a mandate scope narrowed, a root retired).
+- **The duty ends when it has been discharged for that version.** A component has satisfied
+  `revoke-cached` once it has successfully re-pulled while that policy version is the one in force;
+  it does not re-pull before every subsequent action under the same version. Stated because the
+  obligation had a beginning and no end, and an obligation with no end is one every implementation
+  terminates differently — before every action, once per process, or never again after the first.
 - The flag lives in the *new* document, so a component learns of it only by pulling; therefore
   tightening is not instantaneous, and the residual window is real. It is bounded by
   `max-staleness-seconds` and is visible in the audit because every envelope carries the version it
