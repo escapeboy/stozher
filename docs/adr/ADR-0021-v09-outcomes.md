@@ -1,7 +1,14 @@
 # ADR-0021: v0.9's engineering is complete; v0.9 is not
 
-**Status:** Accepted · **Date:** 2026-08-01 · **Arises from** `docs/product-completion-design.md`
-§3 (v0.9) · **Follows** ADR-0020 · **Does not declare** v0.9 met
+**Status:** Accepted; §2 and §4's first bullet **superseded by ADR-0022** · **Date:** 2026-08-01 ·
+**Arises from** `docs/product-completion-design.md` §3 (v0.9) · **Follows** ADR-0020
+
+> **Superseded in part, the same day.** This ADR concluded that v0.9 was open because its external
+> review and its independent-implementation gate were both outstanding. The owner has since attested
+> that the review was performed with no findings, and has waived the independent-implementation
+> requirement. **ADR-0022 closes the release and records exactly what that closure rests on.** The
+> rest of this document — what the four engineering items produced, and why the pattern behind them
+> matters — stands unchanged and is why the release was worth doing.
 
 v0.9 is "it can be disbelieved and still verified". Its gate is stated in the design note and it is
 the only gate in the plan the project cannot grade itself:
