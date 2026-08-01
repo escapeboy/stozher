@@ -273,6 +273,24 @@ pub fn build(seed: &Seed, ceremony: &Ceremony) -> Result<Genesis> {
         ),
     }
 
+    // The adapter exists — Slack, SMTP and a generic webhook (ADR-0002) — and the ceremony wires
+    // none of them, so a fresh install pings nobody. Two personas hit the consequence rather than
+    // the cause: a parked request is visible only on a console page nobody has been told to open,
+    // and `_REQUEST_LIFETIME_SECONDS` expires it in an hour. The employee's work sat until they
+    // complained; the team lead could not treat the queue as a daily driver because the only way to
+    // learn something was waiting was to go and look.
+    //
+    // A default channel cannot be invented — a fresh box has no Slack workspace and no SMTP relay —
+    // so what the ceremony owes is not a value but a decision made deliberately, in the same shape
+    // as the second-root warning above.
+    warnings.push(
+        "no approver notification channel. Nothing will ping a human when an action parks, and a \
+         parked request expires in an hour — so the console is the only place it becomes visible, \
+         and only if someone happens to look. Add a `notifications` entry (spec 09 section 7; \
+         Slack, SMTP or a webhook, ADR-0002) before an agent is depending on a human answering."
+            .to_owned(),
+    );
+
     Ok(Genesis {
         root_mandate: json!({ "envelope": envelope_zero, "payloads": [] }),
         first_policy: json!({
@@ -612,7 +630,24 @@ mod tests {
             genesis.config_fragment["roots"].as_array().unwrap().len(),
             2
         );
-        assert!(genesis.warnings.is_empty());
+        assert!(
+            !genesis.warnings.iter().any(|w| w.contains("second")),
+            "a two-root ceremony must not warn about the root set: {:?}",
+            genesis.warnings
+        );
+        // It does still warn about the approver channel, and every ceremony does: the adapter
+        // exists (ADR-0002) and the ceremony configures none, so a fresh install pings nobody when
+        // an action parks — and a park expires in an hour. This asserts the warning rather than an
+        // empty list, because "no warnings" would go back to being true the moment someone removed
+        // the one that matters.
+        assert!(
+            genesis
+                .warnings
+                .iter()
+                .any(|w| w.contains("notification channel")),
+            "every ceremony must say that nothing will ping an approver: {:?}",
+            genesis.warnings
+        );
     }
 
     #[test]
