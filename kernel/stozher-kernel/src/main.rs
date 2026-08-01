@@ -877,8 +877,9 @@ fn conformance(arguments: &[String]) -> ExitCode {
 
     let manifest = match std::fs::read_to_string(manifest_path)
         .map_err(|e| e.to_string())
-        .and_then(|text| serde_json::from_str::<serde_json::Value>(&text).map_err(|e| e.to_string()))
-    {
+        .and_then(|text| {
+            serde_json::from_str::<serde_json::Value>(&text).map_err(|e| e.to_string())
+        }) {
         Ok(document) => match stozher_kernel::manifest::Manifest::parse(&document) {
             Ok(manifest) => manifest,
             Err(e) => {

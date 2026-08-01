@@ -69,9 +69,8 @@ pub fn check(envelope: &Value, mandate: Option<&Value>, signal: Option<&Value>) 
             format!("{signal_ref} is not a signal envelope"),
         ));
     }
-    let mandate = mandate.ok_or_else(|| {
-        Error::new("mandate-unresolved", format!("no mandate {standing_ref}"))
-    })?;
+    let mandate = mandate
+        .ok_or_else(|| Error::new("mandate-unresolved", format!("no mandate {standing_ref}")))?;
     if mandate["mandate-kind"].as_str() != Some("standing") {
         return Err(Error::new(
             "trigger-mandate-not-standing",

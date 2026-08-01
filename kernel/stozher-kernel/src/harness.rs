@@ -148,7 +148,15 @@ pub async fn run<D: ComponentDriver>(driver: &D, plan: &Plan<'_>) -> Result<Run>
         "mandate-ref": mandate_ref,
         "policy-version": POLICY_VERSION
     });
-    let prepared = prepare_negatives(&seed, plan.manifest, &mandate_ref, &brief, &subject, &key, &late)?;
+    let prepared = prepare_negatives(
+        &seed,
+        plan.manifest,
+        &mandate_ref,
+        &brief,
+        &subject,
+        &key,
+        &late,
+    )?;
     let group = check_negative_cases(driver, ingest, &late_context, &prepared).await?;
     result.record("negative-cases", group);
 
@@ -494,7 +502,10 @@ fn offline_actions(manifest: &Manifest) -> Option<(Vec<String>, String)> {
 /// §4.7 — decay every payload the run's samples referenced and compare the chain either side.
 async fn decay_group(ingest: &Ingest, stream: &str) -> Result<GroupResult> {
     let before = match checkpoint::verify_stream(ingest, stream).await {
-        Ok(verified) => verified["head-hash"].as_str().unwrap_or_default().to_owned(),
+        Ok(verified) => verified["head-hash"]
+            .as_str()
+            .unwrap_or_default()
+            .to_owned(),
         Err(e) => {
             return Ok(GroupResult::Failed {
                 detail: format!("{stream} did not verify before decay: {e}"),
@@ -505,7 +516,10 @@ async fn decay_group(ingest: &Ingest, stream: &str) -> Result<GroupResult> {
     let (verified, after) = match checkpoint::verify_stream(ingest, stream).await {
         Ok(verified) => (
             true,
-            verified["head-hash"].as_str().unwrap_or_default().to_owned(),
+            verified["head-hash"]
+                .as_str()
+                .unwrap_or_default()
+                .to_owned(),
         ),
         Err(_) => (false, String::new()),
     };

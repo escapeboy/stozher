@@ -585,7 +585,10 @@ fn reclassify_match<'a>(entry: &'a Value, input: &ClassifyInput<'_>) -> Option<(
     for (pattern, value) in [
         (entry["subject"].as_str(), input.subject),
         (entry["action"].as_str(), input.action),
-        (entry.get("resource").and_then(Value::as_str), input.resource),
+        (
+            entry.get("resource").and_then(Value::as_str),
+            input.resource,
+        ),
     ] {
         if !dimension(pattern, value, DIMENSION_WEIGHT, &mut specificity) {
             return None;

@@ -115,7 +115,9 @@ fn corpus() -> Vec<Value> {
 fn conformant_on_vectors(documents: &[Value], corrupt: Option<&str>) -> Scripted {
     let mut answers = serde_json::Map::new();
     for document in documents {
-        let kind = document["kind"].as_str().expect("a corpus file names its kind");
+        let kind = document["kind"]
+            .as_str()
+            .expect("a corpus file names its kind");
         let Some((_, members)) = VECTOR_KINDS.iter().find(|(k, _)| *k == kind) else {
             continue;
         };
@@ -203,7 +205,9 @@ async fn a_component_that_cannot_be_driven_fails_the_group_rather_than_the_run()
     // A component that will not speak the protocol has not been certified, and the run must say so
     // as a conformance failure rather than as a harness error an operator might dismiss.
     match check_vectors(&Unreachable, &corpus()).await {
-        GroupResult::Failed { detail } => assert!(detail.contains("could not be driven"), "{detail}"),
+        GroupResult::Failed { detail } => {
+            assert!(detail.contains("could not be driven"), "{detail}")
+        }
         other => panic!("an unreachable component did not fail §4.1: {other:?}"),
     }
 }
@@ -234,9 +238,7 @@ async fn aggregate_over(world: &World, total: u64, samples: usize) -> Value {
     let hashes: Vec<String> = (0..samples)
         .map(|i| stozher_core::crypto::sha256_hex(format!("sample-{i}").as_bytes()))
         .collect();
-    let mut body = world
-        .aggregate(json!({ "sample-hashes": hashes }))
-        .await;
+    let mut body = world.aggregate(json!({ "sample-hashes": hashes })).await;
     body.as_object_mut().expect("an object").remove("sig");
     body["counts"] = json!({ "total": total, "by-action": { "github.get_file": total } });
     json!({ "envelope": world.agent.sign(&body), "payloads": [] })
@@ -360,7 +362,8 @@ struct Anchor {
 
 /// A component that attempts all seven of its cases correctly.
 async fn conformant_on_negatives(world: &World) -> (Scripted, Anchor) {
-    let one = |envelope: Value| json!({ "submissions": [{ "envelope": envelope, "payloads": [] }] });
+    let one =
+        |envelope: Value| json!({ "submissions": [{ "envelope": envelope, "payloads": [] }] });
 
     // A gated action with no approval at all.
     let missing = world
@@ -404,7 +407,9 @@ async fn conformant_on_negatives(world: &World) -> (Scripted, Anchor) {
 
     // A cognition envelope carrying effect fields.
     let cognition = world
-        .cognition(json!({ "evidence": [{ "media-type": "text/plain", "payload-hash": "a".repeat(64) }] }))
+        .cognition(
+            json!({ "evidence": [{ "media-type": "text/plain", "payload-hash": "a".repeat(64) }] }),
+        )
         .await;
 
     // A standing mandate whose grantor is an agent: a chain that does not reach a human root. This
@@ -651,7 +656,10 @@ async fn a_component_that_queues_and_blocks_offline_passes() {
         &component,
         world.ingest(),
         &context(&world),
-        &["github.get_file".to_owned(), "github.create_issue".to_owned()],
+        &[
+            "github.get_file".to_owned(),
+            "github.create_issue".to_owned(),
+        ],
         "github.create_issue",
     )
     .await
@@ -684,7 +692,9 @@ async fn a_component_that_applied_a_gated_action_offline_fails() {
     )
     .await
     {
-        Ok(GroupResult::Failed { detail }) => assert!(detail.contains("was applied offline"), "{detail}"),
+        Ok(GroupResult::Failed { detail }) => {
+            assert!(detail.contains("was applied offline"), "{detail}")
+        }
         other => panic!("an action applied offline passed §4.5: {other:?}"),
     }
 }
@@ -733,7 +743,9 @@ async fn a_component_that_reports_no_blocking_fails_however_well_it_queued() {
     )
     .await
     {
-        Ok(GroupResult::Failed { detail }) => assert!(detail.contains("did not report blocking"), "{detail}"),
+        Ok(GroupResult::Failed { detail }) => {
+            assert!(detail.contains("did not report blocking"), "{detail}")
+        }
         other => panic!("a component that blocked nothing passed §4.5: {other:?}"),
     }
 }
@@ -742,7 +754,8 @@ async fn a_component_that_reports_no_blocking_fails_however_well_it_queued() {
 async fn a_component_that_queued_nothing_fails_rather_than_passing_vacuously() {
     // "The kernel went away and I did nothing" satisfies every assertion about a queue that exists.
     let world = stozher_testkit::world().await;
-    let component = Scripted::default().with("offline", json!({ "submissions": [], "blocked": [] }));
+    let component =
+        Scripted::default().with("offline", json!({ "submissions": [], "blocked": [] }));
 
     match check_offline_behaviour(
         &component,
@@ -753,7 +766,9 @@ async fn a_component_that_queued_nothing_fails_rather_than_passing_vacuously() {
     )
     .await
     {
-        Ok(GroupResult::Failed { detail }) => assert!(detail.contains("queued nothing"), "{detail}"),
+        Ok(GroupResult::Failed { detail }) => {
+            assert!(detail.contains("queued nothing"), "{detail}")
+        }
         other => panic!("an empty queue passed §4.5: {other:?}"),
     }
 }

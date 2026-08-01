@@ -126,10 +126,22 @@ fn year_zero_is_refused_at_both_implementations() {
 
 #[test]
 fn the_calendar_is_the_gregorian_one_including_its_century_rule() {
-    assert!(parse_timestamp("2024-02-29T00:00:00.000Z").is_ok(), "2024 is a leap year");
-    assert!(parse_timestamp("2000-02-29T00:00:00.000Z").is_ok(), "2000 is a leap year");
-    assert!(parse_timestamp("2100-02-29T00:00:00.000Z").is_err(), "2100 is not");
-    assert!(parse_timestamp("1900-02-29T00:00:00.000Z").is_err(), "1900 is not");
+    assert!(
+        parse_timestamp("2024-02-29T00:00:00.000Z").is_ok(),
+        "2024 is a leap year"
+    );
+    assert!(
+        parse_timestamp("2000-02-29T00:00:00.000Z").is_ok(),
+        "2000 is a leap year"
+    );
+    assert!(
+        parse_timestamp("2100-02-29T00:00:00.000Z").is_err(),
+        "2100 is not"
+    );
+    assert!(
+        parse_timestamp("1900-02-29T00:00:00.000Z").is_err(),
+        "1900 is not"
+    );
     assert!(parse_timestamp("2026-02-29T00:00:00.000Z").is_err());
     assert!(parse_timestamp("2026-04-31T00:00:00.000Z").is_err());
     assert!(parse_timestamp("2026-06-31T00:00:00.000Z").is_err());

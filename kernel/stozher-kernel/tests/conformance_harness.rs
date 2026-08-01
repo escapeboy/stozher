@@ -63,7 +63,9 @@ impl SelfTest {
     /// An effect envelope at the next free position.
     fn effect(&self, context: &Value, action: &str, class: &str, extra: Value) -> Value {
         let (seq, prev) = self.position();
-        let at = context["at"].as_str().expect("the context carries an instant");
+        let at = context["at"]
+            .as_str()
+            .expect("the context carries an instant");
         let mut body = json!({
             "v": stozher_core::VERSION,
             "kind": "effect",
@@ -158,7 +160,8 @@ impl SelfTest {
                     json!({ "sha256": crypto::sha256_hex(&input) })
                 }
                 "ed25519" => {
-                    let public = hex_array::<32>(vector["public-key"].as_str().expect("public-key"));
+                    let public =
+                        hex_array::<32>(vector["public-key"].as_str().expect("public-key"));
                     let message = hex::decode(vector["message-hex"].as_str().expect("message-hex"))
                         .expect("hex");
                     // With a secret key the signature is ours to produce; without one it is given
@@ -174,7 +177,8 @@ impl SelfTest {
                             vector["signature"].as_str().expect("a signature to verify"),
                         ),
                     };
-                    answer["verifies"] = json!(crypto::verify_strict(&public, &message, &signature));
+                    answer["verifies"] =
+                        json!(crypto::verify_strict(&public, &message, &signature));
                     answer
                 }
                 "object-hash" => {
@@ -192,10 +196,8 @@ impl SelfTest {
                     answer
                 }
                 "chain" => {
-                    let envelopes: Vec<Value> = vector["envelopes"]
-                        .as_array()
-                        .expect("envelopes")
-                        .clone();
+                    let envelopes: Vec<Value> =
+                        vector["envelopes"].as_array().expect("envelopes").clone();
                     let stream = vector["stream"].as_str().expect("stream");
                     match chain::verify_chain(&envelopes, stream, None) {
                         Ok(ok) => json!({
@@ -495,9 +497,8 @@ async fn a_conforming_component_produces_a_green_run() {
     let evidence = run.evidence();
     assert_eq!(evidence["manifest-hash"].as_str(), Some(manifest.hash()));
     for group in REQUIRED_GROUPS {
-        assert_eq!(
+        assert!(
             evidence["groups"][group]["result"].as_str().is_some(),
-            true,
             "the evidence says nothing about {group}"
         );
     }

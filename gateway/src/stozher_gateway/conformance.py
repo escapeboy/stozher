@@ -36,7 +36,8 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from . import canonical, chain, clock as clock_module, crypto, signing
+from . import canonical, chain, crypto, signing
+from . import clock as clock_module
 
 __all__ = ["SelfTest", "main"]
 
@@ -158,7 +159,9 @@ class SelfTest:
                 return str(declared.get("class", "consequential"))
         return "consequential"
 
-    def _effect(self, context: dict[str, Any], action: str, klass: str, **extra: Any) -> dict:
+    def _effect(
+        self, context: dict[str, Any], action: str, klass: str, **extra: Any
+    ) -> dict[str, Any]:
         at = context["at"]
         execution = {
             "action": action,
@@ -194,7 +197,9 @@ class SelfTest:
         self._seq = int(envelope["seq"]) + 1
         self._prev = signing.object_id(envelope)
 
-    def _with_evidence(self, context: dict[str, Any], action: str, klass: str, **extra: Any):
+    def _with_evidence(
+        self, context: dict[str, Any], action: str, klass: str, **extra: Any
+    ) -> dict[str, Any]:
         body = {"path": "README.md"} if klass == "read" else {"title": "conformance"}
         payload_hash = canonical.object_hash(body)
         # `read` retains for nothing at all under the baseline profile, so the retention asked for

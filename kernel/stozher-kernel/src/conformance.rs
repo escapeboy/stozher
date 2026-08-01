@@ -746,7 +746,9 @@ pub async fn check_aggregation<D: ComponentDriver>(
                 Verdict::Accepted => {}
                 Verdict::Rejected { reason, detail } => {
                     return Ok(GroupResult::Failed {
-                        detail: format!("an aggregation submission for {action} was rejected {reason}: {detail}"),
+                        detail: format!(
+                            "an aggregation submission for {action} was rejected {reason}: {detail}"
+                        ),
                     });
                 }
             }
@@ -755,14 +757,14 @@ pub async fn check_aggregation<D: ComponentDriver>(
                 continue;
             }
             aggregates += 1;
-            folded += envelope["counts"]["by-action"][&action].as_u64().unwrap_or(0);
+            folded += envelope["counts"]["by-action"][&action]
+                .as_u64()
+                .unwrap_or(0);
 
             // The manifest's own ceiling, which the kernel has never read. §02 §7.4's sixteen is the
             // outer bound; a component that declared eight and sampled twelve has broken the rule an
             // auditor was told to expect.
-            let samples = envelope["sample-hashes"]
-                .as_array()
-                .map_or(0, Vec::len);
+            let samples = envelope["sample-hashes"].as_array().map_or(0, Vec::len);
             if samples == 0 || samples as u64 > max_samples {
                 return Ok(GroupResult::Failed {
                     detail: format!(
@@ -933,7 +935,10 @@ pub async fn check_negative_cases<D: ComponentDriver>(
                     detail: format!("{case}: {detail}"),
                 });
             }
-            answer["submissions"].as_array().cloned().unwrap_or_default()
+            answer["submissions"]
+                .as_array()
+                .cloned()
+                .unwrap_or_default()
         };
 
         let Some((last, setup)) = submissions.split_last() else {
@@ -946,7 +951,9 @@ pub async fn check_negative_cases<D: ComponentDriver>(
                 Verdict::Accepted => {}
                 Verdict::Rejected { reason, detail } => {
                     return Ok(GroupResult::Failed {
-                        detail: format!("{case}: a setup submission was rejected {reason}: {detail}"),
+                        detail: format!(
+                            "{case}: a setup submission was rejected {reason}: {detail}"
+                        ),
                     });
                 }
             }
@@ -1142,7 +1149,9 @@ pub async fn check_offline_behaviour<D: ComponentDriver>(
             Verdict::Accepted => {}
             Verdict::Rejected { reason, detail } => {
                 return Ok(GroupResult::Failed {
-                    detail: format!("a queued envelope was refused on reconnect {reason}: {detail}"),
+                    detail: format!(
+                        "a queued envelope was refused on reconnect {reason}: {detail}"
+                    ),
                 });
             }
         }

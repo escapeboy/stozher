@@ -28,7 +28,8 @@ use stozher_core::signed::KeyId;
 use stozher_kernel::policy::{ClassifyInput, Decision, Policy};
 
 fn corpus() -> Value {
-    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../spec/vectors/policy-evaluation.json");
+    let path =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../spec/vectors/policy-evaluation.json");
     let text = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("reading the corpus: {e}"));
     serde_json::from_str(&text).unwrap_or_else(|e| panic!("parsing the corpus: {e}"))
 }
@@ -68,7 +69,9 @@ fn every_policy_evaluation_vector_matches_this_implementation() {
         });
         let expected_class = vector["expected"]["class"].as_str().unwrap_or_default();
         if class != expected_class {
-            failures.push(format!("{name}: class {class}, the corpus says {expected_class}"));
+            failures.push(format!(
+                "{name}: class {class}, the corpus says {expected_class}"
+            ));
             continue;
         }
 
@@ -91,7 +94,6 @@ fn every_policy_evaluation_vector_matches_this_implementation() {
         failures.join("\n  ")
     );
 }
-
 
 fn manifest_corpus() -> Value {
     let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../spec/vectors/manifest.json");

@@ -64,7 +64,9 @@ fn minimal(kind: &str) -> Value {
             "sample-hashes": ["d".repeat(64)]
         }),
         "mandate" => json!({ "mandate": { "kind": "mandate" } }),
-        "revocation" => json!({ "revokes": "a".repeat(64), "revoked-at": "2026-07-26T09:00:00.000Z" }),
+        "revocation" => {
+            json!({ "revokes": "a".repeat(64), "revoked-at": "2026-07-26T09:00:00.000Z" })
+        }
         "gate-decision" => json!({ "decision-of": "a".repeat(64) }),
         "signal" => json!({ "signal": {
             "source": "github", "received-at": "2026-07-26T09:00:00.000Z",
@@ -117,13 +119,19 @@ const MATRIX: [(&str, &[&str]); 9] = [
             "correlation-ref",
         ],
     ),
-    ("policy-change", &["evidence", "memory-ref", "correlation-ref"]),
+    (
+        "policy-change",
+        &["evidence", "memory-ref", "correlation-ref"],
+    ),
     ("aggregate", &["memory-ref", "correlation-ref"]),
     ("cognition", &["memory-ref", "correlation-ref"]),
     ("signal", &["memory-ref", "correlation-ref"]),
     ("mandate", &["memory-ref", "correlation-ref"]),
     ("revocation", &["reason", "memory-ref", "correlation-ref"]),
-    ("gate-decision", &["decision", "memory-ref", "correlation-ref"]),
+    (
+        "gate-decision",
+        &["decision", "memory-ref", "correlation-ref"],
+    ),
     ("checkpoint", &["memory-ref", "correlation-ref"]),
 ];
 
@@ -145,7 +153,8 @@ fn every_kind_accepts_exactly_the_optional_members_the_matrix_grants_it() {
         if kind == "policy-change" {
             continue;
         }
-        validate(&minimal(kind)).unwrap_or_else(|e| panic!("the minimal {kind} does not validate: {e}"));
+        validate(&minimal(kind))
+            .unwrap_or_else(|e| panic!("the minimal {kind} does not validate: {e}"));
 
         for member in PROBED {
             let mut envelope = minimal(kind);
