@@ -133,13 +133,26 @@ esac
 # "Two installs on one host" documents had its other deployment torn down by a gate that had been
 # told, in that same file, which project it was for. Read it once, before anything writes, and
 # re-emit it into every `.env` this script produces — the ceremony already does exactly this.
-GATE_PROJECT=""
+# The operator's own keys, read once before anything writes and re-emitted into every `.env` this
+# script produces. `.env.example` tells an operator to put all three here and `bin/stozher-bootstrap`
+# preserves all three; a gate that kept only the project name left the other two to fall back to
+# defaults that belong to the *other* install on the host. The port one fails safe — the preflight
+# below catches the collision and says to pass `--port` — but two files disagreeing about where a
+# setting lives is how an operator ends up not trusting either.
+GATE_CARRIED=""
 if [ -f .env ]; then
-  GATE_PROJECT="$(grep -E '^[[:space:]]*COMPOSE_PROJECT_NAME=' .env | tail -n 1 || true)"
+  for key in COMPOSE_PROJECT_NAME STOZHER_KERNEL_IMAGE STOZHER_GATEWAY_IMAGE; do
+    line="$(grep -E "^[[:space:]]*${key}=" .env | tail -n 1 || true)"
+    if [ -n "$line" ]; then GATE_CARRIED="${GATE_CARRIED}${line}
+"; fi
+  done
 fi
 write_env() {
   printf 'STOZHER_UID=%s\nSTOZHER_GID=%s\n' "$(id -u)" "$(id -g)" > .env
-  if [ -n "$GATE_PROJECT" ]; then printf '%s\n' "$GATE_PROJECT" >> .env; fi
+  if [ -n "$GATE_CARRIED" ]; then printf '%s' "$GATE_CARRIED" >> .env; fi
+  # The port this run was told to use, not the one the previous install left behind: `--port` is how
+  # a second install is possible at all, and it must win over anything carried over.
+  printf 'STOZHER_KERNEL_PORT=%s\n' "$PORT" >> .env
 }
 
 # ---------------------------------------------------------------------------------------------
