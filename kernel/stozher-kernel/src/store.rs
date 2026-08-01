@@ -531,9 +531,25 @@ impl Store {
     ///
     /// [`codes::STORE_UNAVAILABLE`].
     pub async fn streams(&self) -> Result<Vec<Value>> {
+        // Driven from `envelopes`, with the projection joined on for the two things only it knows.
+        //
+        // `streams` is in `REBUILDABLE_TABLES`: a fold, carrying no triggers, writable by anyone who
+        // can write the database file. Read as the authority it was one — a forged `head_hash` made
+        // the console and the §09 §4.2 quiet-stream surface report a head the chain never had, a
+        // ghost row invented a stream holding nothing, and a deleted row hid a real one from every
+        // caller that enumerated through it. None of that touches a signature, so nothing else
+        // contradicted it.
+        //
+        // Deriving the stream set and the head from the chain leaves the projection authoritative
+        // for `first-seen-at` and `last-appended-at` alone — timestamps about *observation*, which
+        // the chain does not record and which carry no authority. SQLite's documented bare-column
+        // rule makes `id` the value from the same row as `MAX(seq)`.
         let rows = sqlx::query(
-            "SELECT stream, stream_kind, head_seq, head_hash, first_seen_at, last_appended_at \
-             FROM streams ORDER BY stream",
+            "SELECT e.stream AS stream, MAX(e.seq) AS head_seq, e.id AS head_hash, e.kind AS kind, \
+                    s.stream_kind AS stream_kind, s.first_seen_at AS first_seen_at, \
+                    s.last_appended_at AS last_appended_at \
+             FROM envelopes e LEFT JOIN streams s ON s.stream = e.stream \
+             GROUP BY e.stream ORDER BY e.stream",
         )
         .fetch_all(&self.pool)
         .await
@@ -541,13 +557,18 @@ impl Store {
         Ok(rows
             .iter()
             .map(|r| {
+                let emitted: Option<String> = r.get("last_appended_at");
                 serde_json::json!({
                     "stream": r.get::<String, _>("stream"),
-                    "stream-kind": r.get::<String, _>("stream_kind"),
+                    // A projection row can be missing entirely; the kind is then whatever the head
+                    // envelope says, which is where the projection got it from in the first place.
+                    "stream-kind": r
+                        .get::<Option<String>, _>("stream_kind")
+                        .unwrap_or_else(|| r.get::<String, _>("kind")),
                     "head-seq": as_u64(r, "head_seq"),
                     "head-hash": r.get::<String, _>("head_hash"),
-                    "first-seen-at": r.get::<String, _>("first_seen_at"),
-                    "last-appended-at": r.get::<String, _>("last_appended_at"),
+                    "first-seen-at": r.get::<Option<String>, _>("first_seen_at"),
+                    "last-appended-at": emitted,
                 })
             })
             .collect())

@@ -42,7 +42,7 @@ const SCHEMA: &str = include_str!("sql/schema.sql");
 const APPEND_ONLY_SQLITE: &str = include_str!("sql/append_only.sqlite.sql");
 
 /// The schema version this build writes and expects.
-pub const SCHEMA_VERSION: u32 = 4;
+pub const SCHEMA_VERSION: u32 = 5;
 
 /// One forward-only step. There is no `down`: a downgrade would have to discard rows, and the rows
 /// in question are an audit trail.
@@ -137,6 +137,77 @@ pub const MIGRATIONS: &[Migration] = &[
                     SELECT RAISE(ABORT, 'envelopes are append-only: seq 0 starts a stream, so prev_hash must be null and the stream must be empty')
                     WHERE NEW.prev_hash IS NOT NULL
                        OR EXISTS (SELECT 1 FROM envelopes WHERE stream = NEW.stream);
+                END;"],
+    },
+    Migration {
+        to_version: 5,
+        name: "INSERT guards for the chain-bearing tables step 4 left open",
+        // Step 4 guarded `envelopes` and nothing else, and an attack run against a throwaway
+        // deployment showed what that leaves: a forged `gate_decisions` row carrying `verdict:
+        // 'approve'` with no envelope behind it, inserted straight into the store and served as a
+        // real decision. Every read path believed it.
+        //
+        // The tables do not share a shape, so they do not share a guard.
+        //
+        // `rejections` is a chain (§04 §7) with the same `stream`/`seq`/`prev_hash` members, so it
+        // gets the same linkage rule as `envelopes`: extend the stream or be refused.
+        //
+        // `checkpoints`, `policies`, `manifests` and `gate_decisions` are folds that each name the
+        // `envelope_id` they came from. Requiring that envelope to exist is what makes the guard
+        // worth having: an envelope cannot be conjured without a signature over its canonical form
+        // by a key the walk resolves, so the projection inherits the chain's authenticity instead
+        // of asserting its own. A forged approval now needs a forged approver.
+        //
+        // **`gate_request_hashes` is deliberately not guarded**, and that is worth saying rather
+        // than leaving to be discovered: `Store::append` inserts it *before* the envelope, inside
+        // one transaction, so a trigger demanding the envelope would refuse the legitimate path.
+        // The exposure is narrower than the others — a forged row marks a single-use approval as
+        // already spent, which denies a real approval rather than manufacturing one. Reordering the
+        // two inserts would close it and is a change to the append path, which belongs with a
+        // reason bigger than tidiness.
+        //
+        // `gate_requests` and `gate_notifications` have nothing signed behind them to check against.
+        sql: &["CREATE TRIGGER IF NOT EXISTS rejections_insert_must_extend_the_chain
+                BEFORE INSERT ON rejections
+                WHEN NEW.seq > 0
+                BEGIN
+                    SELECT RAISE(ABORT, 'rejections are append-only: an insert must extend its stream, naming the row at seq - 1 as prev_hash')
+                    WHERE NOT EXISTS (
+                        SELECT 1 FROM rejections
+                        WHERE stream = NEW.stream AND seq = NEW.seq - 1 AND id = NEW.prev_hash
+                    );
+                END;
+                CREATE TRIGGER IF NOT EXISTS rejections_insert_at_seq_zero_starts_a_stream
+                BEFORE INSERT ON rejections
+                WHEN NEW.seq = 0
+                BEGIN
+                    SELECT RAISE(ABORT, 'rejections are append-only: seq 0 starts a stream, so prev_hash must be null and the stream must be empty')
+                    WHERE NEW.prev_hash IS NOT NULL
+                       OR EXISTS (SELECT 1 FROM rejections WHERE stream = NEW.stream);
+                END;
+                CREATE TRIGGER IF NOT EXISTS checkpoints_insert_needs_its_envelope
+                BEFORE INSERT ON checkpoints
+                BEGIN
+                    SELECT RAISE(ABORT, 'a checkpoint must name an envelope this store holds')
+                    WHERE NOT EXISTS (SELECT 1 FROM envelopes WHERE id = NEW.envelope_id);
+                END;
+                CREATE TRIGGER IF NOT EXISTS policies_insert_needs_its_envelope
+                BEFORE INSERT ON policies
+                BEGIN
+                    SELECT RAISE(ABORT, 'a published policy must name an envelope this store holds')
+                    WHERE NOT EXISTS (SELECT 1 FROM envelopes WHERE id = NEW.envelope_id);
+                END;
+                CREATE TRIGGER IF NOT EXISTS manifests_insert_needs_its_envelope
+                BEFORE INSERT ON manifests
+                BEGIN
+                    SELECT RAISE(ABORT, 'a registered manifest must name an envelope this store holds')
+                    WHERE NOT EXISTS (SELECT 1 FROM envelopes WHERE id = NEW.envelope_id);
+                END;
+                CREATE TRIGGER IF NOT EXISTS gate_decisions_insert_needs_its_envelope
+                BEFORE INSERT ON gate_decisions
+                BEGIN
+                    SELECT RAISE(ABORT, 'a gate decision must name an envelope this store holds')
+                    WHERE NOT EXISTS (SELECT 1 FROM envelopes WHERE id = NEW.envelope_id);
                 END;"],
     },
 ];

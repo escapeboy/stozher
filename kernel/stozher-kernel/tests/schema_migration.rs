@@ -354,9 +354,14 @@ async fn every_chain_bearing_table_still_refuses_rewriting_after_a_migration() {
          subject, subject_key, component, mandate_ref, policy_version, classification, action, \
          target, args_hash, requested_at, not_after) \
          VALUES ('h', '{}', 's', 't', 'subj', 'k', 'c', 'm', 'p', 'gated', 'a', 'tg', 'ah', 't', 't')",
+        // `envelope_id` is a real one, taken from the chain this store already holds. Seeding a
+        // literal here stopped working when schema step 5 began requiring the envelope a decision
+        // names to exist — which is the guard doing its job, since a decision with nothing behind
+        // it is precisely the forgery step 5 exists to refuse.
         "INSERT INTO gate_decisions (request_hash, verdict, reason, decided_by, decided_at, \
          decision_json, envelope_id, recorded_at) \
-         VALUES ('h', 'approve', NULL, 'k', 't', '{}', 'e', 't')",
+         VALUES ('h', 'approve', NULL, 'k', 't', '{}', \
+         (SELECT id FROM envelopes ORDER BY rowid LIMIT 1), 't')",
         "INSERT INTO gate_notifications (request_hash, channel, attempted_at, outcome, detail) \
          VALUES ('h', 'c', 't', 'delivered', NULL)",
     ] {

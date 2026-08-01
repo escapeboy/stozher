@@ -318,12 +318,23 @@ async fn s2_trigger_cost() {
         elapsed
     }
 
-    // Step 4 is the last migration; everything before it is the pre-trigger baseline.
-    let without = &migrate::MIGRATIONS[..migrate::MIGRATIONS.len() - 1];
+    // The two arms are named by version rather than by position: step 4 adds the `envelopes`
+    // INSERT triggers this measures, and everything at or below 3 is the baseline without them.
+    // Written as "the last migration" it broke the moment a step 5 was added — correctly, since the
+    // comparison would otherwise have silently started measuring something else.
+    const TRIGGERS_ADDED_AT: u32 = 4;
+    let upto = |version: u32| {
+        migrate::MIGRATIONS
+            .iter()
+            .position(|m| m.to_version > version)
+            .unwrap_or(migrate::MIGRATIONS.len())
+    };
+    let without = &migrate::MIGRATIONS[..upto(TRIGGERS_ADDED_AT - 1)];
+    let with = &migrate::MIGRATIONS[..upto(TRIGGERS_ADDED_AT)];
     assert_eq!(
-        migrate::MIGRATIONS.last().map(|m| m.to_version),
-        Some(4),
-        "this A/B assumes step 4 is the INSERT-trigger migration"
+        without.last().map(|m| m.to_version),
+        Some(TRIGGERS_ADDED_AT - 1),
+        "the baseline arm must stop just before the INSERT triggers"
     );
 
     let _ = (ROWS, REPEATS, bench as fn(_, _, _, _) -> _);
@@ -381,7 +392,7 @@ async fn s2_trigger_cost() {
     }
 
     for durable in [true, false] {
-        let with_pool = arm("with", migrate::MIGRATIONS, durable).await;
+        let with_pool = arm("with", with, durable).await;
         let without_pool = arm("without", without, durable).await;
         let (mut pa, mut pb) = (None, None);
         let (mut a, mut b) = (Vec::new(), Vec::new());

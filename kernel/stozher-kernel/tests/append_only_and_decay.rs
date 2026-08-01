@@ -499,3 +499,167 @@ async fn a_forged_insert_cannot_extend_a_chain_it_does_not_link_to() {
             "a new stream at seq 0 is accepted by the storage engine — this is the known limit",
         );
 }
+
+/// The folds that name an envelope must name one this store holds.
+///
+/// Step 4 guarded `envelopes` and nothing else. An attack run put a `gate_decisions` row carrying
+/// `verdict: 'approve'` straight into the store with no envelope behind it, and every read path
+/// served it as a real decision — a forged approval that cost nothing to make, because the table it
+/// lived in asked for nothing.
+///
+/// Requiring the envelope is what makes the guard worth having: an envelope cannot be conjured
+/// without a signature over its canonical form by a key the mandate walk resolves, so each of these
+/// projections inherits the chain's authenticity rather than asserting its own.
+#[tokio::test]
+async fn a_fold_cannot_name_an_envelope_the_store_does_not_hold() {
+    let database = scratch("orphan-fold");
+    let world = world_at(&database).await;
+    let effect = world.effect("github.get_file", "read", json!({})).await;
+    let real = world.accept(&effect, &[]).await;
+    let pool = raw(&database).await;
+
+    let orphans = [
+        (
+            "a gate decision",
+            "INSERT INTO gate_decisions (request_hash, verdict, reason, decided_by, \
+          decided_at, decision_json, envelope_id, recorded_at) \
+          VALUES ('forged', 'approve', NULL, 'k', 't', '{}', ?1, 't')",
+        ),
+        (
+            "a checkpoint",
+            "INSERT INTO checkpoints (stream, from_seq, to_seq, head_hash, \
+          envelope_id, observed_at) VALUES ('forged:stream', 0, 0, 'h', ?1, 't')",
+        ),
+        (
+            "a published policy",
+            "INSERT INTO policies (policy_version, document_hash, document_json, \
+          published_by, envelope_id, published_at, ordinal) \
+          VALUES ('9999.99', 'h', '{}', 'k', ?1, 't', 9999)",
+        ),
+        (
+            "a registered manifest",
+            "INSERT INTO manifests (name, version, manifest_hash, \
+          component_key, document_json, envelope_id, registered_at, ordinal) \
+          VALUES ('forged', '1.0.0', 'h', 'k', '{}', ?1, 't', 9999)",
+        ),
+    ];
+    for (what, statement) in orphans {
+        let error = sqlx::query(statement)
+            .bind("0".repeat(64))
+            .execute(&pool)
+            .await
+            .expect_err(&format!(
+                "the engine accepted {what} with no envelope behind it"
+            ));
+        assert!(
+            error.to_string().contains("must name an envelope"),
+            "{what} failed for the wrong reason: {error}"
+        );
+        // And the same row naming a real envelope is accepted, so the guard is about the reference
+        // and not about the statement being malformed.
+        sqlx::query(statement)
+            .bind(&real)
+            .execute(&pool)
+            .await
+            .unwrap_or_else(|e| panic!("{what} naming a real envelope was refused: {e}"));
+    }
+
+    // `rejections` is a chain of its own (§04 §7), so it gets the linkage rule rather than this one.
+    let error = sqlx::query(
+        "INSERT INTO rejections (stream, seq, id, prev_hash, reason, detail, object_hash, \
+         submitted_by, received_at, record_json) \
+         VALUES ('kernel:rejections', 9, 'forged', NULL, 'r', 'd', 'h', 's', 't', '{}')",
+    )
+    .execute(&pool)
+    .await
+    .expect_err("the engine accepted a rejection at a gap");
+    assert!(
+        error.to_string().contains("append-only"),
+        "the rejection insert failed for the wrong reason: {error}"
+    );
+
+    // The known gap, recorded rather than described. `Store::append` writes this table *before* the
+    // envelope inside one transaction, so a guard demanding the envelope would refuse the
+    // legitimate path. The exposure is narrower — a forged row marks a single-use approval as
+    // already spent, denying a real approval rather than manufacturing one — and closing it means
+    // reordering the append, which wants a reason bigger than symmetry.
+    sqlx::query(
+        "INSERT INTO gate_request_hashes (request_hash, envelope_id, decided_by, single_use, \
+         not_after, recorded_at) VALUES ('forged', ?1, 'k', 1, 't', 't')",
+    )
+    .bind("0".repeat(64))
+    .execute(&pool)
+    .await
+    .expect("gate_request_hashes is deliberately unguarded — this is the documented limit");
+}
+
+/// The stream surface answers from the chain, so a rewritten projection cannot make it lie.
+///
+/// `streams` is a fold: rebuildable, trigger-less, and writable by anyone who can write the file.
+/// While it was the authority, three edits with no signature anywhere near them changed what every
+/// operator-facing surface reported — a forged head the chain never had, a stream that held
+/// nothing, and a real stream hidden from anything that enumerated through the table.
+#[tokio::test]
+async fn the_stream_surface_survives_a_rewritten_projection() {
+    let database = scratch("forged-projection");
+    let world = world_at(&database).await;
+    let effect = world.effect("github.get_file", "read", json!({})).await;
+    world.accept(&effect, &[]).await;
+
+    let truth = world.ingest().store().streams().await.expect("the surface");
+    let real: Vec<String> = truth
+        .iter()
+        .map(|s| s["stream"].as_str().expect("a name").to_owned())
+        .collect();
+    assert!(
+        real.contains(&EFFECT_STREAM.to_owned()),
+        "the fixture must hold the effect stream: {real:?}"
+    );
+
+    let pool = raw(&database).await;
+    for statement in [
+        // A head the chain never had.
+        "UPDATE streams SET head_hash = 'deadbeef', head_seq = 99",
+        // A stream that holds nothing.
+        "INSERT INTO streams (stream, stream_kind, head_seq, head_hash, first_seen_at, \
+         last_appended_at) VALUES ('ghost:stream', 'effect', 7, 'nothing', 't', 't')",
+        // And a real one hidden.
+        "DELETE FROM streams WHERE stream = 'kernel:core'",
+    ] {
+        sqlx::query(sqlx::AssertSqlSafe(statement))
+            .execute(&pool)
+            .await
+            .expect("the projection is writable — that is the premise, not the finding");
+    }
+
+    let after = world
+        .ingest()
+        .store()
+        .streams()
+        .await
+        .expect("the surface after");
+    // Compared on the members the chain answers for, which is exactly the scope of the fix. The
+    // projection stays authoritative for `first-seen-at` and `last-appended-at` — observation
+    // times the chain does not record — so deleting its row nulls those, and asserting the whole
+    // document unchanged would claim more than is true.
+    let identifying = |surface: &[serde_json::Value]| -> Vec<serde_json::Value> {
+        surface
+            .iter()
+            .map(|s| json!({ "stream": s["stream"], "head-seq": s["head-seq"], "head-hash": s["head-hash"] }))
+            .collect()
+    };
+    assert_eq!(
+        identifying(&after),
+        identifying(&truth),
+        "a rewritten projection changed the stream set or a head the chain answers for"
+    );
+    assert!(
+        !after.iter().any(|s| s["stream"] == "ghost:stream"),
+        "an invented projection row put a stream on the surface: {after:?}"
+    );
+    assert!(
+        after.iter().any(|s| s["stream"] == "kernel:core"),
+        "deleting a projection row hid a real stream: {after:?}"
+    );
+    pool.close().await;
+}
