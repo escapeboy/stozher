@@ -233,6 +233,35 @@ The path must be absolute — the client's working directory is not yours.
 
 Nothing changes on the agent side. It sees ordinary MCP tools, and it imports nothing of ours.
 
+### If your tools are Python functions, not an MCP server
+
+The route above is for agents that already speak MCP. If yours is a plain Python program with a tool
+registry, you do not have to build an MCP server to be governed — an engineer who evaluated this
+product measured that path at 134 lines of adapter against a 123-line application, and their tool
+state had to move into a subprocess:
+
+```python
+from stozher_gateway import Governor
+
+with Governor.from_config("config/stozher-gateway.toml") as governor:
+
+    @governor.governed(server="billing")
+    def issue_refund(order_id: str, amount_cents: int) -> str:
+        ...
+
+    issue_refund("ORD-88214", 4_999_00)
+```
+
+Same enforcement, one process: classified, mandated, gated and recorded through the same
+`Enforcer.call` a proxied tool transits. A refusal raises `RefusalError` and **the function body
+does not run**. The `with` block is not decoration — `read` calls fold into an aggregate that is
+emitted on a window boundary, and a process that exits without flushing loses the record of every
+read since the last one.
+
+This is not a weaker boundary than the MCP one. The gateway holds no approver's private key in
+either topology, and in the MCP setup it is your own client that spawns it, on your host, as you.
+What it is not, in either shape, is protection against the operator of the process — see ADR-0026.
+
 ### Adding your own downstream servers
 
 The image ships one demo server (`notes`) so the first session has something to call. Yours are

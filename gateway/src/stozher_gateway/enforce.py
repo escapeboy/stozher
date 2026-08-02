@@ -216,7 +216,12 @@ class Enforcer:
         self._require_budget(session, call, classification, target, args_hash, policy)
 
         decision = policy.decision_for(classification.classification)
-        first_call = not classification.known
+        # §10 §4 gates the first call of an *unknown* tool. An action the organization published a
+        # class for is not unknown: the kernel evaluates §05 §3 step 1 from the same document, and
+        # the catalog entry an approval would seed says nothing policy has not already said. The
+        # documented escape from the per-call toll — publish a policy naming your tools — did not
+        # work until this line read both.
+        first_call = not classification.known and not classification.policy_named
         if decision.kind == "deny":
             envelope_id = self._emit_effect(
                 session, call, classification, target, args_hash, "blocked", policy
@@ -390,7 +395,13 @@ class Enforcer:
             proposed.classification if from_manifest else None,
             catalog_class=None if from_manifest else proposed.classification,
         )
-        return Classification(proposed.action, effective, proposed.tier, proposed.classification)
+        return Classification(
+            proposed.action,
+            effective,
+            proposed.tier,
+            proposed.classification,
+            policy.names(session.subject, proposed.action, self._target(call)),
+        )
 
     def _args_hash(
         self,

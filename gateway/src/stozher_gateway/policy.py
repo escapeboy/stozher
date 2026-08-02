@@ -148,6 +148,30 @@ class Policy:
             return str(catalog_class)
         return unknown
 
+    def names(self, subject: str, action: str, resource: str) -> bool:
+        """Whether the organization's published policy speaks about this action **by name**.
+
+        `reclassify` matching it, or `by-action` carrying it. Not `default-unknown`, which is the
+        organization saying nothing and is the whole reason §10 §4 gates a first call.
+
+        This exists because first-call gating read only the *classifier's* tier, so an action the
+        organization had explicitly published a class for still parked, and the approval seeded a
+        catalog entry duplicating what policy already said. An engineer measuring the everyday cost
+        published a policy classifying their tools as `read` — the escape this product documents —
+        and reported that it "did not help": every call still parked, forever. The kernel evaluates
+        §05 §3 step 1 from the same document, so there is nothing here for a human to decide.
+        """
+        classification = self.document.get("classification", {})
+        if action in classification.get("by-action", {}):
+            return True
+        for entry in classification.get("reclassify", []):
+            if all(
+                _dimension_score(entry.get(member), value) is not None
+                for member, value in (("subject", subject), ("action", action), ("resource", resource))
+            ):
+                return True
+        return False
+
     # -- §05 §3 step 4: the gate rule --------------------------------------------------------
 
     def decision_for(self, classification: str) -> Decision:

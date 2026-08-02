@@ -14,7 +14,14 @@ Two rules here are load-bearing rather than stylistic:
   effect does not matter, the other says nobody may ever do it. A regex is not entitled to either.
 
 Unknown is not ungoverned. An unclassified tool is `consequential`, and §4's first-call gate parks it
-regardless — unknown is expensive until a human classifies it.
+regardless of the class this file proposes — unknown is expensive until a human classifies it.
+
+**Unknown to these four tiers is not the same as unknown to the organization.** An action the
+published policy names in `by-action` or matches in `reclassify` is known to the kernel and to every
+component reading the same document, so it does not park: there is nothing for an approver to
+classify that policy has not already said. That is `Classification.policy_named`, and it is what
+makes "publish a policy naming your tools" the working escape from a signature per call that
+`deploy/README.md` always claimed it was.
 """
 
 from __future__ import annotations
@@ -77,6 +84,13 @@ class Classification(NamedTuple):
     #: so the approver of a first call is answering "is this tool a `read`?" and not "is
     #: `consequential` correct?" — which is the question policy already answered by not knowing.
     proposed: str = ""
+    #: Whether the organization's published policy names this action explicitly (§05 §3 steps 1-2).
+    #:
+    #: Not a classifier tier — the classifier cannot see policy — but it belongs beside `tier`,
+    #: because together they answer the question §10 §4 asks: is this tool *unknown*? An action
+    #: `by-action` or `reclassify` names is known to the organization and to the kernel, whatever
+    #: this classifier could work out about it.
+    policy_named: bool = False
 
     @property
     def known(self) -> bool:

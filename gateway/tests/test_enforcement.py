@@ -925,3 +925,43 @@ def test_an_answered_classification_question_becomes_catalog_authority(harness: 
     pending = harness.store.seeded_pending()
     assert [p.request_hash for p in pending] == [request_hash]
     assert pending[0].catalog_class == "read"
+
+
+def test_a_tool_the_published_policy_names_does_not_park_on_its_first_call(
+    harness: Harness,
+) -> None:
+    """§10 §4 gates an *unknown* tool. Policy naming it by action is the organization knowing it.
+
+    `deploy/README.md` documents publishing a policy as the escape from a signature per call. It was
+    not one: first-call gating read only the classifier's tier, so an action the organization had
+    explicitly classified still parked, and the approval seeded a catalog entry saying what policy
+    already said. An engineer measuring the everyday cost published exactly that policy and reported
+    it "did not help".
+    """
+    # `echo_note` is named `read` by this harness's policy and is in no manifest or catalog.
+    assert "upstream result" in harness.call("echo_note", note="hello")
+    assert harness.forwarded == ["echo_note"]
+
+
+def test_a_tool_the_policy_does_not_name_still_parks_on_its_first_call(harness: Harness) -> None:
+    """The paired negative, and the rule this must not swallow: unknown is not ungoverned.
+
+    `default-unknown` is lowered to `read` here, and that is the whole design of the test. Under the
+    shipped `consequential` default an unknown tool parks because the *gate rule* says so, and the
+    assertion would hold with §10 §4 deleted — measuring something adjacent to the question. With
+    the default allowed, parking can only come from first-call gating.
+    """
+    document = baseline_policy(
+        "2026.07.2", clock_module.now(), ROOT.subject, {"github.echo_note": "read"}
+    )
+    document["classification"]["default-unknown"] = "read"
+    harness.policy = Policy.verified(POLICY_KEY.sign(document), POLICY_KEY.id)
+
+    schema = {"type": "object", "properties": {"query": {"type": "string"}}}
+    with pytest.raises(RefusalError) as refused:
+        harness.call("search_everything", schema=schema, query="secrets")
+    assert refused.value.document["reason-code"] == "gate-parked"
+    assert refused.value.document["classification"] == "read", (
+        "the class is allowed; only §10 §4 is refusing this"
+    )
+    assert harness.forwarded == []
