@@ -132,6 +132,50 @@ pub fn revoke(base_url: &str, token: &str, object: &str) -> Result<Answer> {
     )
 }
 
+/// `POST /v1/gate/requests` with an already-built action request — §06 §4.3.
+///
+/// The body is passed through verbatim: the request's `object-hash` is the `request-hash` an
+/// approver signs over, so re-encoding it here would change the identity of the thing being
+/// approved.
+///
+/// # Errors
+///
+/// `kernel-unreachable`.
+pub fn park(base_url: &str, token: &str, body: &[u8]) -> Result<Answer> {
+    send(
+        agent()
+            .post(format!(
+                "{}/v1/gate/requests",
+                base_url.trim_end_matches('/')
+            ))
+            .header("content-type", "application/json")
+            .header("authorization", format!("Bearer {token}")),
+        body.to_vec(),
+    )
+}
+
+/// An authenticated `GET` of any read route, for the two facts a publisher cannot know offline:
+/// the decision a human recorded, and the head of the stream it must extend.
+///
+/// One function rather than two named ones because a `GET` here carries nothing and decides
+/// nothing — it is the same request with a different path, and naming each path separately would
+/// suggest this module had an opinion about them.
+///
+/// # Errors
+///
+/// `kernel-unreachable`.
+pub fn read(base_url: &str, token: &str, path: &str) -> Result<Answer> {
+    send_get(
+        agent()
+            .get(format!(
+                "{}/{}",
+                base_url.trim_end_matches('/'),
+                path.trim_start_matches('/')
+            ))
+            .header("authorization", format!("Bearer {token}")),
+    )
+}
+
 /// `GET /health`, for waiting on a kernel that is still starting.
 ///
 /// # Errors

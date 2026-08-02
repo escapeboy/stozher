@@ -1,7 +1,17 @@
 # Design: completing Stozher as a product
 
-**Status:** Proposed · **Date:** 2026-07-31 · **Input to** a `/sc:implement` pass, not an
-implementation itself
+**Status:** Superseded as a status report; still current as a definition · **Date:** 2026-07-31 ·
+**Input to** a `/sc:implement` pass, not an implementation itself
+
+> **Read this before §3.** Every release below is closed. **v0.2, v0.3 and v0.4** delivered as
+> planned (ADR-0013, ADR-0014, ADR-0015); **v0.9 was closed on 2026-08-01 by owner decision** —
+> the external review attested without a recorded scope, and the independent-implementation half of
+> its gate **waived, not achieved** (ADR-0022). **v1.0 is the only one open**, and its remaining
+> condition is not engineering: *at least one design partner has run it in anger for a month.*
+>
+> §3's tables are what each release *was defined to deliver*, not a list of outstanding work. A
+> reader who takes them as a to-do list re-does finished work — which has happened, which is why
+> this paragraph is here rather than in a commit message.
 
 This is a design document. It defines what "product" means for *this* project, sequences the
 remaining work into releases with executable gates, and specifies the three items that need a real

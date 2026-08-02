@@ -295,6 +295,47 @@ compromised kernel process, not for its own maintenance code. The party that enf
 structurally unable to satisfy it. That is a property, not a slogan, and the copy-paste step is what
 buys it (ADR-0009 §2).
 
+### Changing policy
+
+```sh
+./bin/stozher-publish-policy config/policy-2026.08.1.json --root human:ivan --mandate <64 hex>
+# ... a root answers the request it parked ...
+./bin/stozher-approve <request-hash> --root human:ivan
+./bin/stozher-publish-policy config/policy-2026.08.1.json --root human:ivan --resume
+```
+
+**Policy is audited by the mechanism it enforces** (`spec/05 §5`). A policy change is a
+`consequential` effect: judged by the policy *already in force*, carried by a mandate, and approved
+by a named human who signed over the `object-hash` of the exact document that takes effect.
+Approving "a policy change" in the abstract is not representable, and there is no privileged path —
+the ceremony's first policy is the only one that judges itself, and it is `seq` 1 of `kernel:core`
+where anyone can see it.
+
+That is why this is two invocations with a human in between rather than one command. The script
+could sign the approval — it has the seed — and an approval produced by the thing performing the
+change is a rubber stamp with a signature on it. Run `bin/stozher-approve` yourself, from the
+machine that holds the root seed, having read what you are approving.
+
+`--mandate` is the mandate the publishing subject acts under; it must cover `kernel.publish_policy`
+at class `consequential`. The ceremony's own is an *interactive* mandate that expired eight hours
+after the install (§2's table, `seq` 0), so a later publish needs one a root signs — offline, in the
+same shape `bin/stozher-bootstrap` uses:
+
+```sh
+docker run --rm -i -u "$(id -u):$(id -g)" --network none -v "$PWD:/work" -w /work \
+  "${STOZHER_KERNEL_IMAGE:-stozher-kernel:0.1.0}" \
+  grant --key secrets/operator/operator.seed --root human:ivan \
+        --grantee agent:bootstrap --grantee-key "$(…identity --key … --role 1 --index 0)" \
+        --actions 'kernel.publish_policy' --classes consequential --days 1 \
+        --out var/publish-mandate.json
+./bin/stozher-approve …   # the grant is submitted like any envelope: stozher-kernel submit
+```
+
+There is deliberately no `bin/stozher-grant` wrapper. A standing mandate to rewrite policy is the
+most valuable grant in the deployment, and a one-liner that issues it — with defaults somebody would
+eventually widen — is the wrong thing to make convenient. `--days 1` above is not caution for its own
+sake: the mandate only has to outlive the four steps below it.
+
 ### Withdrawing a mandate
 
 ```sh
@@ -657,6 +698,7 @@ deploy/
   bin/stozher-bootstrap     the ceremony, start to finish
   bin/stozher-approve       sign in one process, submit in another
   bin/stozher-revoke        the same split, for withdrawing a mandate
+  bin/stozher-publish-policy  the four steps spec 05 section 5 requires, with the human in the middle
   bin/stozher-console       localhost header-injecting proxy, so a browser can read the console
   bin/stozher-backup        VACUUM INTO snapshot + keys + config, mode 0600
   bin/stozher-restore       restore, then refuse to call it restored until the chain verifies

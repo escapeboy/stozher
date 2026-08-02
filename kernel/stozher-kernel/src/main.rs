@@ -5,10 +5,10 @@
 //! generator would be a dependency in a product whose pitch is a minimal auditable surface
 //! (ADR-0003), and there is nothing here it would make clearer.
 //!
-//! Six subcommands — `keygen`, `identity`, `token`, `genesis`, `decide`, `revoke` — open no socket,
-//! read no configuration and touch no database. They are the operator's half of the install and of
-//! every authority decision after it, and they run on the operator's own machine so that a private
-//! seed never has to exist on the server.
+//! Eight subcommands — `keygen`, `identity`, `token`, `genesis`, `grant`, `decide`, `revoke`,
+//! `policy-request` — open no socket, read no configuration and touch no database. They are the
+//! operator's half of the install and of every authority decision after it, and they run on the
+//! operator's own machine so that a private seed never has to exist on the server.
 
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
@@ -57,6 +57,18 @@ usage:
                           sign a revocation and print it (spec 03 section 7)
   stozher-kernel submit-revocation --url <base> [--file <path>] [--token-env <VAR>]
                           hand an already-signed revocation to POST /v1/revocations
+  stozher-kernel policy-request --document <path> --subject <agent:name> --key <path>
+                          --mandate <64 hex> --in-force <version> --out <path>
+                          [--minutes <n>] [--role <n>] [--index <n>] [--config <path>]
+                          build the action request that asks to publish a policy (spec 05 section 5)
+  stozher-kernel park     --url <base> [--file <path>] [--token-env <VAR>]
+                          hand an action request to the pending queue
+  stozher-kernel policy-current --url <base> [--token-env <VAR>]
+                          print the policy version in force — what --in-force takes
+  stozher-kernel policy-publish --url <base> --request <path> --document <path> --key <path>
+                          [--stream <name>] [--role <n>] [--index <n>] [--token-env <VAR>]
+                          [--config <path>]
+                          publish the approved policy: read the decision, extend the chain, submit
   stozher-kernel conformance --manifest <path> --component <command>
                           [--vectors <dir>] [--at <timestamp>]
                           run spec 08 section 4 against a component and print the result;
@@ -65,10 +77,15 @@ usage:
 
 The kernel refuses to start if its seed file is readable by anyone but its owner (spec 09 section 8).
 
-`keygen`, `identity`, `token`, `genesis`, `decide` and `revoke` open no socket and read no
-configuration: they run in the operator's own process, on the operator's own machine, so a private
-seed never has to exist on the server. `genesis` prints two ordinary POST /v1/ingest bodies; nothing
-about them is privileged and every ingest check runs over them.
+`keygen`, `identity`, `token`, `genesis`, `grant`, `decide`, `revoke` and `policy-request` open no
+socket and read no configuration: they run in the operator's own process, on the operator's own
+machine, so a private seed never has to exist on the server. `genesis` prints two ordinary
+POST /v1/ingest bodies; nothing about them is privileged and every ingest check runs over them.
+
+Publishing a policy version after the install is four commands, and the split is the same one:
+`policy-request` builds the question offline, `park` puts it in the queue, a root answers it with
+`decide` + `answer`, and `policy-publish` records the result. The command that holds the root key
+never opens a socket; the command that opens the socket holds no root key.
 
 `decide` reads the approver's own key file, and `revoke` the revoker's. The service never holds
 either, and has no route that produces such a signature, so it cannot manufacture an approval or a
@@ -158,6 +175,10 @@ fn main() -> ExitCode {
         "decide" => decide(&arguments),
         "revoke" => revoke(&arguments),
         "submit-revocation" => submit_revocation(&arguments),
+        "policy-request" => policy_request(&arguments),
+        "park" => park(&arguments),
+        "policy-current" => policy_current(&arguments),
+        "policy-publish" => policy_publish(&arguments),
         "conformance" => conformance(&arguments),
         "help" | "--help" | "-h" => {
             print!("{USAGE}");
@@ -432,24 +453,10 @@ fn decide(arguments: &[String]) -> ExitCode {
         eprintln!("--minutes must be positive");
         return ExitCode::FAILURE;
     }
-    let role = value("--role")
-        .and_then(|r| r.parse::<u32>().ok())
-        .unwrap_or(1);
-    let index = value("--index")
-        .and_then(|i| i.parse::<u32>().ok())
-        .unwrap_or(0);
-
-    let seed = match keys::Seed::load(&PathBuf::from(key_path)) {
-        Ok(seed) => seed,
-        Err(e) => {
-            eprintln!("key: {e}");
-            return ExitCode::FAILURE;
-        }
-    };
-    let key = match seed.derive(role, index) {
+    let key = match seed_key(arguments, key_path, 1) {
         Ok(key) => key,
         Err(e) => {
-            eprintln!("derivation: {e}");
+            eprintln!("{e}");
             return ExitCode::FAILURE;
         }
     };
@@ -705,23 +712,10 @@ fn revoke(arguments: &[String]) -> ExitCode {
         eprintln!("--mandate must be 64 lowercase hex digits");
         return ExitCode::FAILURE;
     }
-    let role = value("--role")
-        .and_then(|r| r.parse::<u32>().ok())
-        .unwrap_or(1);
-    let index = value("--index")
-        .and_then(|i| i.parse::<u32>().ok())
-        .unwrap_or(0);
-    let seed = match keys::Seed::load(&PathBuf::from(key_path)) {
-        Ok(seed) => seed,
-        Err(e) => {
-            eprintln!("key: {e}");
-            return ExitCode::FAILURE;
-        }
-    };
-    let key = match seed.derive(role, index) {
+    let key = match seed_key(arguments, key_path, 1) {
         Ok(key) => key,
         Err(e) => {
-            eprintln!("derivation: {e}");
+            eprintln!("{e}");
             return ExitCode::FAILURE;
         }
     };
@@ -762,6 +756,487 @@ fn revoke(arguments: &[String]) -> ExitCode {
             eprintln!("signing: {e}");
             ExitCode::FAILURE
         }
+    }
+}
+
+/// Load a seed and derive the key `--role`/`--index` name, defaulting to `default_role` at index 0.
+///
+/// The three commands that sign something in the operator's own process all need this, and the
+/// default role differs between them: an approver and a revoker are usually the human root at `0'`,
+/// a publishing component is an agent subject at `1'`. Passing the default in keeps that choice at
+/// the call site, where the reader can see which one this command means.
+fn seed_key(
+    arguments: &[String],
+    key_path: &str,
+    default_role: u32,
+) -> std::result::Result<keys::SigningKey, String> {
+    let role = value(arguments, "--role")
+        .and_then(|r| r.parse::<u32>().ok())
+        .unwrap_or(default_role);
+    let index = value(arguments, "--index")
+        .and_then(|i| i.parse::<u32>().ok())
+        .unwrap_or(0);
+    let seed = keys::Seed::load(&PathBuf::from(key_path)).map_err(|e| format!("key: {e}"))?;
+    seed.derive(role, index)
+        .map_err(|e| format!("derivation: {e}"))
+}
+
+/// Build the action request that asks to publish a policy version — §05 §5.
+///
+/// Offline, and it produces no signature: an action request is not a signed object, it is the object
+/// whose `object-hash` an approver signs *over* (§06 §1.1). It is written to a file rather than
+/// printed and re-derived later because it carries a `nonce`, so rebuilding it would produce a
+/// different `request-hash` and orphan the approval that named the first one.
+///
+/// The whole ceremony this begins exists because §05 §5 refuses a privileged path: publishing policy
+/// is a `consequential` effect, judged by the policy already in force and approved by a named human.
+/// The kernel's own bar cannot be lowered by the document being installed.
+fn policy_request(arguments: &[String]) -> ExitCode {
+    let value = |name: &str| value(arguments, name);
+    let (
+        Some(document_path),
+        Some(subject),
+        Some(key_path),
+        Some(mandate),
+        Some(in_force),
+        Some(out),
+    ) = (
+        value("--document"),
+        value("--subject"),
+        value("--key"),
+        value("--mandate"),
+        value("--in-force"),
+        value("--out"),
+    )
+    else {
+        eprintln!(
+            "policy-request requires --document <path>, --subject <agent:name>, --key <path>, \
+             --mandate <64 hex>, --in-force <version> and --out <path>"
+        );
+        return ExitCode::FAILURE;
+    };
+    if !stozher_core::crypto::is_digest_hex(mandate) {
+        eprintln!("--mandate must be the 64-hex id of the mandate the publisher acts under");
+        return ExitCode::FAILURE;
+    }
+    let document: serde_json::Value = match std::fs::read(document_path)
+        .map_err(|e| e.to_string())
+        .and_then(|bytes| serde_json::from_slice(&bytes).map_err(|e| e.to_string()))
+    {
+        Ok(document) => document,
+        Err(e) => {
+            eprintln!("reading {document_path}: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let Some(version) = document["policy-version"].as_str() else {
+        eprintln!("{document_path} carries no policy-version — it is not a policy document");
+        return ExitCode::FAILURE;
+    };
+    if version == in_force {
+        // Not pedantry. §05 §5 rule 1 makes `policy-version` the *outgoing* version and
+        // `execution.target` the incoming one; equal values mean the operator passed the same
+        // version twice, and the resulting envelope claims the change was judged by itself.
+        eprintln!(
+            "--in-force is {in_force}, which is the version this document installs: \
+             pass the version currently in force (GET /v1/policy/current)"
+        );
+        return ExitCode::FAILURE;
+    }
+    let document_hash = match stozher_core::jcs::object_hash(&document) {
+        Ok(hash) => hash,
+        Err(e) => {
+            eprintln!("hashing the document: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let publisher = match seed_key(arguments, key_path, 1) {
+        Ok(key) => key,
+        Err(e) => {
+            eprintln!("{e}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let now = match offline_clock(arguments) {
+        Ok(clock) => clock.now(),
+        Err(e) => {
+            eprintln!("{e}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let minutes = value("--minutes")
+        .and_then(|m| m.parse::<i64>().ok())
+        .unwrap_or(60);
+    let not_after = match stozher_kernel::clock::shift(&now, minutes * 60) {
+        Ok(not_after) => not_after,
+        Err(e) => {
+            eprintln!("clock: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let nonce = match genesis::request_nonce() {
+        Ok(nonce) => nonce,
+        Err(e) => {
+            eprintln!("nonce: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let request = serde_json::json!({
+        "v": stozher_core::VERSION,
+        "kind": "action-request",
+        "requested-at": now,
+        "subject": subject,
+        "key": publisher.id().as_str(),
+        "component": "kernel",
+        "mandate-ref": mandate,
+        "policy-version": in_force,
+        "classification": "consequential",
+        "action": "kernel.publish_policy",
+        "target": format!("policy:{version}"),
+        "args-hash": document_hash,
+        "nonce": nonce,
+        "not-after": not_after
+    });
+    let (canonical, hash) = match (
+        stozher_core::jcs::canonicalize(&request),
+        stozher_core::jcs::object_hash(&request),
+    ) {
+        (Ok(canonical), Ok(hash)) => (canonical, hash),
+        (Err(e), _) | (_, Err(e)) => {
+            eprintln!("canonicalizing: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
+    if let Err(e) = std::fs::write(out, &canonical) {
+        eprintln!("writing {out}: {e}");
+        return ExitCode::FAILURE;
+    }
+    println!("{hash}");
+    eprintln!("wrote {out} — park it, have a root approve {hash}, then policy-publish");
+    ExitCode::SUCCESS
+}
+
+/// Print the policy version currently in force, and nothing else.
+///
+/// `policy-request` needs it and cannot know it: §05 §5 rule 1 makes the envelope's
+/// `policy-version` the **outgoing** version, so the change is judged by the policy it replaces
+/// rather than by itself. A script that assumed the last version it published is still in force
+/// would be wrong the first time two people published.
+fn policy_current(arguments: &[String]) -> ExitCode {
+    let Some(url) = value(arguments, "--url") else {
+        eprintln!("policy-current requires --url <base>");
+        return ExitCode::FAILURE;
+    };
+    let Some(token) = credential(arguments) else {
+        return ExitCode::FAILURE;
+    };
+    match stozher_kernel::operator::read(url, &token, "v1/policy/current") {
+        Ok(answer) if answer.ok() => {
+            match serde_json::from_str::<serde_json::Value>(&answer.body)
+                .ok()
+                .and_then(|document| document["policy-version"].as_str().map(str::to_owned))
+            {
+                Some(version) => {
+                    println!("{version}");
+                    ExitCode::SUCCESS
+                }
+                None => {
+                    eprintln!("the kernel's policy document carries no policy-version");
+                    ExitCode::FAILURE
+                }
+            }
+        }
+        Ok(answer) => {
+            eprintln!("the kernel refused it ({}): {}", answer.status, answer.body);
+            ExitCode::FAILURE
+        }
+        Err(e) => {
+            eprintln!("policy-current: {e}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
+/// Hand an action request to the pending queue. It appends nothing and permits nothing.
+fn park(arguments: &[String]) -> ExitCode {
+    let Some(url) = value(arguments, "--url") else {
+        eprintln!("park requires --url <base>");
+        return ExitCode::FAILURE;
+    };
+    let (Some(token), Ok(body)) = (credential(arguments), document(arguments)) else {
+        return ExitCode::FAILURE;
+    };
+    match stozher_kernel::operator::park(url, &token, &body) {
+        Ok(answer) => {
+            println!("{}", answer.body);
+            if answer.ok() {
+                ExitCode::SUCCESS
+            } else {
+                eprintln!("the kernel refused it ({})", answer.status);
+                ExitCode::FAILURE
+            }
+        }
+        Err(e) => {
+            eprintln!("park: {e}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
+/// Publish a policy version: read the human's decision, extend the chain, submit — §05 §5.
+///
+/// This is the half that needs the network, and it is deliberately the half that holds **no root
+/// key**. It reads two facts it cannot know offline — the decision a named human recorded, and the
+/// head of the stream the envelope must extend — signs the envelope with the *publishing subject's*
+/// key, and submits it through `POST /v1/ingest` like anything else. The authority is the approval
+/// inside; this command cannot manufacture one and does not try.
+fn policy_publish(arguments: &[String]) -> ExitCode {
+    let value = |name: &str| value(arguments, name);
+    let (Some(url), Some(request_path), Some(document_path), Some(key_path)) = (
+        value("--url"),
+        value("--request"),
+        value("--document"),
+        value("--key"),
+    ) else {
+        eprintln!(
+            "policy-publish requires --url <base>, --request <path>, --document <path> and \
+             --key <path>"
+        );
+        return ExitCode::FAILURE;
+    };
+    let Some(token) = credential(arguments) else {
+        return ExitCode::FAILURE;
+    };
+    let stream = value("--stream").unwrap_or("kernel:core");
+
+    let read_json = |path: &str| -> std::result::Result<serde_json::Value, String> {
+        let bytes = std::fs::read(path).map_err(|e| format!("reading {path}: {e}"))?;
+        serde_json::from_slice(&bytes).map_err(|e| format!("{path} is not JSON: {e}"))
+    };
+    let (request, document) = match (read_json(request_path), read_json(document_path)) {
+        (Ok(request), Ok(document)) => (request, document),
+        (Err(e), _) | (_, Err(e)) => {
+            eprintln!("{e}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let request_hash = match stozher_core::jcs::object_hash(&request) {
+        Ok(hash) => hash,
+        Err(e) => {
+            eprintln!("hashing the request: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
+    // The document the approval named, re-derived from the file rather than trusted from the
+    // request: if they differ, the operator is about to publish bytes nobody approved.
+    let document_hash = match stozher_core::jcs::object_hash(&document) {
+        Ok(hash) => hash,
+        Err(e) => {
+            eprintln!("hashing the document: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
+    if request["args-hash"].as_str() != Some(document_hash.as_str()) {
+        eprintln!(
+            "{document_path} is not the document {request_path} asks to publish: \
+             the request commits to {}, this file hashes to {document_hash}",
+            request["args-hash"].as_str().unwrap_or("nothing")
+        );
+        return ExitCode::FAILURE;
+    }
+
+    let decision = match fetch_decision(url, &token, &request_hash) {
+        Ok(decision) => decision,
+        Err(e) => {
+            eprintln!("{e}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let publisher = match seed_key(arguments, key_path, 1) {
+        Ok(key) => key,
+        Err(e) => {
+            eprintln!("{e}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let now = match offline_clock(arguments) {
+        Ok(clock) => clock.now(),
+        Err(e) => {
+            eprintln!("{e}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let retain_until = match stozher_kernel::clock::shift(&now, 365 * 86_400) {
+        Ok(retain_until) => retain_until,
+        Err(e) => {
+            eprintln!("clock: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
+
+    // The kernel's core stream has other writers — gate decisions, revocations, checkpoints — so
+    // losing the race is ordinary and is retried rather than reported. A retry re-signs, because
+    // `seq` and `prev-hash` are inside the signed bytes.
+    const ATTEMPTS: usize = 4;
+    let mut last = String::new();
+    for attempt in 0..ATTEMPTS {
+        let (seq, prev) = match head_of(url, &token, stream) {
+            Ok(head) => head,
+            Err(e) => {
+                eprintln!("{e}");
+                return ExitCode::FAILURE;
+            }
+        };
+        let envelope = publisher.sign(&serde_json::json!({
+            "v": stozher_core::VERSION,
+            "kind": "policy-change",
+            "emitted-at": now,
+            "stream": stream,
+            "seq": seq,
+            "prev-hash": prev,
+            "identity": {
+                "subject": request["subject"],
+                "key": publisher.id().as_str(),
+                "component": "kernel"
+            },
+            "mandate-ref": request["mandate-ref"],
+            "policy-version": request["policy-version"],
+            "classification": "consequential",
+            "execution": {
+                "action": "kernel.publish_policy",
+                "target": request["target"],
+                "args-hash": document_hash,
+                "outcome": "applied",
+                "started-at": now,
+                "finished-at": now
+            },
+            "evidence": {
+                "schema": "kernel.publish_policy.v1",
+                "media-type": "application/json",
+                "payload-hash": document_hash,
+                "retain-until": retain_until
+            },
+            "authorization": { "request": request, "decision": decision }
+        }));
+        let body = envelope.and_then(|envelope| {
+            stozher_core::jcs::canonicalize(&serde_json::json!({
+                "envelope": envelope,
+                // The document travels with the envelope, so `/v1/policy/current` can serve the
+                // bytes the approval committed to rather than a copy someone uploaded separately.
+                "payloads": [{
+                    "payload-hash": document_hash,
+                    "media-type": "application/json",
+                    "payload": document
+                }]
+            }))
+        });
+        let body = match body {
+            Ok(body) => body,
+            Err(e) => {
+                eprintln!("signing: {e}");
+                return ExitCode::FAILURE;
+            }
+        };
+        match stozher_kernel::operator::ingest(url, &token, body.as_bytes()) {
+            Ok(answer) if answer.ok() => {
+                println!("{}", answer.body);
+                return ExitCode::SUCCESS;
+            }
+            Ok(answer) if attempt + 1 < ATTEMPTS && contended(&answer.body) => {
+                last = answer.body;
+                std::thread::sleep(std::time::Duration::from_millis(200 << attempt));
+            }
+            Ok(answer) => {
+                println!("{}", answer.body);
+                eprintln!("the kernel refused it ({})", answer.status);
+                return ExitCode::FAILURE;
+            }
+            Err(e) => {
+                eprintln!("policy-publish: {e}");
+                return ExitCode::FAILURE;
+            }
+        }
+    }
+    eprintln!("{stream} stayed contended for {ATTEMPTS} attempts; nothing was recorded");
+    println!("{last}");
+    ExitCode::FAILURE
+}
+
+/// Whether a refusal is another writer having taken the chain position first.
+fn contended(body: &str) -> bool {
+    body.contains("chain-seq-duplicate") || body.contains("chain-prev-hash-mismatch")
+}
+
+/// The approval a named human recorded for this request, or why there is none to use.
+fn fetch_decision(
+    url: &str,
+    token: &str,
+    request_hash: &str,
+) -> std::result::Result<serde_json::Value, String> {
+    let answer =
+        stozher_kernel::operator::read(url, token, &format!("v1/gate/requests/{request_hash}"))
+            .map_err(|e| format!("reading the parked request: {e}"))?;
+    if !answer.ok() {
+        return Err(format!(
+            "the kernel has no answerable request {request_hash} ({}): {}",
+            answer.status, answer.body
+        ));
+    }
+    let parked: serde_json::Value =
+        serde_json::from_str(&answer.body).map_err(|e| format!("the kernel's answer: {e}"))?;
+    let decision = parked
+        .get("decision")
+        .filter(|d| !d.is_null())
+        .ok_or_else(|| {
+            format!("{request_hash} has not been answered yet — a root must approve it first")
+        })?;
+    match decision["decision"].as_str() {
+        Some("approve") => Ok(decision.clone()),
+        // A denial is an answer, and it is terminal (§06 §4.1). Publishing anyway is the one thing
+        // this command must not make easy, and the reason the human gave is what the operator is owed.
+        Some("deny") => Err(format!(
+            "{request_hash} was denied: {}",
+            decision["reason"].as_str().unwrap_or("no reason recorded")
+        )),
+        _ => Err(format!("{request_hash} carries no readable decision")),
+    }
+}
+
+/// The `(seq, prev-hash)` an envelope extending `stream` must carry.
+fn head_of(
+    url: &str,
+    token: &str,
+    stream: &str,
+) -> std::result::Result<(u64, serde_json::Value), String> {
+    let answer = stozher_kernel::operator::read(url, token, "v1/streams")
+        .map_err(|e| format!("reading the streams: {e}"))?;
+    if !answer.ok() {
+        return Err(format!(
+            "the kernel refused /v1/streams ({})",
+            answer.status
+        ));
+    }
+    let listed: serde_json::Value =
+        serde_json::from_str(&answer.body).map_err(|e| format!("the kernel's answer: {e}"))?;
+    let found = listed["streams"]
+        .as_array()
+        .map(Vec::as_slice)
+        .unwrap_or_default()
+        .iter()
+        .find(|row| row["stream"].as_str() == Some(stream));
+    match found {
+        Some(row) => {
+            let seq = row["head-seq"]
+                .as_u64()
+                .ok_or_else(|| format!("{stream} has no readable head"))?;
+            Ok((seq + 1, row["head-hash"].clone()))
+        }
+        // Not a fresh start. A deployment that has run at all has the ceremony's two envelopes on
+        // this stream, so an empty one means the wrong stream name or the wrong deployment, and
+        // appending at seq 0 would be building a second chain beside the real one.
+        None => Err(format!(
+            "{stream} holds nothing — check --stream against the kernel's kernel-core-stream"
+        )),
     }
 }
 

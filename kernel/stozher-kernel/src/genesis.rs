@@ -323,6 +323,18 @@ fn require_subject(subject: &str, prefix: &str) -> Result<()> {
 
 /// 128 bits of entropy, lowercase hex — what §06 §1.1 requires of a request nonce so that an
 /// approval of one request is never an approval of an otherwise identical one.
+///
+/// Public under this name because the ceremony is not the only thing that builds an action request:
+/// `policy-request` builds one for every policy version after the first, and a second entropy source
+/// with its own idea of how many bits a nonce needs is how the two come to differ.
+///
+/// # Errors
+///
+/// `kernel-entropy-unavailable`.
+pub fn request_nonce() -> Result<String> {
+    nonce()
+}
+
 fn nonce() -> Result<String> {
     let mut octets = [0u8; 16];
     getrandom::fill(&mut octets)

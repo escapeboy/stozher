@@ -1,0 +1,122 @@
+#!/usr/bin/env bash
+# Publish a policy version after the install — the ceremony `spec/05 §5` requires, in one script.
+#
+# There is no privileged path by which policy changes. Publishing is a `consequential` effect,
+# judged by the policy *already in force*, carrying a named human's signature over the exact bytes
+# of the document that takes effect. The install ceremony does this once, for the first version;
+# every version after it goes through the same four steps, which is what this runs:
+#
+#   1. policy-request  build the question. Offline, in your own process, from your own seed.
+#   2. park            put it in the pending queue. It appends nothing and permits nothing.
+#   3. approve         a root answers it — bin/stozher-approve, seed in one process, socket in another.
+#   4. policy-publish  read the recorded decision, extend the chain, submit with the document.
+#
+# Step 3 is deliberately NOT automated here even though this script could sign it: an approval that
+# a publishing script produces on the operator's behalf is a rubber stamp with a signature on it,
+# and the property being sold is that the party performing the change cannot approve it. Run
+# bin/stozher-approve yourself, from the machine that holds the root seed, after reading the request.
+#
+# Usage:
+#   bin/stozher-publish-policy config/policy-2026.08.1.json --root human:ivan
+#   bin/stozher-publish-policy config/policy-2026.08.1.json --root human:ivan --resume
+#
+# `--resume` skips steps 1 and 2 and publishes an already-approved request from work/, which is what
+# you run after answering. Without it the script stops at step 3 and tells you what to approve.
+
+set -euo pipefail
+
+DEPLOY="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$DEPLOY"
+
+IMAGE="${STOZHER_KERNEL_IMAGE:-stozher-kernel:0.1.0}"
+SEED="secrets/operator/operator.seed"
+WORK="var/policy-request.json"
+DOCUMENT=""
+ROOT=""
+SUBJECT="agent:bootstrap"
+MANDATE=""
+RESUME=""
+
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --root) ROOT="$2"; shift 2 ;;
+    --subject) SUBJECT="$2"; shift 2 ;;
+    --mandate) MANDATE="$2"; shift 2 ;;
+    --key) SEED="$2"; shift 2 ;;
+    --resume) RESUME="yes"; shift ;;
+    -h|--help) sed -n '2,25p' "$0"; exit 0 ;;
+    -*) echo "unknown argument $1" >&2; exit 2 ;;
+    *) DOCUMENT="$1"; shift ;;
+  esac
+done
+
+[ -n "$DOCUMENT" ] || { echo "usage: bin/stozher-publish-policy <policy-document> --root human:<name>" >&2; exit 2; }
+[ -f "$DOCUMENT" ] || { echo "$DOCUMENT does not exist" >&2; exit 2; }
+[ -n "$ROOT" ] || { echo "--root human:<name> is required — a policy change is one named human's" >&2; exit 2; }
+[ -f "$SEED" ] || { echo "$SEED does not exist: this is not the operator's machine" >&2; exit 2; }
+[ -f .env ] || { echo ".env is missing — run bin/stozher-bootstrap first" >&2; exit 2; }
+
+# shellcheck disable=SC1091
+set -a; . ./.env; set +a
+UID_GID="$(id -u):$(id -g)"
+
+CONTAINER="$(docker compose ps -q kernel)"
+[ -n "$CONTAINER" ] || { echo "the kernel container is not running — start it with 'docker compose up -d kernel'" >&2; exit 1; }
+NETWORK="$(docker inspect -f '{{range $name, $_ := .NetworkSettings.Networks}}{{$name}}{{end}}' "$CONTAINER")"
+[ -n "$NETWORK" ] || { echo "the kernel container is on no network" >&2; exit 1; }
+
+# A container on the kernel's network, carrying the caller credential and no seed.
+onnet() {
+  docker run --rm -i -u "$UID_GID" --network "$NETWORK" -v "$DEPLOY:/work" -w /work \
+    -e STOZHER_KERNEL_TOKEN="$STOZHER_KERNEL_TOKEN" "$IMAGE" "$@"
+}
+# The operator's own process: the seed is mounted, no network is attached.
+offline() {
+  docker run --rm -i -u "$UID_GID" --network none -v "$DEPLOY:/work" -w /work "$IMAGE" "$@"
+}
+
+if [ -z "$RESUME" ]; then
+  # The version in force, asked of the kernel rather than assumed. §05 §5 rule 1 makes it the
+  # envelope's `policy-version` — the change is judged by the policy it replaces, not by itself —
+  # and a script that assumed the last version it published is still in force is wrong the first
+  # time two people publish.
+  IN_FORCE="$(onnet policy-current --url http://kernel:8787)"
+  [ -n "$IN_FORCE" ] || { echo "could not read the policy version in force from the kernel" >&2; exit 1; }
+
+  if [ -z "$MANDATE" ]; then
+    echo "--mandate <64 hex> is required: the mandate '$SUBJECT' publishes under." >&2
+    echo "It must cover kernel.publish_policy at class consequential — sign one with" >&2
+    echo "  bin/stozher-grant, or reuse the id shown on /console/mandates." >&2
+    exit 2
+  fi
+
+  mkdir -p "$(dirname "$WORK")"
+  REQUEST_HASH="$(offline policy-request \
+    --document "$DOCUMENT" --subject "$SUBJECT" --key "$SEED" \
+    --mandate "$MANDATE" --in-force "$IN_FORCE" --out "$WORK")"
+
+  onnet park --url http://kernel:8787 --file "$WORK" >/dev/null
+
+  cat >&2 <<EOF
+
+Parked. A root must now answer it, from the machine holding the root seed:
+
+  bin/stozher-approve $REQUEST_HASH --root $ROOT
+
+Then publish what they approved:
+
+  bin/stozher-publish-policy $DOCUMENT --root $ROOT --resume
+EOF
+  exit 0
+fi
+
+[ -f "$WORK" ] || { echo "$WORK does not exist — run without --resume first" >&2; exit 2; }
+
+# This step needs the network *and* the seed, and that is not the property being weakened. §01 §6
+# derives all four subjects from one seed, so the publishing subject's key lives in the same file as
+# the root's — but the signature this makes is the *emitter's*, attesting chain position, exactly as
+# the ceremony's `seq` 1 is signed by the bootstrap subject. The authority is the approval inside,
+# produced by `decide` in a process that had no socket, and this command cannot manufacture one.
+docker run --rm -i -u "$UID_GID" --network "$NETWORK" -v "$DEPLOY:/work" -w /work \
+  -e STOZHER_KERNEL_TOKEN="$STOZHER_KERNEL_TOKEN" "$IMAGE" \
+  policy-publish --url http://kernel:8787 --request "$WORK" --document "$DOCUMENT" --key "$SEED"
