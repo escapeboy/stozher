@@ -1188,8 +1188,25 @@ impl Ingest {
         roots: &[KeyId],
         plan: &mut AppendPlan,
     ) -> Result<()> {
-        // For `kind: "revocation"` the envelope *is* the revocation object: §02 §2 puts `revokes`
-        // and `revoked-at` at the top level and `sig` is the revoker's signature.
+        // §03 §7: the revoker signs the **object** under `revocation`; the envelope's own `sig` is
+        // the emitter's and attests receipt and chain position, not authority. The envelope used to
+        // *be* the revocation object, which meant the revoker's signature covered `stream`, `seq`
+        // and `prev-hash` — values only the kernel knows at append — and so could not be produced
+        // offline. A root whose seed exists only on a laptop is the person most likely to need this.
+        let object = env
+            .get("revocation")
+            .ok_or_else(|| Error::new("schema-missing-member", "revocation"))?;
+        // The top-level members are a projection of the object, kept so the store can index a
+        // revocation without opening it. They may not disagree with it: two spellings of one fact
+        // let an emitter choose which reader agrees with it.
+        for name in ["revokes", "revoked-at", "reason"] {
+            if env.get(name) != object.get(name) {
+                return Err(Error::new(
+                    "revocation-object-mismatch",
+                    format!("the envelope's {name} does not match the signed revocation object"),
+                ));
+            }
+        }
         let target = env["revokes"]
             .as_str()
             .ok_or_else(|| Error::new("schema-missing-member", "revokes"))?;
@@ -1209,8 +1226,10 @@ impl Ingest {
         for (id, document) in self.store.mandate_ancestry(target, 16).await? {
             mandates.insert(id, document);
         }
-        verify_revocation(&mandates, env, roots)?;
-        plan.projections.revocation = Some((signed::object_id(env)?, env.clone()));
+        verify_revocation(&mandates, object, roots)?;
+        // The projection stores the *envelope* id, which is what the chain names, and the
+        // signed object, which is what carries the authority a later reader must re-check.
+        plan.projections.revocation = Some((signed::object_id(env)?, object.clone()));
         Ok(())
     }
 

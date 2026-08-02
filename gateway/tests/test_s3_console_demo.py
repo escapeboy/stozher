@@ -162,6 +162,19 @@ def submit_revocation(kernel: Kernel, mandate_ref: str) -> str:
             "revokes": mandate_ref,
             "revoked-at": now,
             "reason": "the demo revokes it",
+            # §03 §7: the revoker signs the object; the envelope carries it and projects three of
+            # its members out so the store can index a revocation without opening it. The kernel
+            # refuses a disagreement (`revocation-object-mismatch`), so both come from the same
+            # values here rather than from two literals.
+            "revocation": kernel.human_root.sign(
+                {
+                    "v": "stozher/0.1",
+                    "kind": "revocation",
+                    "revokes": mandate_ref,
+                    "revoked-at": now,
+                    "reason": "the demo revokes it",
+                }
+            ),
         }
     )
     kernel.submit(envelope)

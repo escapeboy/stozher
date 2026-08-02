@@ -251,21 +251,54 @@ is the ceremony's trust anchor: it is self-asserted at initialization and MUST b
 
 ## 7. Revocation
 
-Revocation is itself an envelope (`kind: "revocation"`):
+A revocation is an envelope (`kind: "revocation"`) carrying the revoker's **signed revocation
+object** under the member `revocation`, exactly as a `mandate` envelope carries `mandate` and a
+`gate-decision` envelope carries `decision`.
 
 ```json
 {
   "v": "stozher/0.1", "kind": "revocation",
+  "emitted-at": "...", "stream": "kernel:core", "seq": 41, "prev-hash": "...",
+  "identity": { "subject": "agent:kernel", "key": "ed25519:<kernel>", "component": "kernel" },
   "revokes": "<mandate-id>",
   "revoked-at": "2026-08-01T10:00:00.000Z",
   "reason": "laptop lost",
-  "sig": { "alg": "ed25519", "key": "ed25519:<revoker>", "value": "..." }
+  "revocation": {
+    "v": "stozher/0.1", "kind": "revocation",
+    "revokes": "<mandate-id>",
+    "revoked-at": "2026-08-01T10:00:00.000Z",
+    "reason": "laptop lost",
+    "sig": { "alg": "ed25519", "key": "ed25519:<revoker>", "value": "..." }
+  },
+  "sig": { "alg": "ed25519", "key": "ed25519:<kernel>", "value": "..." }
 }
 ```
 
-- A revocation is valid iff signed by (a) the mandate's `grantor.key`, (b) the `grantor.key` of any
-  ancestor mandate in its chain, or (c) an enrolled human root. Otherwise
-  `revocation-not-authorized`.
+**Why the object is nested rather than the envelope being the revocation.** The revoker's signature
+has to cover what they decided, and it must be producible **offline** — a root whose laptop is the
+only place their seed exists is the person most likely to need this. An envelope's signature covers
+`stream`, `seq` and `prev-hash`, which only the kernel knows at the moment of append, so signing the
+envelope would force the revoker's seed and the network into one process. That is exactly the split
+`spec/06 §1.3` preserves for approvals, and revocation is the operation where it matters most.
+
+So: **the revoker signs the object, the kernel signs the envelope.** The envelope's signature
+attests receipt and chain position and nothing about authority; the authority is the inner `sig`,
+and it is what §7's authorization rule below is evaluated against.
+
+**The top-level members are a projection of the inner object and MUST agree with it.** `revokes`,
+`revoked-at` and `reason` are duplicated so the store can index and query a revocation without
+opening the nested object, in the same way `decision-of` is duplicated out of `decision`. A mismatch
+on any of them is `revocation-object-mismatch`: two spellings of one fact let an emitter choose
+which reader agrees with it, and a revocation is the last record that may be ambiguous.
+
+`revocation.revokes` and `revocation.revoked-at` are REQUIRED; `revocation.reason` is OPTIONAL and
+is present in the envelope iff it is present in the object.
+
+- A revocation is valid iff **`revocation.sig.key`** — the inner signature, not the envelope's — is
+  (a) the mandate's `grantor.key`, (b) the `grantor.key` of any ancestor mandate in its chain, or
+  (c) an enrolled human root. Otherwise `revocation-not-authorized`. The envelope's own signer is
+  the kernel and carries no authority here; a reader that checked it instead would accept a
+  revocation nobody with standing had asked for.
 - Effect on validity: a mandate revoked at `T` MUST be treated as invalid for every effect whose
   `emitted-at` is ≥ `T`, and so MUST every mandate delegated beneath it. Effects already recorded
   with `emitted-at < T` remain valid — the audit records what was permitted at the time, and

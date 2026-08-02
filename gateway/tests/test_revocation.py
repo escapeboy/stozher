@@ -35,7 +35,12 @@ def harness(tmp_path: Path) -> Harness:
 
 
 def revocation(signer: SigningKey, target: str, at: str) -> dict[str, Any]:
-    """A revocation object as it appears in the feed (§03 §7): the envelope *is* the object."""
+    """A revocation object as it appears in the feed (§03 §7).
+
+    The feed serves the *signed object*, not the envelope that carried it: the revoker signs this,
+    the emitter signs the envelope around it, and only this inner signature carries authority. So a
+    consumer of the feed re-checks exactly what is built here.
+    """
     return signer.sign(
         {
             "v": "stozher/0.1",

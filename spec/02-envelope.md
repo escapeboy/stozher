@@ -31,9 +31,10 @@ An envelope is a signed object (§01 §5). Top-level members:
 | `commitment-ref` | object | MAY | durable-object reference, §8 |
 | `correlation-ref` | string | MAY | §10 — **stored and indexed, never interpreted** |
 | `mandate` | object | `mandate` only | the granted mandate (§03) |
-| `revokes` | string(64 hex) | `revocation` only | `id()` of the revoked mandate (§03 §7) |
-| `revoked-at` | timestamp | `revocation` only | §03 §7 |
-| `reason` | string | `revocation` only, MAY | §03 §7 |
+| `revocation` | object | `revocation` only | the revoker's signed revocation object (§03 §7) |
+| `revokes` | string(64 hex) | `revocation` only | `id()` of the revoked mandate; MUST equal `revocation.revokes` |
+| `revoked-at` | timestamp | `revocation` only | MUST equal `revocation.revoked-at` |
+| `reason` | string | `revocation` only, MAY | present iff `revocation.reason` is, and equal to it |
 | `decision-of` | string(64 hex) | `gate-decision` only | the `request-hash` decided (§06 §5) |
 | `decision` | object | `gate-decision` only, MAY | §06 §5 |
 | `signal` | object | `signal` only | §07 §2 |
@@ -55,7 +56,7 @@ exists; §2.1 says where it may appear, and both are conditions on the same refu
 | `cognition` | resource was consumed with no external effect | MUST NOT | MUST NOT | `resource`, `cost` |
 | `aggregate` | folded record for mass `read` (§7) | MUST be `read` | MUST NOT | `window`, `counts`, `sample-hashes` |
 | `mandate` | a mandate was granted (§03) | MUST NOT | MUST NOT | `mandate` |
-| `revocation` | a mandate was revoked (§03 §7) | MUST NOT | MUST NOT | `revokes`, `revoked-at` (`reason` OPTIONAL) |
+| `revocation` | a mandate was revoked (§03 §7) | MUST NOT | MUST NOT | `revocation`, `revokes`, `revoked-at` (`reason` OPTIONAL) |
 | `policy-change` | a policy version was published (§05 §5) | MUST be `consequential` | MUST | `authorization` |
 | `gate-decision` | an approval or denial was recorded (§06 §5) | MUST NOT | MUST NOT | `decision-of` (`decision` OPTIONAL) |
 | `signal` | an inbound signal was received (§07) | MUST NOT | MUST NOT | `signal` |
@@ -300,6 +301,7 @@ Normative codes for structural validation, in addition to the encoding codes of 
 |---|---|
 | `envelope-version-unsupported` | `v` is not `"stozher/0.1"` |
 | `envelope-unknown-kind` | `kind` is not one of §2 |
+| `revocation-object-mismatch` | a `revocation` envelope's top-level `revokes`, `revoked-at` or `reason` disagrees with the signed object under `revocation` — §03 §7 duplicates them for indexing, and two spellings of one fact let an emitter choose which reader agrees with it |
 | `envelope-classification-unknown` | `classification` is not one of the four classes |
 | `envelope-outcome-unknown` | `execution.outcome` is not one of the five outcomes (§4) |
 | `schema-unknown-member` | a member not defined for this `kind`, at any of the levels listed above |

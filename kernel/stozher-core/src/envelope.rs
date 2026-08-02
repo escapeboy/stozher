@@ -167,7 +167,10 @@ fn kind_spec(kind: &str) -> Option<KindSpec> {
             forbidden_code: "",
         },
         "revocation" => KindSpec {
-            required: &["revokes", "revoked-at"],
+            // The revoker's signed object plus the members projected out of it for indexing
+            // (§03 §7). `revocation` is what carries authority; the rest is a queryable copy the
+            // ingest path checks for agreement.
+            required: &["revocation", "revokes", "revoked-at"],
             optional: &["reason"],
             forbidden: &[],
             forbidden_code: "",
@@ -208,6 +211,7 @@ fn sub_object_spec(name: &str) -> Option<(&'static [&'static str], &'static [&'s
             &[],
         ),
         "authorization" => (&["request", "decision"], &[]),
+        "revocation" => (&["revokes", "revoked-at", "sig"], &["v", "kind", "reason"]),
         "sig" => (&["alg", "key", "value"], &[]),
         "resource" => (&["kind", "name"], &[]),
         "window" => (&["from", "to"], &[]),

@@ -2697,10 +2697,21 @@
         },
         "revokes": "8ce5dc39ae3c21a22d1009d3ee3ec7e5c662d3d7e9c749f60f9264dcceb6d2d7",
         "revoked-at": "2026-07-26T09:19:00.000Z",
+        "revocation": {
+          "v": "stozher/0.1",
+          "kind": "revocation",
+          "revokes": "8ce5dc39ae3c21a22d1009d3ee3ec7e5c662d3d7e9c749f60f9264dcceb6d2d7",
+          "revoked-at": "2026-07-26T09:19:00.000Z",
+          "sig": {
+            "alg": "ed25519",
+            "key": "ed25519:4a0beffbc56f699c7fc1eb522d5298e2e4210d054a0a33dbeea70751f61e2bfc",
+            "value": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+          }
+        },
         "sig": {
           "alg": "ed25519",
           "key": "ed25519:4a0beffbc56f699c7fc1eb522d5298e2e4210d054a0a33dbeea70751f61e2bfc",
-          "value": "aef4c87061b50637a43245f1c9a2725cf8b2a0f618f3e0a7ae5cbdf00628cea702751917af4a24b93b549f804627833b6a98211e8de3420c04df4b26577cb100"
+          "value": "3cd7256e793f7db399ad7bd4ff841757f60cbb31526c9bbdbe928af24f16121df28d23c36b482025330197e95c4573c8e41012eeb4e8c9068528f05a8b5f390b"
         }
       },
       "expected": {
@@ -2725,6 +2736,17 @@
         },
         "revokes": "8ce5dc39ae3c21a22d1009d3ee3ec7e5c662d3d7e9c749f60f9264dcceb6d2d7",
         "revoked-at": "2026-07-26T09:19:00.000Z",
+        "revocation": {
+          "v": "stozher/0.1",
+          "kind": "revocation",
+          "revokes": "8ce5dc39ae3c21a22d1009d3ee3ec7e5c662d3d7e9c749f60f9264dcceb6d2d7",
+          "revoked-at": "2026-07-26T09:19:00.000Z",
+          "sig": {
+            "alg": "ed25519",
+            "key": "ed25519:4a0beffbc56f699c7fc1eb522d5298e2e4210d054a0a33dbeea70751f61e2bfc",
+            "value": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+          }
+        },
         "trigger": {
           "signal-ref": "8ce5dc39ae3c21a22d1009d3ee3ec7e5c662d3d7e9c749f60f9264dcceb6d2d7",
           "standing-mandate-ref": "8ce5dc39ae3c21a22d1009d3ee3ec7e5c662d3d7e9c749f60f9264dcceb6d2d7"
@@ -2732,7 +2754,7 @@
         "sig": {
           "alg": "ed25519",
           "key": "ed25519:4a0beffbc56f699c7fc1eb522d5298e2e4210d054a0a33dbeea70751f61e2bfc",
-          "value": "2f129aabc47accdeccc78071e12bfe04ec81d246b0e123d6b6ea641d38a72d06207f9bd02bb9ea6805f5f28658dbff1b5e5795fc3bf51c05b145b54284e8af0f"
+          "value": "2c2c31587b9d88d5fd1c8d25067987fd7fc02e694f16eed93ed7088010c501a5a021c00daabd3b7640e312f82c51b9512d1666551072d5d1469411c46c40d308"
         }
       },
       "expected": {
@@ -2757,11 +2779,22 @@
         },
         "revokes": "8ce5dc39ae3c21a22d1009d3ee3ec7e5c662d3d7e9c749f60f9264dcceb6d2d7",
         "revoked-at": "2026-07-26T09:19:00.000Z",
+        "revocation": {
+          "v": "stozher/0.1",
+          "kind": "revocation",
+          "revokes": "8ce5dc39ae3c21a22d1009d3ee3ec7e5c662d3d7e9c749f60f9264dcceb6d2d7",
+          "revoked-at": "2026-07-26T09:19:00.000Z",
+          "sig": {
+            "alg": "ed25519",
+            "key": "ed25519:4a0beffbc56f699c7fc1eb522d5298e2e4210d054a0a33dbeea70751f61e2bfc",
+            "value": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+          }
+        },
         "memory-ref": "svod://note/why-this-was-done",
         "sig": {
           "alg": "ed25519",
           "key": "ed25519:4a0beffbc56f699c7fc1eb522d5298e2e4210d054a0a33dbeea70751f61e2bfc",
-          "value": "2a3b6b4bbf950a4265844800b00f50ee9cb35e5bc8825981f9aa0162fdbaf1d73759f5de71f903a13771a2809324683d274c919dfe6372757b19eacc58562200"
+          "value": "3b946328ba92a2d36e9c5fac3e1ed18d4af40417d230d5a18131f2d4fb5c44afaec007cec30ee15a434ca11a5f96e7faf8e6cca05789bd08a1f67c5fd3d39103"
         }
       },
       "expected": {
@@ -2786,11 +2819,22 @@
         },
         "revokes": "8ce5dc39ae3c21a22d1009d3ee3ec7e5c662d3d7e9c749f60f9264dcceb6d2d7",
         "revoked-at": "2026-07-26T09:19:00.000Z",
+        "revocation": {
+          "v": "stozher/0.1",
+          "kind": "revocation",
+          "revokes": "8ce5dc39ae3c21a22d1009d3ee3ec7e5c662d3d7e9c749f60f9264dcceb6d2d7",
+          "revoked-at": "2026-07-26T09:19:00.000Z",
+          "sig": {
+            "alg": "ed25519",
+            "key": "ed25519:4a0beffbc56f699c7fc1eb522d5298e2e4210d054a0a33dbeea70751f61e2bfc",
+            "value": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+          }
+        },
         "correlation-ref": "trace-4f2b",
         "sig": {
           "alg": "ed25519",
           "key": "ed25519:4a0beffbc56f699c7fc1eb522d5298e2e4210d054a0a33dbeea70751f61e2bfc",
-          "value": "67faaf517ed5fa23dfd71f79b1d13c5a729299f4fe9301b959b283885c9a32c49da2e40f2cda00091bb8f35cba871fb6dc89e2589176db6aaa8b1052f595e106"
+          "value": "8f697c6d4118af3cad650096dde479e40d41be1fabd977ab86ad35f8f1b78ad9b4cda2abaf86bf4e51b3d6d6f69ccf844d7e13bdd1e1b3fa2d5a5d922233e304"
         }
       },
       "expected": {
@@ -2815,11 +2859,22 @@
         },
         "revokes": "8ce5dc39ae3c21a22d1009d3ee3ec7e5c662d3d7e9c749f60f9264dcceb6d2d7",
         "revoked-at": "2026-07-26T09:19:00.000Z",
+        "revocation": {
+          "v": "stozher/0.1",
+          "kind": "revocation",
+          "revokes": "8ce5dc39ae3c21a22d1009d3ee3ec7e5c662d3d7e9c749f60f9264dcceb6d2d7",
+          "revoked-at": "2026-07-26T09:19:00.000Z",
+          "sig": {
+            "alg": "ed25519",
+            "key": "ed25519:4a0beffbc56f699c7fc1eb522d5298e2e4210d054a0a33dbeea70751f61e2bfc",
+            "value": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+          }
+        },
         "policy-version": "2026.07.1",
         "sig": {
           "alg": "ed25519",
           "key": "ed25519:4a0beffbc56f699c7fc1eb522d5298e2e4210d054a0a33dbeea70751f61e2bfc",
-          "value": "ab84347dc89beda9cab0c20f2334d753c61dbfa36050be3d7562ee8afa956835039f345cb741b2bb5bc95791a4325636a893b11ccd92537d2d7681694662ff02"
+          "value": "8ff04275eb05076b3475011cb5ed8f98975e4b4e802f86907f8539417b8986d3297bbd0cd932512dea98c3efb284ae3d0c1975a3afd99e7c54e891a147402d07"
         }
       },
       "expected": {
@@ -2844,6 +2899,17 @@
         },
         "revokes": "8ce5dc39ae3c21a22d1009d3ee3ec7e5c662d3d7e9c749f60f9264dcceb6d2d7",
         "revoked-at": "2026-07-26T09:19:00.000Z",
+        "revocation": {
+          "v": "stozher/0.1",
+          "kind": "revocation",
+          "revokes": "8ce5dc39ae3c21a22d1009d3ee3ec7e5c662d3d7e9c749f60f9264dcceb6d2d7",
+          "revoked-at": "2026-07-26T09:19:00.000Z",
+          "sig": {
+            "alg": "ed25519",
+            "key": "ed25519:4a0beffbc56f699c7fc1eb522d5298e2e4210d054a0a33dbeea70751f61e2bfc",
+            "value": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+          }
+        },
         "commitment-ref": {
           "object-type": "github.ticket",
           "object-id": "acme/backend#412",
@@ -2852,7 +2918,7 @@
         "sig": {
           "alg": "ed25519",
           "key": "ed25519:4a0beffbc56f699c7fc1eb522d5298e2e4210d054a0a33dbeea70751f61e2bfc",
-          "value": "ddd37f9e98814dc3e8f8d13218ec4cbf4e5defce270aed5825123817f835012d02e67b566d23caf3be65a5c97a3c863a68c9342aeb1515ff8b3bfd177beb9207"
+          "value": "98e8c783474c485ba43873d8aad3a0d8098d5d3c3b508eda0eb0d2cef9fea3315a6d4e44c564117b3fe5253da6fdfe2f9de77b2ba42e54e60c17a1493a35610a"
         }
       },
       "expected": {

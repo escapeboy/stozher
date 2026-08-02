@@ -65,7 +65,17 @@ fn minimal(kind: &str) -> Value {
         }),
         "mandate" => json!({ "mandate": { "kind": "mandate" } }),
         "revocation" => {
-            json!({ "revokes": "a".repeat(64), "revoked-at": "2026-07-26T09:00:00.000Z" })
+            // §03 §7: the signed object, plus the projection of it the store indexes. The two must
+            // agree, so the fixture builds them from the same values rather than two literals.
+            json!({
+                "revokes": "a".repeat(64),
+                "revoked-at": "2026-07-26T09:00:00.000Z",
+                "revocation": {
+                    "revokes": "a".repeat(64),
+                    "revoked-at": "2026-07-26T09:00:00.000Z",
+                    "sig": { "alg": "ed25519", "key": format!("ed25519:{}", "b".repeat(64)), "value": "c".repeat(128) }
+                }
+            })
         }
         "gate-decision" => json!({ "decision-of": "a".repeat(64) }),
         "signal" => json!({ "signal": {

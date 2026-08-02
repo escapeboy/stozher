@@ -430,3 +430,47 @@ async fn envelopes_can_be_filtered_by_kind() {
         Some("revocation")
     );
 }
+
+/// The envelope's copy of a revocation and the signed object it carries may not disagree.
+///
+/// §03 §7 duplicates `revokes`, `revoked-at` and `reason` out of the signed object so the store can
+/// index a revocation without opening it — the same shape `decision-of` has beside `decision`.
+/// Duplication is only safe while the two cannot diverge: otherwise an emitter chooses which reader
+/// agrees with it, and a revocation is the last record in this system that may be ambiguous.
+///
+/// The attack this refuses: sign an object revoking a mandate nobody minds losing, then project a
+/// different `revokes` into the envelope. A reader that indexed the projection and a reader that
+/// re-checked the signature would then disagree about which mandate is dead.
+#[tokio::test]
+async fn a_revocation_envelope_cannot_disagree_with_the_object_it_carries() {
+    let world = world().await;
+    let honest = world
+        .revocation(&world.root, &world.standing_mandate, NOW)
+        .await;
+    // The control: the honest one is accepted, so what follows is about the mismatch and not about
+    // the fixture being malformed.
+    world.accept(&honest, &[]).await;
+
+    for member in ["revokes", "revoked-at", "reason"] {
+        let mut forged = honest.clone();
+        forged[member] = json!(match member {
+            "revokes" => "f".repeat(64),
+            // Deliberately not `NOW`: the honest fixture already carries that, so a "forgery"
+            // setting it would produce byte-identical bytes and be accepted as an idempotent
+            // retry — a green test proving nothing. Caught by printing the outcome instead of
+            // trusting the fixture.
+            "revoked-at" => "2026-07-26T08:59:00.000Z".to_owned(),
+            _ => "a different reason".to_owned(),
+        });
+        // Re-sign so the envelope itself verifies: the point is that a *valid* envelope whose
+        // projection contradicts its object is still refused, not that tampering breaks a signature.
+        let forged = world.root.sign(&forged);
+        // `reject` asserts the reason code; the rejection record is where the detail lands, and it
+        // must name which member disagreed — "they differ" sends an operator to read both objects.
+        // `reject` asserts the code; the detail must also name *which* member disagreed, because
+        // "they differ" sends an operator to diff two objects by hand.
+        world
+            .reject(&forged, &[], "revocation-object-mismatch")
+            .await;
+    }
+}

@@ -50,7 +50,10 @@ _KINDS: dict[str, tuple[tuple[str, ...], tuple[str, ...]]] = {
         (),
     ),
     "mandate": (("mandate",), ()),
-    "revocation": (("revokes", "revoked-at"), ("reason",)),
+    # §03 §7: the revoker signs the object under `revocation`; the envelope's own `sig` is the
+    # emitter's and attests receipt, not authority. The other three are a projection of it,
+    # kept so a store can index a revocation without opening it, and checked for agreement.
+    "revocation": (("revocation", "revokes", "revoked-at"), ("reason",)),
     "policy-change": (
         ("mandate-ref", "policy-version", "classification", "execution", "authorization"),
         # Not `commitment-ref`: §02 §8 makes it a durable-object transition, and publishing a
@@ -84,6 +87,10 @@ _NESTED: dict[str, tuple[tuple[str, ...], tuple[str, ...]]] = {
     # §07 §4. Absent here for the whole of v0.1, so a `trigger` was permitted on an effect and its
     # members were never looked at — the one implementation checked them, this one accepted anything.
     "trigger": (("signal-ref", "standing-mandate-ref"), ("rule",)),
+    # §03 §7. The nested object the revoker signed. `v` and `kind` are optional here because
+    # they are the object's own, not the envelope's, and an implementation that omitted them
+    # would still have signed the same three facts.
+    "revocation": (("revokes", "revoked-at", "sig"), ("v", "kind", "reason")),
     # §07 §2. Absent here since v0.1, so a `signal` envelope's one required member was never looked
     # at: the other implementation checks it, this one accepted `"signal": {}` and any member inside
     # it — including one an implementation might read as an instruction (§07 §3).
@@ -203,6 +210,8 @@ def validate(envelope: Any) -> None:
         _trigger(envelope["trigger"])
     if "signal" in envelope:
         _signal(envelope["signal"])
+    if kind == "revocation":
+        _revocation(envelope)
     if kind == "aggregate":
         _aggregate(envelope)
     if kind == "cognition":
@@ -260,6 +269,27 @@ def _trigger(trigger: dict[str, Any]) -> None:
     _hash(trigger["standing-mandate-ref"], "trigger.standing-mandate-ref")
     if "rule" in trigger and not isinstance(trigger["rule"], str):
         raise EnvelopeError("schema-type-mismatch", "trigger.rule must be a string")
+
+
+def _revocation(envelope: dict[str, Any]) -> None:
+    """§03 §7: the top-level members are a projection of the signed object and must agree with it.
+
+    `revokes`, `revoked-at` and `reason` are duplicated out of `revocation` so a store can index a
+    revocation without opening it — the same shape `decision-of` has beside `decision`. Duplication
+    is only safe while the two cannot disagree: otherwise an emitter picks which reader agrees with
+    it, and a revocation is the last record in this system that may be ambiguous.
+    """
+    object_ = envelope["revocation"]
+    if not isinstance(object_, dict):
+        raise EnvelopeError("schema-type-mismatch", "revocation must be an object")
+    _hash(object_["revokes"], "revocation.revokes")
+    _timestamp(object_["revoked-at"], "revocation.revoked-at")
+    for name in ("revokes", "revoked-at", "reason"):
+        if envelope.get(name) != object_.get(name):
+            raise EnvelopeError(
+                "revocation-object-mismatch",
+                f"the envelope's {name} does not match the signed revocation object",
+            )
 
 
 def _signal(signal: dict[str, Any]) -> None:

@@ -937,6 +937,15 @@ def revocation_env(seq: int, prev: str | None, key: Key, **over: Any) -> dict:
         "identity": {"subject": key.label, "key": key.key_id, "component": "kernel"},
         "revokes": EVIDENCE_HASH,
         "revoked-at": "2026-07-26T09:19:00.000Z",
+        # §03 §7: the revoker signs this object; the envelope carries it and projects three of its
+        # members out for indexing. The two must agree, so both come from the same literals.
+        "revocation": {
+            "v": V,
+            "kind": "revocation",
+            "revokes": EVIDENCE_HASH,
+            "revoked-at": "2026-07-26T09:19:00.000Z",
+            "sig": {"alg": "ed25519", "key": key.key_id, "value": "c" * 128},
+        },
     }
     env.update(over)
     return env

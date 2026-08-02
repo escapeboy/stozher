@@ -652,10 +652,24 @@ impl World {
         self.agent.sign(&body)
     }
 
-    /// A `revocation` envelope. The envelope **is** the revocation object, so it is signed by the
-    /// revoker and its `identity.key` is the revoker's key (§02 §2, §03 §7).
+    /// A `revocation` envelope: the revoker signs the **object**, the kernel signs the envelope.
+    ///
+    /// §03 §7. The revoker's signature must be producible offline — a root whose seed exists only on
+    /// their own machine is the person most likely to need to revoke — and an envelope's signature
+    /// covers `stream`, `seq` and `prev-hash`, which only the kernel knows at append. So the two
+    /// signatures are different signatures over different things, and only the inner one carries
+    /// authority.
     pub async fn revocation(&self, revoker: &TestKey, target: &str, at: &str) -> Value {
         let (seq, prev) = self.head(CORE_STREAM).await;
+        let object = revoker.sign(&json!({
+            "v": stozher_core::VERSION,
+            "kind": "revocation",
+            "revokes": target,
+            "revoked-at": at,
+            "reason": "laptop lost"
+        }));
+        // The envelope's signer is whoever appends it — here the revoker, which is fine because the
+        // envelope signature attests receipt and chain position, not authority.
         revoker.sign(&json!({
             "v": stozher_core::VERSION,
             "kind": "revocation",
@@ -666,7 +680,8 @@ impl World {
             "identity": { "subject": revoker.subject, "key": revoker.id.as_str(), "component": "kernel" },
             "revokes": target,
             "revoked-at": at,
-            "reason": "laptop lost"
+            "reason": "laptop lost",
+            "revocation": object
         }))
     }
 
