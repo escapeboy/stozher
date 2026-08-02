@@ -298,11 +298,24 @@ buys it (ADR-0009 §2).
 ### Changing policy
 
 ```sh
+K="docker run --rm -i -u $(id -u):$(id -g) -v $PWD:/work -w /work ${STOZHER_KERNEL_IMAGE:-stozher-kernel:0.1.0}"
+
+# 1. start from the document actually in force, not from the shipped baseline
+$K policy-draft --url http://kernel:8787 --version 2026.08.1 --out config/policy-next.json
+$EDITOR config/policy-next.json
+# 2. sign it with the organization's policy key (role 4'), on your own machine
+$K policy-sign --document config/policy-next.json --key secrets/operator/operator.seed \
+               --out config/policy-2026.08.1.json
+# 3. park the change; 4. a root answers it; 5. publish what they approved
 ./bin/stozher-publish-policy config/policy-2026.08.1.json --root human:ivan --mandate <64 hex>
-# ... a root answers the request it parked ...
 ./bin/stozher-approve <request-hash> --root human:ivan
 ./bin/stozher-publish-policy config/policy-2026.08.1.json --root human:ivan --resume
 ```
+
+(`policy-draft` needs the kernel's network; the other `$K` line does not, and `--network none` on it
+is a reasonable habit. Step 1 starts from `/v1/policy/current` rather than from the baseline for a
+reason worth stating: a deployment three versions in would otherwise silently revert every
+classification it has added since.)
 
 **Policy is audited by the mechanism it enforces** (`spec/05 §5`). A policy change is a
 `consequential` effect: judged by the policy *already in force*, carried by a mandate, and approved

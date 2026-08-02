@@ -5,8 +5,8 @@
 //! generator would be a dependency in a product whose pitch is a minimal auditable surface
 //! (ADR-0003), and there is nothing here it would make clearer.
 //!
-//! Eight subcommands — `keygen`, `identity`, `token`, `genesis`, `grant`, `decide`, `revoke`,
-//! `policy-request` — open no socket, read no configuration and touch no database. They are the
+//! Nine subcommands — `keygen`, `identity`, `token`, `genesis`, `grant`, `decide`, `revoke`,
+//! `policy-request`, `policy-sign` — open no socket, read no configuration and touch no database. They are the
 //! operator's half of the install and of every authority decision after it, and they run on the
 //! operator's own machine so that a private seed never has to exist on the server.
 
@@ -65,6 +65,10 @@ usage:
                           hand an action request to the pending queue
   stozher-kernel policy-current --url <base> [--token-env <VAR>]
                           print the policy version in force — what --in-force takes
+  stozher-kernel policy-draft --url <base> --version <new> --out <path> [--token-env <VAR>]
+                          write the policy in force out as a draft of <new>, signature stripped
+  stozher-kernel policy-sign --document <path> --key <path> --out <path>
+                          sign an edited draft with the organization policy key (role 4')
   stozher-kernel policy-publish --url <base> --request <path> --document <path> --key <path>
                           [--stream <name>] [--role <n>] [--index <n>] [--token-env <VAR>]
                           [--config <path>]
@@ -77,13 +81,14 @@ usage:
 
 The kernel refuses to start if its seed file is readable by anyone but its owner (spec 09 section 8).
 
-`keygen`, `identity`, `token`, `genesis`, `grant`, `decide`, `revoke` and `policy-request` open no
-socket and read no configuration: they run in the operator's own process, on the operator's own
+`keygen`, `identity`, `token`, `genesis`, `grant`, `decide`, `revoke`, `policy-request` and
+`policy-sign` open no socket and read no configuration: they run in the operator's own process, on the operator's own
 machine, so a private seed never has to exist on the server. `genesis` prints two ordinary
 POST /v1/ingest bodies; nothing about them is privileged and every ingest check runs over them.
 
-Publishing a policy version after the install is four commands, and the split is the same one:
-`policy-request` builds the question offline, `park` puts it in the queue, a root answers it with
+Publishing a policy version after the install is six commands, and the split is the same one:
+`policy-draft` fetches the document in force to edit, `policy-sign` signs the edit with the
+organization's policy key, `policy-request` builds the question offline, `park` puts it in the queue, a root answers it with
 `decide` + `answer`, and `policy-publish` records the result. The command that holds the root key
 never opens a socket; the command that opens the socket holds no root key.
 
@@ -178,6 +183,8 @@ fn main() -> ExitCode {
         "policy-request" => policy_request(&arguments),
         "park" => park(&arguments),
         "policy-current" => policy_current(&arguments),
+        "policy-draft" => policy_draft(&arguments),
+        "policy-sign" => policy_sign(&arguments),
         "policy-publish" => policy_publish(&arguments),
         "conformance" => conformance(&arguments),
         "help" | "--help" | "-h" => {
@@ -914,6 +921,138 @@ fn policy_request(arguments: &[String]) -> ExitCode {
     println!("{hash}");
     eprintln!("wrote {out} — park it, have a root approve {hash}, then policy-publish");
     ExitCode::SUCCESS
+}
+
+/// Write the policy in force out as a draft of the next version, for a human to edit.
+///
+/// The starting point for a change has to be the document that is actually in force, not the
+/// baseline the ceremony shipped: a deployment three versions in would otherwise silently revert
+/// every classification it has added. The signature is stripped, because what comes back is not a
+/// policy — it is a file to edit and then sign with [`policy_sign`].
+fn policy_draft(arguments: &[String]) -> ExitCode {
+    let (Some(url), Some(version), Some(out)) = (
+        value(arguments, "--url"),
+        value(arguments, "--version"),
+        value(arguments, "--out"),
+    ) else {
+        eprintln!("policy-draft requires --url <base>, --version <new> and --out <path>");
+        return ExitCode::FAILURE;
+    };
+    let Some(token) = credential(arguments) else {
+        return ExitCode::FAILURE;
+    };
+    let answer = match stozher_kernel::operator::read(url, &token, "v1/policy/current") {
+        Ok(answer) if answer.ok() => answer,
+        Ok(answer) => {
+            eprintln!("the kernel refused it ({}): {}", answer.status, answer.body);
+            return ExitCode::FAILURE;
+        }
+        Err(e) => {
+            eprintln!("policy-draft: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let Ok(mut document) = serde_json::from_str::<serde_json::Value>(&answer.body) else {
+        eprintln!("the kernel's policy document is not JSON");
+        return ExitCode::FAILURE;
+    };
+    let Some(map) = document.as_object_mut() else {
+        eprintln!("the kernel's policy document is not an object");
+        return ExitCode::FAILURE;
+    };
+    let in_force = map
+        .get("policy-version")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("<unknown>")
+        .to_owned();
+    if in_force == version {
+        eprintln!("{version} is already in force — a draft of it would replace it with itself");
+        return ExitCode::FAILURE;
+    }
+    map.remove("sig");
+    map.insert(
+        "policy-version".to_owned(),
+        serde_json::Value::from(version),
+    );
+    match serde_json::to_string_pretty(&document) {
+        Ok(text) => {
+            if let Err(e) = std::fs::write(out, format!("{text}\n")) {
+                eprintln!("writing {out}: {e}");
+                return ExitCode::FAILURE;
+            }
+            eprintln!("wrote {out} from {in_force} — edit it, then policy-sign it");
+            ExitCode::SUCCESS
+        }
+        Err(e) => {
+            eprintln!("rendering the draft: {e}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
+/// Sign a policy document with the organization's policy key — §05 §2.
+///
+/// Offline, in the operator's own process. The kernel verifies every policy document against the
+/// `policy-key` in its configuration and holds no such key itself, so this is the only place a
+/// policy version can be made valid — and, like `decide` and `revoke`, it opens no socket.
+fn policy_sign(arguments: &[String]) -> ExitCode {
+    let (Some(document_path), Some(key_path), Some(out)) = (
+        value(arguments, "--document"),
+        value(arguments, "--key"),
+        value(arguments, "--out"),
+    ) else {
+        eprintln!("policy-sign requires --document <path>, --key <path> and --out <path>");
+        return ExitCode::FAILURE;
+    };
+    let document: serde_json::Value = match std::fs::read(document_path)
+        .map_err(|e| e.to_string())
+        .and_then(|bytes| serde_json::from_slice(&bytes).map_err(|e| e.to_string()))
+    {
+        Ok(document) => document,
+        Err(e) => {
+            eprintln!("reading {document_path}: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
+    if document.get("sig").is_some() {
+        // Signing over a document that still carries a signature would sign the old signature in
+        // as data. `policy-draft` strips it; a document that has one is one nobody edited.
+        eprintln!("{document_path} still carries a sig — sign the draft, not a published document");
+        return ExitCode::FAILURE;
+    }
+    if document["policy-version"]
+        .as_str()
+        .unwrap_or_default()
+        .is_empty()
+    {
+        eprintln!("{document_path} carries no policy-version");
+        return ExitCode::FAILURE;
+    }
+    // Role 4' — the organization's policy key (§01 §6), not the root and not the agent subject.
+    let key = match seed_key(arguments, key_path, keys::ROLE_ORG_POLICY) {
+        Ok(key) => key,
+        Err(e) => {
+            eprintln!("{e}");
+            return ExitCode::FAILURE;
+        }
+    };
+    match key
+        .sign(&document)
+        .and_then(|signed| stozher_core::jcs::canonicalize(&signed))
+    {
+        Ok(canonical) => {
+            if let Err(e) = std::fs::write(out, format!("{canonical}\n")) {
+                eprintln!("writing {out}: {e}");
+                return ExitCode::FAILURE;
+            }
+            eprintln!("wrote {out} — signed by {}", key.id());
+            ExitCode::SUCCESS
+        }
+        Err(e) => {
+            eprintln!("signing: {e}");
+            ExitCode::FAILURE
+        }
+    }
 }
 
 /// Print the policy version currently in force, and nothing else.

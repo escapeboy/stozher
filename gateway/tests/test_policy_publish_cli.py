@@ -36,7 +36,7 @@ import pytest
 
 from stozher_gateway import clock as clock_module
 from stozher_gateway.canonical import object_hash
-from stozher_gateway.crypto import ROLE_AGENT, ROLE_HUMAN_ROOT, derive
+from stozher_gateway.crypto import ROLE_AGENT, ROLE_HUMAN_ROOT, ROLE_POLICY, derive
 from stozher_gateway.signing import SigningKey
 
 from .support import Kernel, baseline_policy, build_kernel
@@ -73,6 +73,10 @@ def world(tmp_path_factory: pytest.TempPathFactory) -> Any:
     # against a root the kernel never enrolled, and every refusal would be the fixture's fault.
     kernel.human_root = SigningKey(derive(seed, ROLE_HUMAN_ROOT, 0), "human:ivan")
     kernel.bootstrap = SigningKey(derive(seed, ROLE_AGENT, 0), "agent:bootstrap")
+    # And the organization's policy key at 4', because `policy-sign` reads it from the same file.
+    # Without this the fixture's policy key is a constant no seed yields, and a signature the
+    # kernel accepts here would be one no operator could produce.
+    kernel.policy_key = SigningKey(derive(seed, ROLE_POLICY, 0), "org:policy")
     kernel.start()
     try:
         yield kernel, seed_file, root
@@ -170,6 +174,57 @@ def test_an_operator_can_publish_a_second_policy_version_with_the_shipped_comman
     assert status == 200
     assert current["policy-version"] == NEXT_VERSION
     assert object_hash(current) == object_hash(document)
+
+
+def test_the_next_policy_is_drafted_from_the_one_in_force_and_signed_offline(world: Any) -> None:
+    # Where the document an operator publishes comes from. Until these two verbs existed there was
+    # no answer: `genesis` builds the baseline inside itself, nothing signs a policy document, and
+    # the publish path therefore began with a file only this repository's test suites could produce.
+    kernel, seed_file, root = world
+    draft_path = root / "draft.json"
+    signed_path = root / "signed.json"
+
+    drafted = run(
+        "policy-draft",
+        "--url", kernel.url,
+        "--version", "2026.09.1",
+        "--out", str(draft_path),
+        token=kernel.token,
+    )
+    assert drafted.returncode == 0, drafted.stderr.decode()
+    draft = json.loads(draft_path.read_text())
+    # The draft starts from the document actually in force, not from the shipped baseline: a
+    # deployment three versions in would otherwise revert every classification it had added.
+    assert draft["policy-version"] == "2026.09.1"
+    assert "sig" not in draft, "a draft carrying a signature would sign the old one in as data"
+
+    draft["classification"]["by-action"]["slack.post_message"] = "benign"
+    draft_path.write_text(json.dumps(draft))
+
+    signed = run(
+        "policy-sign",
+        "--document", str(draft_path),
+        "--key", str(seed_file),
+        "--out", str(signed_path),
+        token=kernel.token,
+    )
+    assert signed.returncode == 0, signed.stderr.decode()
+    document = json.loads(signed_path.read_text())
+    # Role 4' — the organization's policy key, which is what the kernel's `policy-key` names and
+    # the only key a policy document verifies under.
+    assert document["sig"]["key"] == kernel.policy_key.id
+    assert document["classification"]["by-action"]["slack.post_message"] == "benign"
+
+    # Signing an already-signed document is refused rather than silently nesting a signature.
+    again = run(
+        "policy-sign",
+        "--document", str(signed_path),
+        "--key", str(seed_file),
+        "--out", str(root / "twice.json"),
+        token=kernel.token,
+    )
+    assert again.returncode != 0
+    assert "still carries a sig" in again.stderr.decode()
 
 
 def test_publishing_a_document_the_approval_did_not_name_is_refused_before_anything_is_signed(
