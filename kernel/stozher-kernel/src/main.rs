@@ -73,6 +73,14 @@ usage:
                           [--stream <name>] [--role <n>] [--index <n>] [--token-env <VAR>]
                           [--config <path>]
                           publish the approved policy: read the decision, extend the chain, submit
+  stozher-kernel root-request --requester <human:name> --key <path> --mandate <64 hex>
+                          --in-force <version> --out <path>
+                          (--enrol <ed25519:...> --subject <human:name> | --retire <ed25519:...>)
+                          [--evidence-out <path>] [--minutes <n>] [--config <path>]
+                          build the action request that changes the root set (spec 03 section 6)
+  stozher-kernel root-publish --url <base> --request <path> --key <path>
+                          [--evidence <path>] [--stream <name>] [--token-env <VAR>] [--config <path>]
+                          record the approved root-set change
   stozher-kernel conformance --manifest <path> --component <command>
                           [--vectors <dir>] [--at <timestamp>]
                           run spec 08 section 4 against a component and print the result;
@@ -186,6 +194,8 @@ fn main() -> ExitCode {
         "policy-draft" => policy_draft(&arguments),
         "policy-sign" => policy_sign(&arguments),
         "policy-publish" => policy_publish(&arguments),
+        "root-request" => root_request(&arguments),
+        "root-publish" => root_publish(&arguments),
         "conformance" => conformance(&arguments),
         "help" | "--help" | "-h" => {
             print!("{USAGE}");
@@ -1292,6 +1302,326 @@ fn policy_publish(arguments: &[String]) -> ExitCode {
             }
             Err(e) => {
                 eprintln!("policy-publish: {e}");
+                return ExitCode::FAILURE;
+            }
+        }
+    }
+    eprintln!("{stream} stayed contended for {ATTEMPTS} attempts; nothing was recorded");
+    println!("{last}");
+    ExitCode::FAILURE
+}
+
+/// Build the action request that asks to change the root set — §03 §6.
+///
+/// Offline. An enrolment also writes the **evidence** naming the human, because §03 §6 requires it
+/// to be submitted with the change and bound by `args-hash`: the name recorded in the root set is
+/// then the name a second root approved, not one the emitter chose afterwards.
+///
+/// The requester is a root acting directly, which §03 §1 says still needs a mandate somebody else
+/// granted — so `--mandate` here is a mandate from the *other* root. That is the whole of why §03
+/// §6 says a one-root deployment cannot change its root set, and it is checked at ingest, not here.
+fn root_request(arguments: &[String]) -> ExitCode {
+    let value = |name: &str| value(arguments, name);
+    let (enrol, retire) = (value("--enrol"), value("--retire"));
+    let (Some(requester), Some(key_path), Some(mandate), Some(in_force), Some(out)) = (
+        value("--requester"),
+        value("--key"),
+        value("--mandate"),
+        value("--in-force"),
+        value("--out"),
+    ) else {
+        eprintln!(
+            "root-request requires --requester <human:name>, --key <path>, --mandate <64 hex>, \
+             --in-force <version> and --out <path>"
+        );
+        return ExitCode::FAILURE;
+    };
+    let (action, target_key) = match (enrol, retire) {
+        (Some(key), None) => ("kernel.enroll_root", key),
+        (None, Some(key)) => ("kernel.retire_root", key),
+        _ => {
+            eprintln!("root-request requires exactly one of --enrol <ed25519:…> or --retire <…>");
+            return ExitCode::FAILURE;
+        }
+    };
+    if let Err(e) = stozher_core::signed::KeyId::parse(target_key) {
+        eprintln!("{target_key} is not a key identifier: {}", e.detail());
+        return ExitCode::FAILURE;
+    }
+    // The evidence for an enrolment, and the hash the approval will be bound to. A retirement names
+    // only the key: the subject it was enrolled under is already in the root set (§03 §6).
+    let evidence = if action == "kernel.enroll_root" {
+        let Some(subject) = value("--subject") else {
+            eprintln!(
+                "--subject human:<name> is required to enrol: the root set records the human"
+            );
+            return ExitCode::FAILURE;
+        };
+        if !subject.starts_with("human:") || subject.len() <= "human:".len() {
+            eprintln!("--subject must be a human:<name> subject");
+            return ExitCode::FAILURE;
+        }
+        Some(serde_json::json!({ "subject": subject, "key": target_key }))
+    } else {
+        None
+    };
+    let args_hash = match evidence.as_ref().map_or_else(
+        || {
+            // A retirement carries no arguments, so `args-hash` commits to the empty object rather
+            // than to nothing: §06 §1.1 has no representation for "no arguments at all".
+            stozher_core::jcs::object_hash(&serde_json::json!({}))
+        },
+        stozher_core::jcs::object_hash,
+    ) {
+        Ok(hash) => hash,
+        Err(e) => {
+            eprintln!("hashing the evidence: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let key = match seed_key(arguments, key_path, keys::ROLE_HUMAN_ROOT) {
+        Ok(key) => key,
+        Err(e) => {
+            eprintln!("{e}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let now = match offline_clock(arguments) {
+        Ok(clock) => clock.now(),
+        Err(e) => {
+            eprintln!("{e}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let minutes = value("--minutes")
+        .and_then(|m| m.parse::<i64>().ok())
+        .unwrap_or(60);
+    let (Ok(not_after), Ok(nonce)) = (
+        stozher_kernel::clock::shift(&now, minutes * 60),
+        genesis::request_nonce(),
+    ) else {
+        eprintln!("could not stamp the request");
+        return ExitCode::FAILURE;
+    };
+    let request = serde_json::json!({
+        "v": stozher_core::VERSION,
+        "kind": "action-request",
+        "requested-at": now,
+        "subject": requester,
+        "key": key.id().as_str(),
+        "component": "kernel",
+        "mandate-ref": mandate,
+        "policy-version": in_force,
+        "classification": "consequential",
+        "action": action,
+        "target": format!("root:{target_key}"),
+        "args-hash": args_hash,
+        "nonce": nonce,
+        "not-after": not_after
+    });
+    let (Ok(canonical), Ok(hash)) = (
+        stozher_core::jcs::canonicalize(&request),
+        stozher_core::jcs::object_hash(&request),
+    ) else {
+        eprintln!("canonicalizing the request");
+        return ExitCode::FAILURE;
+    };
+    if let Err(e) = std::fs::write(out, &canonical) {
+        eprintln!("writing {out}: {e}");
+        return ExitCode::FAILURE;
+    }
+    if let Some(evidence) = &evidence {
+        let path = value("--evidence-out").map_or_else(|| format!("{out}.evidence"), str::to_owned);
+        match stozher_core::jcs::canonicalize(evidence)
+            .map_err(|e| e.to_string())
+            .and_then(|text| std::fs::write(&path, text).map_err(|e| e.to_string()))
+        {
+            Ok(()) => eprintln!("wrote {path} — the evidence the approval binds"),
+            Err(e) => {
+                eprintln!("writing {path}: {e}");
+                return ExitCode::FAILURE;
+            }
+        }
+    }
+    println!("{hash}");
+    eprintln!("wrote {out} — park it, have a *different* root approve {hash}, then root-publish");
+    ExitCode::SUCCESS
+}
+
+/// Record an approved root-set change — §03 §6.
+///
+/// Signed by the root that asked, because §03 §6 requires the envelope to be signed by an existing
+/// root; approved by a different one, because §06 §5 forbids answering your own request. Neither of
+/// those is decided here — the kernel checks both, and this command holds no authority it could use
+/// to skip them.
+fn root_publish(arguments: &[String]) -> ExitCode {
+    let value = |name: &str| value(arguments, name);
+    let (Some(url), Some(request_path), Some(key_path)) =
+        (value("--url"), value("--request"), value("--key"))
+    else {
+        eprintln!("root-publish requires --url <base>, --request <path> and --key <path>");
+        return ExitCode::FAILURE;
+    };
+    let Some(token) = credential(arguments) else {
+        return ExitCode::FAILURE;
+    };
+    let stream = value("--stream").unwrap_or("kernel:core");
+    let request: serde_json::Value = match std::fs::read(request_path)
+        .map_err(|e| e.to_string())
+        .and_then(|bytes| serde_json::from_slice(&bytes).map_err(|e| e.to_string()))
+    {
+        Ok(request) => request,
+        Err(e) => {
+            eprintln!("reading {request_path}: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let enrolling = request["action"].as_str() == Some("kernel.enroll_root");
+    let args_hash = request["args-hash"].as_str().unwrap_or_default().to_owned();
+    // The evidence, re-read from disk and re-hashed rather than trusted from the request: if they
+    // differ, the operator is about to enrol a key or a name nobody approved.
+    let payloads = if enrolling {
+        let path =
+            value("--evidence").map_or_else(|| format!("{request_path}.evidence"), str::to_owned);
+        let evidence: serde_json::Value = match std::fs::read(&path)
+            .map_err(|e| e.to_string())
+            .and_then(|bytes| serde_json::from_slice(&bytes).map_err(|e| e.to_string()))
+        {
+            Ok(evidence) => evidence,
+            Err(e) => {
+                eprintln!("reading {path}: {e}");
+                return ExitCode::FAILURE;
+            }
+        };
+        match stozher_core::jcs::object_hash(&evidence) {
+            Ok(hash) if hash == args_hash => vec![serde_json::json!({
+                "payload-hash": hash,
+                "media-type": "application/json",
+                "payload": evidence
+            })],
+            Ok(hash) => {
+                eprintln!(
+                    "{path} hashes to {hash}, the request commits to {args_hash}: \
+                     this is not the evidence that was approved"
+                );
+                return ExitCode::FAILURE;
+            }
+            Err(e) => {
+                eprintln!("hashing {path}: {e}");
+                return ExitCode::FAILURE;
+            }
+        }
+    } else {
+        Vec::new()
+    };
+
+    let request_hash = match stozher_core::jcs::object_hash(&request) {
+        Ok(hash) => hash,
+        Err(e) => {
+            eprintln!("hashing the request: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let decision = match fetch_decision(url, &token, &request_hash) {
+        Ok(decision) => decision,
+        Err(e) => {
+            eprintln!("{e}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let key = match seed_key(arguments, key_path, keys::ROLE_HUMAN_ROOT) {
+        Ok(key) => key,
+        Err(e) => {
+            eprintln!("{e}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let now = match offline_clock(arguments) {
+        Ok(clock) => clock.now(),
+        Err(e) => {
+            eprintln!("{e}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let retain_until = match stozher_kernel::clock::shift(&now, 365 * 86_400) {
+        Ok(retain_until) => retain_until,
+        Err(e) => {
+            eprintln!("clock: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
+
+    const ATTEMPTS: usize = 4;
+    let mut last = String::new();
+    for attempt in 0..ATTEMPTS {
+        let (seq, prev) = match head_of(url, &token, stream) {
+            Ok(head) => head,
+            Err(e) => {
+                eprintln!("{e}");
+                return ExitCode::FAILURE;
+            }
+        };
+        let mut body = serde_json::json!({
+            "v": stozher_core::VERSION,
+            "kind": "effect",
+            "emitted-at": now,
+            "stream": stream,
+            "seq": seq,
+            "prev-hash": prev,
+            "identity": {
+                "subject": request["subject"],
+                "key": key.id().as_str(),
+                "component": "kernel"
+            },
+            "mandate-ref": request["mandate-ref"],
+            "policy-version": request["policy-version"],
+            "classification": "consequential",
+            "execution": {
+                "action": request["action"],
+                "target": request["target"],
+                "args-hash": args_hash,
+                "outcome": "applied",
+                "started-at": now,
+                "finished-at": now
+            },
+            "authorization": { "request": request, "decision": decision }
+        });
+        if enrolling {
+            body["evidence"] = serde_json::json!({
+                "schema": "kernel.enroll_root.v1",
+                "media-type": "application/json",
+                "payload-hash": args_hash,
+                "retain-until": retain_until
+            });
+        }
+        let submission = key.sign(&body).and_then(|envelope| {
+            stozher_core::jcs::canonicalize(
+                &serde_json::json!({ "envelope": envelope, "payloads": payloads }),
+            )
+        });
+        let submission = match submission {
+            Ok(submission) => submission,
+            Err(e) => {
+                eprintln!("signing: {e}");
+                return ExitCode::FAILURE;
+            }
+        };
+        match stozher_kernel::operator::ingest(url, &token, submission.as_bytes()) {
+            Ok(answer) if answer.ok() => {
+                println!("{}", answer.body);
+                return ExitCode::SUCCESS;
+            }
+            Ok(answer) if attempt + 1 < ATTEMPTS && contended(&answer.body) => {
+                last = answer.body;
+                std::thread::sleep(std::time::Duration::from_millis(200 << attempt));
+            }
+            Ok(answer) => {
+                println!("{}", answer.body);
+                eprintln!("the kernel refused it ({})", answer.status);
+                return ExitCode::FAILURE;
+            }
+            Err(e) => {
+                eprintln!("root-publish: {e}");
                 return ExitCode::FAILURE;
             }
         }

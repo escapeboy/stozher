@@ -349,6 +349,37 @@ most valuable grant in the deployment, and a one-liner that issues it — with d
 eventually widen — is the wrong thing to make convenient. `--days 1` above is not caution for its own
 sake: the mandate only has to outlive the four steps below it.
 
+### Changing the root set
+
+```sh
+K="docker run --rm -i -u $(id -u):$(id -g) -v $PWD:/work -w /work ${STOZHER_KERNEL_IMAGE:-stozher-kernel:0.1.0}"
+
+# ivan asks. --mandate is a mandate MIRA granted him: §03 §1 forbids self-grant, and an effect
+# needs one, which is the whole reason this takes two humans.
+$K root-request --requester human:ivan --key secrets/operator/operator.seed \
+                --mandate <64 hex> --in-force "$($K policy-current --url http://kernel:8787)" \
+                --enrol ed25519:<their root key> --subject human:third \
+                --out var/enrol.json
+$K park --url http://kernel:8787 --file var/enrol.json     # needs the kernel's network
+
+./bin/stozher-approve <request-hash> --root human:mira      # MIRA answers, not ivan
+
+$K root-publish --url http://kernel:8787 --request var/enrol.json \
+                --key secrets/operator/operator.seed
+```
+
+**`--subject human:<name>` is not a label.** The root set is `(key, subject)` pairs and the subject
+is what §06 §5 compares when it refuses a self-approval — *a human holding a second key is still the
+same human*. It travels as the evidence bound by `args-hash`, so the name recorded is the name the
+approving root signed over, and an enrolment that omits it is refused (`root-enrollment-malformed`).
+
+`--retire ed25519:<key>` is the same ceremony with no `--subject`: the name is already recorded, and
+retirement is not retroactive — every envelope that key ever signed still verifies (§03 §8).
+
+**A one-root deployment cannot do this at all**, which is the warning at the top of this file in its
+executable form. Ivan cannot answer his own request (`gate-self-approval`), and he cannot act
+without a mandate somebody else granted.
+
 ### Withdrawing a mandate
 
 ```sh
