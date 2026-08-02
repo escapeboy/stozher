@@ -779,7 +779,7 @@ impl Ingest {
                 self.validate_registration(env, payloads, plan).await?;
             }
             Some("kernel.enroll_root" | "kernel.retire_root") => {
-                self.validate_root_change(env, roots, subject_key, plan)?;
+                self.validate_root_change(env, payloads, roots, subject_key, plan)?;
             }
             _ => {}
         }
@@ -1146,6 +1146,7 @@ impl Ingest {
     fn validate_root_change(
         &self,
         env: &Value,
+        payloads: &[Value],
         roots: &[KeyId],
         subject_key: &KeyId,
         plan: &mut AppendPlan,
@@ -1173,11 +1174,10 @@ impl Ingest {
             )
         })?;
         if env["execution"]["action"].as_str() == Some("kernel.enroll_root") {
-            let subject = env["evidence"]["schema"]
-                .as_str()
-                .filter(|s| s.starts_with("kernel.enroll_root"))
-                .map_or_else(|| "human:unnamed".to_owned(), |_| target.to_owned());
-            plan.projections.enroll_root = Some((key.as_str().to_owned(), subject));
+            plan.projections.enroll_root = Some((
+                key.as_str().to_owned(),
+                enrolled_subject(env, payloads, &key)?,
+            ));
         } else {
             plan.projections.retire_root = Some(key.as_str().to_owned());
         }
@@ -1675,6 +1675,59 @@ impl Ingest {
             });
         }
         Ok(())
+    }
+}
+
+/// The human an enrolment names, read from the evidence the approval committed to (§03 §6).
+///
+/// # Why the payload is required here and nowhere else
+///
+/// A referenced payload may legitimately be absent at ingest — that is what a decayed evidence
+/// section looks like, and [`payload::verify_ingest`] permits it. Not for this action. The `roots`
+/// projection stores `(key, subject)`, and the **subject** is the value §06 §5's self-approval
+/// prohibition is evaluated over: *a human holding a second key is still the same human*. If the
+/// subject is not in the envelope, there is nothing to record and nothing to reconstruct later.
+///
+/// This previously fell back to `execution.target` — the string `root:ed25519:<hex>` — which is a
+/// name no human has. The mechanism for giving a person a second enrolled key was therefore also
+/// the mechanism that stopped the prohibition recognising them as the same person, and nothing
+/// contradicted it because roots seeded from `Config` carry their real subjects.
+///
+/// The payload is bound to `execution.args-hash`, which is what the approver signed over, so the
+/// name recorded here is the name a named human approved — not one the emitter chose afterwards.
+fn enrolled_subject(env: &Value, payloads: &[Value], enrolled: &KeyId) -> Result<String> {
+    let args_hash = env["execution"]["args-hash"]
+        .as_str()
+        .ok_or_else(|| Error::new("schema-missing-member", "execution.args-hash"))?;
+    let evidence = payloads
+        .iter()
+        .find(|p| p["payload-hash"].as_str() == Some(args_hash))
+        .map(|p| &p["payload"])
+        .ok_or_else(|| {
+            Error::new(
+                codes::ROOT_ENROLLMENT_MALFORMED,
+                "an enrolment must submit the evidence its args-hash commits to, naming the human",
+            )
+        })?;
+    let subject = evidence["subject"].as_str().unwrap_or_default();
+    if !subject.starts_with("human:") || subject.len() <= "human:".len() {
+        return Err(Error::new(
+            codes::ROOT_ENROLLMENT_MALFORMED,
+            format!("the evidence names {subject:?}, which is not a human subject"),
+        ));
+    }
+    // The evidence names a key as well, and it must be the one being enrolled: two spellings of
+    // one fact let an emitter approve the enrolment of one key and record another.
+    match evidence["key"].as_str() {
+        Some(key) if key == enrolled.as_str() => Ok(subject.to_owned()),
+        Some(key) => Err(Error::new(
+            codes::ROOT_ENROLLMENT_MALFORMED,
+            format!("the evidence names key {key}, execution.target names {enrolled}"),
+        )),
+        None => Err(Error::new(
+            codes::ROOT_ENROLLMENT_MALFORMED,
+            "the evidence names no key",
+        )),
     }
 }
 

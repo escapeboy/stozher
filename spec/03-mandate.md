@@ -233,7 +233,28 @@ Notes:
 operator bootstrap ceremony (build plan S5) and changed only by an envelope of
 `kind: "effect"`, `action: "kernel.enroll_root"` / `kernel.retire_root`, classification
 `consequential`, which MUST itself be gated and MUST be signed by an existing root. Its evidence
-MUST identify a well-formed key to enrol or retire (`root-enrollment-malformed`).
+MUST identify a well-formed key to enrol or retire (`root-enrollment-malformed`), and
+`execution.target` MUST be `root:ed25519:<64 hex>`.
+
+**An enrolment MUST also name the human, and the evidence payload MUST be submitted with it.** The
+root set is `(key, subject)` pairs, and the subject is what §06 §5's self-approval prohibition is
+evaluated over — *a human holding a second key is still the same human*. So for
+`kernel.enroll_root` the payload committed to by `execution.args-hash` MUST be supplied at ingest
+and MUST carry:
+
+| Member | Requirement |
+|---|---|
+| `subject` | a `human:<name>` subject, non-empty after the prefix |
+| `key` | equal to the key in `execution.target` |
+
+Anything else is `root-enrollment-malformed`, including an absent payload. A referenced payload may
+normally be missing at ingest — that is what a decayed evidence section looks like — and this is the
+one action where it may not, because the name exists nowhere else and cannot be reconstructed. That
+the payload is bound to `args-hash` is what makes the recorded name **the name a named human
+approved**, rather than one the emitter chose after the approval was given.
+
+A retirement names only a key: the subject it was enrolled under is already recorded, and retirement
+is not retroactive (§8).
 
 **A named human acting directly still acts under a mandate.** Effect kinds require `mandate-ref`,
 and §1 forbids self-grant, so a human's own effect cites a mandate **another** human granted. The
