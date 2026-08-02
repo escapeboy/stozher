@@ -140,7 +140,7 @@ fn every_vector_validates_against_the_reference_implementation() {
                 // runs these files and asserts it ran every vector in them. Named rather than
                 // defaulted, so a kind nobody implemented still fails below.
                 "trigger" => check_trigger(&mut report, &id, &doc, vector),
-                "policy-evaluation" | "manifest" | "gate-arguments" => {}
+                "policy-evaluation" | "manifest" | "gate-arguments" | "root-change" => {}
                 unknown => panic!(
                     "{path}: unsupported vector kind {unknown:?}. Vectors are never skipped: \
                      implement support or remove the file."

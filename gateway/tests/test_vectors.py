@@ -410,7 +410,12 @@ def test_the_declined_files_are_the_ones_expected() -> None:
     rather than one more thing this suite quietly stopped asking. So the list is written down.
     """
     declined = sorted(e["path"] for e in INDEX["files"] if e.get("role") == "kernel")
-    assert declined == ["checkpoint.json", "manifest.json", "trigger.json"], declined
+    assert declined == [
+        "checkpoint.json",
+        "manifest.json",
+        "root-change.json",
+        "trigger.json",
+    ], declined
 
     # And every other file is one this component does run: a role nobody recognises is not a licence.
     for entry in INDEX["files"]:

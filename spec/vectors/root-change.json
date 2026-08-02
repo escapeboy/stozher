@@ -1,0 +1,379 @@
+{
+  "v": "stozher/0.1",
+  "kind": "root-change",
+  "description": "Root set changes (spec 03 section 6). Read the change out of `envelope` with `payloads`. The result MUST match `expected.valid`; on failure the code MUST equal `expected.error`; on success `expected.change` says whether it enrols or retires, `expected.key` is the key affected, and for an enrolment `expected.subject` is the human it MUST be recorded under. Who may make the change is not asked here — that needs the deployment's current root set.",
+  "keys": [
+    {
+      "label": "human:ivan",
+      "secret-key": "0a049eec7c12db0ac1cd04ef10ece009a580dfa9b439247d24a2a8ae3e824d77",
+      "public-key": "09b3c43478cc065aeeeba98ee919e6b007ff3ff122f86e0a4a3fbc5898092d3a",
+      "key-id": "ed25519:09b3c43478cc065aeeeba98ee919e6b007ff3ff122f86e0a4a3fbc5898092d3a"
+    },
+    {
+      "label": "human:mira",
+      "secret-key": "1626b88ed495bf7e5b12fc54155bbc1cabc4118593d4b04d33712443ea52ee78",
+      "public-key": "96447dfd1a31467afe14984be49e1bdf8a27d444b3dce98d332e3f5e917f5d2a",
+      "key-id": "ed25519:96447dfd1a31467afe14984be49e1bdf8a27d444b3dce98d332e3f5e917f5d2a"
+    }
+  ],
+  "vectors": [
+    {
+      "name": "enrols-the-human-the-evidence-names",
+      "description": "the recorded subject is the human named in the evidence the approval committed to, not the target string",
+      "envelope": {
+        "v": "stozher/0.1",
+        "kind": "effect",
+        "emitted-at": "2026-07-26T09:15:01.300Z",
+        "stream": "gw:ivan-mbp:0001",
+        "seq": 7,
+        "prev-hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "identity": {
+          "subject": "human:ivan",
+          "key": "ed25519:09b3c43478cc065aeeeba98ee919e6b007ff3ff122f86e0a4a3fbc5898092d3a",
+          "component": "kernel"
+        },
+        "mandate-ref": "1111111111111111111111111111111111111111111111111111111111111111",
+        "policy-version": "2026.07.1",
+        "classification": "consequential",
+        "execution": {
+          "action": "kernel.enroll_root",
+          "target": "root:ed25519:96447dfd1a31467afe14984be49e1bdf8a27d444b3dce98d332e3f5e917f5d2a",
+          "args-hash": "fcdf237046e4af2a9eb1d3f41fa72919bd2f80c42dd2f59a83210aaf738d1e63",
+          "outcome": "applied",
+          "started-at": "2026-07-26T09:15:00.000Z",
+          "finished-at": "2026-07-26T09:15:01.250Z"
+        },
+        "evidence": {
+          "schema": "kernel.enroll_root.v1",
+          "media-type": "application/json",
+          "payload-hash": "fcdf237046e4af2a9eb1d3f41fa72919bd2f80c42dd2f59a83210aaf738d1e63",
+          "retain-until": "2027-07-26T00:00:00.000Z"
+        },
+        "sig": {
+          "alg": "ed25519",
+          "key": "ed25519:09b3c43478cc065aeeeba98ee919e6b007ff3ff122f86e0a4a3fbc5898092d3a",
+          "value": "d7ae919e632f27656b6b81a5d28525723d6c1c8b2b145548025a035f9f790ffb3acfbaabd3f9f6ca6faeac51f338f4def07e355e6860b18b58cba90ea1397e0c"
+        }
+      },
+      "payloads": [
+        {
+          "payload-hash": "fcdf237046e4af2a9eb1d3f41fa72919bd2f80c42dd2f59a83210aaf738d1e63",
+          "media-type": "application/json",
+          "payload": {
+            "subject": "human:mira",
+            "key": "ed25519:96447dfd1a31467afe14984be49e1bdf8a27d444b3dce98d332e3f5e917f5d2a"
+          }
+        }
+      ],
+      "expected": {
+        "valid": true,
+        "error": null,
+        "change": "enrol",
+        "key": "ed25519:96447dfd1a31467afe14984be49e1bdf8a27d444b3dce98d332e3f5e917f5d2a",
+        "subject": "human:mira"
+      }
+    },
+    {
+      "name": "evidence-is-not-supplied",
+      "description": "a referenced payload may normally be absent at ingest — that is decay — and here it may not, because the name exists nowhere else in the envelope",
+      "envelope": {
+        "v": "stozher/0.1",
+        "kind": "effect",
+        "emitted-at": "2026-07-26T09:15:01.300Z",
+        "stream": "gw:ivan-mbp:0001",
+        "seq": 7,
+        "prev-hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "identity": {
+          "subject": "human:ivan",
+          "key": "ed25519:09b3c43478cc065aeeeba98ee919e6b007ff3ff122f86e0a4a3fbc5898092d3a",
+          "component": "kernel"
+        },
+        "mandate-ref": "1111111111111111111111111111111111111111111111111111111111111111",
+        "policy-version": "2026.07.1",
+        "classification": "consequential",
+        "execution": {
+          "action": "kernel.enroll_root",
+          "target": "root:ed25519:96447dfd1a31467afe14984be49e1bdf8a27d444b3dce98d332e3f5e917f5d2a",
+          "args-hash": "fcdf237046e4af2a9eb1d3f41fa72919bd2f80c42dd2f59a83210aaf738d1e63",
+          "outcome": "applied",
+          "started-at": "2026-07-26T09:15:00.000Z",
+          "finished-at": "2026-07-26T09:15:01.250Z"
+        },
+        "evidence": {
+          "schema": "kernel.enroll_root.v1",
+          "media-type": "application/json",
+          "payload-hash": "fcdf237046e4af2a9eb1d3f41fa72919bd2f80c42dd2f59a83210aaf738d1e63",
+          "retain-until": "2027-07-26T00:00:00.000Z"
+        },
+        "sig": {
+          "alg": "ed25519",
+          "key": "ed25519:09b3c43478cc065aeeeba98ee919e6b007ff3ff122f86e0a4a3fbc5898092d3a",
+          "value": "d7ae919e632f27656b6b81a5d28525723d6c1c8b2b145548025a035f9f790ffb3acfbaabd3f9f6ca6faeac51f338f4def07e355e6860b18b58cba90ea1397e0c"
+        }
+      },
+      "payloads": [],
+      "expected": {
+        "valid": false,
+        "error": "root-enrollment-malformed"
+      }
+    },
+    {
+      "name": "evidence-names-an-agent",
+      "description": "a root is a named human (section 6); an agent subject in the root set is a subject the self-approval rule would compare against agent effects",
+      "envelope": {
+        "v": "stozher/0.1",
+        "kind": "effect",
+        "emitted-at": "2026-07-26T09:15:01.300Z",
+        "stream": "gw:ivan-mbp:0001",
+        "seq": 7,
+        "prev-hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "identity": {
+          "subject": "human:ivan",
+          "key": "ed25519:09b3c43478cc065aeeeba98ee919e6b007ff3ff122f86e0a4a3fbc5898092d3a",
+          "component": "kernel"
+        },
+        "mandate-ref": "1111111111111111111111111111111111111111111111111111111111111111",
+        "policy-version": "2026.07.1",
+        "classification": "consequential",
+        "execution": {
+          "action": "kernel.enroll_root",
+          "target": "root:ed25519:96447dfd1a31467afe14984be49e1bdf8a27d444b3dce98d332e3f5e917f5d2a",
+          "args-hash": "d1baa8451686090daeae23e701ca354b7626ca1a1e0661b84fb7c49eadd291be",
+          "outcome": "applied",
+          "started-at": "2026-07-26T09:15:00.000Z",
+          "finished-at": "2026-07-26T09:15:01.250Z"
+        },
+        "evidence": {
+          "schema": "kernel.enroll_root.v1",
+          "media-type": "application/json",
+          "payload-hash": "d1baa8451686090daeae23e701ca354b7626ca1a1e0661b84fb7c49eadd291be",
+          "retain-until": "2027-07-26T00:00:00.000Z"
+        },
+        "sig": {
+          "alg": "ed25519",
+          "key": "ed25519:09b3c43478cc065aeeeba98ee919e6b007ff3ff122f86e0a4a3fbc5898092d3a",
+          "value": "54cd65e55dc809e50cf90ca0a575b744089a9ed779b07034c8feb21c025ca616dce694f80b0e68e24c329923c90dfe03faa14e38712acffa6cbf09381fa52006"
+        }
+      },
+      "payloads": [
+        {
+          "payload-hash": "d1baa8451686090daeae23e701ca354b7626ca1a1e0661b84fb7c49eadd291be",
+          "media-type": "application/json",
+          "payload": {
+            "subject": "agent:not-a-human",
+            "key": "ed25519:96447dfd1a31467afe14984be49e1bdf8a27d444b3dce98d332e3f5e917f5d2a"
+          }
+        }
+      ],
+      "expected": {
+        "valid": false,
+        "error": "root-enrollment-malformed"
+      }
+    },
+    {
+      "name": "evidence-names-an-empty-human",
+      "description": "the prefix alone is not a name",
+      "envelope": {
+        "v": "stozher/0.1",
+        "kind": "effect",
+        "emitted-at": "2026-07-26T09:15:01.300Z",
+        "stream": "gw:ivan-mbp:0001",
+        "seq": 7,
+        "prev-hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "identity": {
+          "subject": "human:ivan",
+          "key": "ed25519:09b3c43478cc065aeeeba98ee919e6b007ff3ff122f86e0a4a3fbc5898092d3a",
+          "component": "kernel"
+        },
+        "mandate-ref": "1111111111111111111111111111111111111111111111111111111111111111",
+        "policy-version": "2026.07.1",
+        "classification": "consequential",
+        "execution": {
+          "action": "kernel.enroll_root",
+          "target": "root:ed25519:96447dfd1a31467afe14984be49e1bdf8a27d444b3dce98d332e3f5e917f5d2a",
+          "args-hash": "323a9f70bd376c9229cff22fd319dd0f3803f69011526b5e28ca17b587cfb254",
+          "outcome": "applied",
+          "started-at": "2026-07-26T09:15:00.000Z",
+          "finished-at": "2026-07-26T09:15:01.250Z"
+        },
+        "evidence": {
+          "schema": "kernel.enroll_root.v1",
+          "media-type": "application/json",
+          "payload-hash": "323a9f70bd376c9229cff22fd319dd0f3803f69011526b5e28ca17b587cfb254",
+          "retain-until": "2027-07-26T00:00:00.000Z"
+        },
+        "sig": {
+          "alg": "ed25519",
+          "key": "ed25519:09b3c43478cc065aeeeba98ee919e6b007ff3ff122f86e0a4a3fbc5898092d3a",
+          "value": "f887463d1cb60e6c418b3483526a27ea124136d000fe683d6891074479818d26cdd7ed8a9823fef602d68155803dec9e002dc83d9399f41e448998b24cf3260d"
+        }
+      },
+      "payloads": [
+        {
+          "payload-hash": "323a9f70bd376c9229cff22fd319dd0f3803f69011526b5e28ca17b587cfb254",
+          "media-type": "application/json",
+          "payload": {
+            "subject": "human:",
+            "key": "ed25519:96447dfd1a31467afe14984be49e1bdf8a27d444b3dce98d332e3f5e917f5d2a"
+          }
+        }
+      ],
+      "expected": {
+        "valid": false,
+        "error": "root-enrollment-malformed"
+      }
+    },
+    {
+      "name": "evidence-names-a-different-key",
+      "description": "two spellings of one fact: approve the enrolment of one key, record another",
+      "envelope": {
+        "v": "stozher/0.1",
+        "kind": "effect",
+        "emitted-at": "2026-07-26T09:15:01.300Z",
+        "stream": "gw:ivan-mbp:0001",
+        "seq": 7,
+        "prev-hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "identity": {
+          "subject": "human:ivan",
+          "key": "ed25519:09b3c43478cc065aeeeba98ee919e6b007ff3ff122f86e0a4a3fbc5898092d3a",
+          "component": "kernel"
+        },
+        "mandate-ref": "1111111111111111111111111111111111111111111111111111111111111111",
+        "policy-version": "2026.07.1",
+        "classification": "consequential",
+        "execution": {
+          "action": "kernel.enroll_root",
+          "target": "root:ed25519:96447dfd1a31467afe14984be49e1bdf8a27d444b3dce98d332e3f5e917f5d2a",
+          "args-hash": "0f3163e3030e9a4c25b4b27d5b91c078eee1fab445d197b5334f312874eab1f1",
+          "outcome": "applied",
+          "started-at": "2026-07-26T09:15:00.000Z",
+          "finished-at": "2026-07-26T09:15:01.250Z"
+        },
+        "evidence": {
+          "schema": "kernel.enroll_root.v1",
+          "media-type": "application/json",
+          "payload-hash": "0f3163e3030e9a4c25b4b27d5b91c078eee1fab445d197b5334f312874eab1f1",
+          "retain-until": "2027-07-26T00:00:00.000Z"
+        },
+        "sig": {
+          "alg": "ed25519",
+          "key": "ed25519:09b3c43478cc065aeeeba98ee919e6b007ff3ff122f86e0a4a3fbc5898092d3a",
+          "value": "93c423c7f78254448c8bc37178f37b2266a4df55bccf563a1ed1458666da749db0397f99bbc78d844373940a0cfcc54ee382ae891ec035d612a3b970e42df808"
+        }
+      },
+      "payloads": [
+        {
+          "payload-hash": "0f3163e3030e9a4c25b4b27d5b91c078eee1fab445d197b5334f312874eab1f1",
+          "media-type": "application/json",
+          "payload": {
+            "subject": "human:mira",
+            "key": "ed25519:09b3c43478cc065aeeeba98ee919e6b007ff3ff122f86e0a4a3fbc5898092d3a"
+          }
+        }
+      ],
+      "expected": {
+        "valid": false,
+        "error": "root-enrollment-malformed"
+      }
+    },
+    {
+      "name": "target-is-not-a-root-reference",
+      "description": "execution.target MUST be root:ed25519:<64 hex>",
+      "envelope": {
+        "v": "stozher/0.1",
+        "kind": "effect",
+        "emitted-at": "2026-07-26T09:15:01.300Z",
+        "stream": "gw:ivan-mbp:0001",
+        "seq": 7,
+        "prev-hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "identity": {
+          "subject": "human:ivan",
+          "key": "ed25519:09b3c43478cc065aeeeba98ee919e6b007ff3ff122f86e0a4a3fbc5898092d3a",
+          "component": "kernel"
+        },
+        "mandate-ref": "1111111111111111111111111111111111111111111111111111111111111111",
+        "policy-version": "2026.07.1",
+        "classification": "consequential",
+        "execution": {
+          "action": "kernel.enroll_root",
+          "target": "ed25519:96447dfd1a31467afe14984be49e1bdf8a27d444b3dce98d332e3f5e917f5d2a",
+          "args-hash": "fcdf237046e4af2a9eb1d3f41fa72919bd2f80c42dd2f59a83210aaf738d1e63",
+          "outcome": "applied",
+          "started-at": "2026-07-26T09:15:00.000Z",
+          "finished-at": "2026-07-26T09:15:01.250Z"
+        },
+        "evidence": {
+          "schema": "kernel.enroll_root.v1",
+          "media-type": "application/json",
+          "payload-hash": "fcdf237046e4af2a9eb1d3f41fa72919bd2f80c42dd2f59a83210aaf738d1e63",
+          "retain-until": "2027-07-26T00:00:00.000Z"
+        },
+        "sig": {
+          "alg": "ed25519",
+          "key": "ed25519:09b3c43478cc065aeeeba98ee919e6b007ff3ff122f86e0a4a3fbc5898092d3a",
+          "value": "afcbbae4ba2dddacb7d1c6bab116aa6105a79d1337529c758c23048287e828b197640abe3fbd8d7eeb1dcf26d6d4a4b2394d8fb1b7288c15e0e094526978b001"
+        }
+      },
+      "payloads": [
+        {
+          "payload-hash": "fcdf237046e4af2a9eb1d3f41fa72919bd2f80c42dd2f59a83210aaf738d1e63",
+          "media-type": "application/json",
+          "payload": {
+            "subject": "human:mira",
+            "key": "ed25519:96447dfd1a31467afe14984be49e1bdf8a27d444b3dce98d332e3f5e917f5d2a"
+          }
+        }
+      ],
+      "expected": {
+        "valid": false,
+        "error": "root-enrollment-malformed"
+      }
+    },
+    {
+      "name": "retires-a-key-without-naming-a-human",
+      "description": "the subject a key was enrolled under is already recorded, so a retirement names only the key — and it is not retroactive (section 8)",
+      "envelope": {
+        "v": "stozher/0.1",
+        "kind": "effect",
+        "emitted-at": "2026-07-26T09:15:01.300Z",
+        "stream": "gw:ivan-mbp:0001",
+        "seq": 7,
+        "prev-hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "identity": {
+          "subject": "human:ivan",
+          "key": "ed25519:09b3c43478cc065aeeeba98ee919e6b007ff3ff122f86e0a4a3fbc5898092d3a",
+          "component": "kernel"
+        },
+        "mandate-ref": "1111111111111111111111111111111111111111111111111111111111111111",
+        "policy-version": "2026.07.1",
+        "classification": "consequential",
+        "execution": {
+          "action": "kernel.retire_root",
+          "target": "root:ed25519:96447dfd1a31467afe14984be49e1bdf8a27d444b3dce98d332e3f5e917f5d2a",
+          "args-hash": "fe4edc2cdfcaee172af990012c944c32c884657dfb56dfce12e197597cb651f8",
+          "outcome": "applied",
+          "started-at": "2026-07-26T09:15:00.000Z",
+          "finished-at": "2026-07-26T09:15:01.250Z"
+        },
+        "evidence": {
+          "schema": "kernel.enroll_root.v1",
+          "media-type": "application/json",
+          "payload-hash": "fe4edc2cdfcaee172af990012c944c32c884657dfb56dfce12e197597cb651f8",
+          "retain-until": "2027-07-26T00:00:00.000Z"
+        },
+        "sig": {
+          "alg": "ed25519",
+          "key": "ed25519:09b3c43478cc065aeeeba98ee919e6b007ff3ff122f86e0a4a3fbc5898092d3a",
+          "value": "575cfbadf963f194ff18ab0da57f179a7db9fda6be169429b16752fd9104b1f1f207cc32f504e68033b75aa4c4d10ca8ffa1ec6a3b016a4b72be866239430904"
+        }
+      },
+      "payloads": [],
+      "expected": {
+        "valid": true,
+        "error": null,
+        "change": "retire",
+        "key": "ed25519:96447dfd1a31467afe14984be49e1bdf8a27d444b3dce98d332e3f5e917f5d2a"
+      }
+    }
+  ]
+}

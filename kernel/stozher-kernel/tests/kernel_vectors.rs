@@ -199,3 +199,86 @@ fn every_gate_arguments_vector_matches_this_implementation() {
         failures.join("\n  ")
     );
 }
+
+fn root_change_corpus() -> Value {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../spec/vectors/root-change.json");
+    let text = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("reading the corpus: {e}"));
+    serde_json::from_str(&text).unwrap_or_else(|e| panic!("parsing the corpus: {e}"))
+}
+
+/// §03 §6 — what a root change says, separated from who may make it.
+///
+/// The subject is the half worth stating cross-language. `roots` is `(key, subject)` pairs and the
+/// subject is what §06 §5's self-approval prohibition compares — *a human holding a second key is
+/// still the same human*. This implementation recorded `execution.target` there, which is a name no
+/// human has, for as long as the path existed; nothing caught it because roots seeded from
+/// configuration carry their real subjects and no vector asked. This is the asking.
+#[test]
+fn every_root_change_vector_matches_this_implementation() {
+    use stozher_kernel::ingest::{RootChange, root_change};
+
+    let corpus = root_change_corpus();
+    let vectors = corpus["vectors"].as_array().expect("vectors");
+    assert!(
+        vectors.len() >= 7,
+        "the corpus shrank to {} vectors",
+        vectors.len()
+    );
+
+    let mut failures: Vec<String> = Vec::new();
+    for vector in vectors {
+        let name = vector["name"].as_str().unwrap_or("?");
+        let expected = &vector["expected"];
+        let payloads: Vec<Value> = vector["payloads"].as_array().cloned().unwrap_or_default();
+        match root_change(&vector["envelope"], &payloads) {
+            Ok(_) if expected["valid"].as_bool() != Some(true) => failures.push(format!(
+                "{name}: read as a change, the corpus says {}",
+                expected["error"]
+            )),
+            Ok(RootChange::Enrol { key, subject }) => {
+                if expected["change"].as_str() != Some("enrol") {
+                    failures.push(format!(
+                        "{name}: read as an enrolment, the corpus says retire"
+                    ));
+                }
+                if expected["key"].as_str() != Some(key.as_str()) {
+                    failures.push(format!(
+                        "{name}: enrolled {key}, the corpus says {}",
+                        expected["key"]
+                    ));
+                }
+                if expected["subject"].as_str() != Some(subject.as_str()) {
+                    failures.push(format!(
+                        "{name}: recorded {subject:?}, the corpus says {}",
+                        expected["subject"]
+                    ));
+                }
+            }
+            Ok(RootChange::Retire { key }) => {
+                if expected["change"].as_str() != Some("retire") {
+                    failures.push(format!(
+                        "{name}: read as a retirement, the corpus says enrol"
+                    ));
+                }
+                if expected["key"].as_str() != Some(key.as_str()) {
+                    failures.push(format!(
+                        "{name}: retired {key}, the corpus says {}",
+                        expected["key"]
+                    ));
+                }
+            }
+            Err(e) if expected["error"].as_str() == Some(e.code()) => {}
+            Err(e) => failures.push(format!(
+                "{name}: refused {}, the corpus says {}",
+                e.code(),
+                expected["error"]
+            )),
+        }
+    }
+    assert!(
+        failures.is_empty(),
+        "{} root-change vectors disagree with this implementation:\n  {}",
+        failures.len(),
+        failures.join("\n  ")
+    );
+}

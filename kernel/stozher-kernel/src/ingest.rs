@@ -1160,26 +1160,13 @@ impl Ingest {
                 ),
             ));
         }
-        let target = env["execution"]["target"].as_str().unwrap_or_default();
-        let key = target.strip_prefix("root:").ok_or_else(|| {
-            Error::new(
-                codes::ROOT_ENROLLMENT_MALFORMED,
-                format!("execution.target {target:?} must be root:ed25519:<64 hex>"),
-            )
-        })?;
-        let key = KeyId::parse(key).map_err(|e| {
-            Error::new(
-                codes::ROOT_ENROLLMENT_MALFORMED,
-                format!("execution.target does not name a key: {}", e.detail()),
-            )
-        })?;
-        if env["execution"]["action"].as_str() == Some("kernel.enroll_root") {
-            plan.projections.enroll_root = Some((
-                key.as_str().to_owned(),
-                enrolled_subject(env, payloads, &key)?,
-            ));
-        } else {
-            plan.projections.retire_root = Some(key.as_str().to_owned());
+        match root_change(env, payloads)? {
+            RootChange::Enrol { key, subject } => {
+                plan.projections.enroll_root = Some((key.as_str().to_owned(), subject));
+            }
+            RootChange::Retire { key } => {
+                plan.projections.retire_root = Some(key.as_str().to_owned());
+            }
         }
         Ok(())
     }
@@ -1675,6 +1662,54 @@ impl Ingest {
             });
         }
         Ok(())
+    }
+}
+
+/// What a `kernel.enroll_root` / `kernel.retire_root` envelope changes about the root set.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RootChange {
+    /// Add this key, under the name of the human it belongs to.
+    Enrol {
+        /// The key being enrolled.
+        key: KeyId,
+        /// The `human:<name>` subject it belongs to.
+        subject: String,
+    },
+    /// Retire this key. Not retroactive (§03 §8).
+    Retire {
+        /// The key being retired.
+        key: KeyId,
+    },
+}
+
+/// Read a root change out of its envelope — `spec/03 §6`, everything except *who may make it*.
+///
+/// Split out from [`Ingest::validate_root_change`], which keeps the one check that needs the
+/// deployment's current root set, so that the rest is a pure function of the envelope and its
+/// payloads. That is what `spec/vectors/root-change.json` can ask of any implementation.
+///
+/// # Errors
+///
+/// [`codes::ROOT_ENROLLMENT_MALFORMED`], or `schema-missing-member`.
+pub fn root_change(env: &Value, payloads: &[Value]) -> Result<RootChange> {
+    let target = env["execution"]["target"].as_str().unwrap_or_default();
+    let key = target.strip_prefix("root:").ok_or_else(|| {
+        Error::new(
+            codes::ROOT_ENROLLMENT_MALFORMED,
+            format!("execution.target {target:?} must be root:ed25519:<64 hex>"),
+        )
+    })?;
+    let key = KeyId::parse(key).map_err(|e| {
+        Error::new(
+            codes::ROOT_ENROLLMENT_MALFORMED,
+            format!("execution.target does not name a key: {}", e.detail()),
+        )
+    })?;
+    if env["execution"]["action"].as_str() == Some("kernel.enroll_root") {
+        let subject = enrolled_subject(env, payloads, &key)?;
+        Ok(RootChange::Enrol { key, subject })
+    } else {
+        Ok(RootChange::Retire { key })
     }
 }
 

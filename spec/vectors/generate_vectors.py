@@ -3712,6 +3712,144 @@ def gen_gate_arguments() -> None:
     )
 
 
+def gen_root_change() -> None:
+    """spec 03 section 6 — a root change names a key, and an enrolment names the human it belongs to.
+
+    The subject is not decoration. `roots` is `(key, subject)` pairs and the subject is what
+    spec 06 section 5's self-approval prohibition compares: a human holding a second key is still
+    the same human. An implementation that records the target string, or an agent subject, or
+    nothing, has a root set that rule cannot reason about — and this file is where a third
+    implementation is asked whether it does.
+    """
+    root = KEYS["human:ivan"]
+    enrolled = named_key("human:mira")
+
+    def payload(**over: Any) -> dict:
+        body = {"subject": "human:mira", "key": enrolled.key_id}
+        body.update(over)
+        return body
+
+    def envelope(action: str, target: str, args_hash: str) -> dict:
+        return sign_object(
+            base_effect(
+                7,
+                "aa" * 32,
+                root,
+                identity={"subject": "human:ivan", "key": root.key_id, "component": "kernel"},
+                execution={
+                    "action": action,
+                    "target": target,
+                    "args-hash": args_hash,
+                    "outcome": "applied",
+                    "started-at": "2026-07-26T09:15:00.000Z",
+                    "finished-at": "2026-07-26T09:15:01.250Z",
+                },
+                evidence={
+                    "schema": "kernel.enroll_root.v1",
+                    "media-type": "application/json",
+                    "payload-hash": args_hash,
+                    "retain-until": "2027-07-26T00:00:00.000Z",
+                },
+            ),
+            root,
+        )
+
+    def enrol(**over: Any) -> tuple[dict, list[dict]]:
+        body = payload(**over)
+        digest = object_hash(body)
+        env = envelope("kernel.enroll_root", f"root:{enrolled.key_id}", digest)
+        return env, [
+            {"payload-hash": digest, "media-type": "application/json", "payload": body}
+        ]
+
+    good_env, good_payloads = enrol()
+    agent_env, agent_payloads = enrol(subject="agent:not-a-human")
+    empty_env, empty_payloads = enrol(subject="human:")
+    other_env, other_payloads = enrol(key=root.key_id)
+    retire = envelope("kernel.retire_root", f"root:{enrolled.key_id}", ARGS_HASH)
+    unshaped = envelope("kernel.enroll_root", enrolled.key_id, object_hash(payload()))
+
+    cases: list[tuple[str, dict, list[dict], dict, str]] = [
+        (
+            "enrols-the-human-the-evidence-names",
+            good_env,
+            good_payloads,
+            {"valid": True, "error": None, "change": "enrol",
+             "key": enrolled.key_id, "subject": "human:mira"},
+            "the recorded subject is the human named in the evidence the approval committed to, "
+            "not the target string",
+        ),
+        (
+            "evidence-is-not-supplied",
+            good_env,
+            [],
+            {"valid": False, "error": "root-enrollment-malformed"},
+            "a referenced payload may normally be absent at ingest — that is decay — and here it "
+            "may not, because the name exists nowhere else in the envelope",
+        ),
+        (
+            "evidence-names-an-agent",
+            agent_env,
+            agent_payloads,
+            {"valid": False, "error": "root-enrollment-malformed"},
+            "a root is a named human (section 6); an agent subject in the root set is a subject the "
+            "self-approval rule would compare against agent effects",
+        ),
+        (
+            "evidence-names-an-empty-human",
+            empty_env,
+            empty_payloads,
+            {"valid": False, "error": "root-enrollment-malformed"},
+            "the prefix alone is not a name",
+        ),
+        (
+            "evidence-names-a-different-key",
+            other_env,
+            other_payloads,
+            {"valid": False, "error": "root-enrollment-malformed"},
+            "two spellings of one fact: approve the enrolment of one key, record another",
+        ),
+        (
+            "target-is-not-a-root-reference",
+            unshaped,
+            good_payloads,
+            {"valid": False, "error": "root-enrollment-malformed"},
+            "execution.target MUST be root:ed25519:<64 hex>",
+        ),
+        (
+            "retires-a-key-without-naming-a-human",
+            retire,
+            [],
+            {"valid": True, "error": None, "change": "retire", "key": enrolled.key_id},
+            "the subject a key was enrolled under is already recorded, so a retirement names only "
+            "the key — and it is not retroactive (section 8)",
+        ),
+    ]
+
+    vectors = [
+        {
+            "name": name,
+            "description": desc,
+            "envelope": env,
+            "payloads": payloads,
+            "expected": expected,
+        }
+        for name, env, payloads, expected, desc in cases
+    ]
+    emit(
+        "root-change.json",
+        "root-change",
+        "Root set changes (spec 03 section 6). Read the change out of `envelope` with `payloads`. "
+        "The result MUST match `expected.valid`; on failure the code MUST equal `expected.error`; "
+        "on success `expected.change` says whether it enrols or retires, `expected.key` is the key "
+        "affected, and for an enrolment `expected.subject` is the human it MUST be recorded under. "
+        "Who may make the change is not asked here — that needs the deployment's current root set.",
+        vectors,
+        {"keys": [root.as_vector(), enrolled.as_vector()]},
+        role="kernel",
+    )
+
+
 def gen_index() -> None:
     index = {
         "v": V,
@@ -3761,6 +3899,7 @@ def main() -> int:
     gen_trigger()
     gen_manifest()
     gen_gate_arguments()
+    gen_root_change()
     gen_index()
     return 0
 

@@ -238,6 +238,11 @@ fn replay_vectors(report: &mut Report) -> BTreeSet<String> {
                 // `gatequeue::check_arguments` by `tests/kernel_vectors.rs`, and its route
                 // behaviour by `tests/gate_queue_and_console_decisions.rs`.
                 | "gate-arguments"
+                // The envelopes here cite a mandate that exists only in the vector file, so
+                // replaying them would refuse every one for `mandate-unresolved` rather than for
+                // the rule under test. `tests/kernel_vectors.rs` runs them against the real
+                // `ingest::root_change`, and `tests/root_enrollment.rs` drives the ingest path.
+                | "root-change"
         ) {
             continue;
         }
