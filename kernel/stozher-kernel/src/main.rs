@@ -81,6 +81,16 @@ usage:
   stozher-kernel root-publish --url <base> --request <path> --key <path>
                           [--evidence <path>] [--stream <name>] [--token-env <VAR>] [--config <path>]
                           record the approved root-set change
+  stozher-kernel effect-request --action <kernel.x> --target <t> --requester <subject>
+                          --key <path> --mandate <64 hex> --in-force <version> --out <path>
+                          (--args-hash <64 hex> | --args-from <path>)
+                          [--classification <c>] [--minutes <n>] [--config <path>]
+                          the general form: any gated kernel action, incl. conformance_run and
+                          register_component (spec 08 section 3.3)
+  stozher-kernel effect-publish --url <base> --request <path> --key <path>
+                          [--evidence <path>] [--schema <s>] [--retain-days <n>] [--stream <name>]
+                          [--token-env <VAR>]
+                          record the approved action, with its evidence as the payload
   stozher-kernel conformance --manifest <path> --component <command>
                           [--vectors <dir>] [--at <timestamp>]
                           run spec 08 section 4 against a component and print the result;
@@ -196,6 +206,8 @@ fn main() -> ExitCode {
         "policy-publish" => policy_publish(&arguments),
         "root-request" => root_request(&arguments),
         "root-publish" => root_publish(&arguments),
+        "effect-request" => effect_request(&arguments),
+        "effect-publish" => effect_publish(&arguments),
         "conformance" => conformance(&arguments),
         "help" | "--help" | "-h" => {
             print!("{USAGE}");
@@ -1465,7 +1477,6 @@ fn root_publish(arguments: &[String]) -> ExitCode {
     let Some(token) = credential(arguments) else {
         return ExitCode::FAILURE;
     };
-    let stream = value("--stream").unwrap_or("kernel:core");
     let request: serde_json::Value = match std::fs::read(request_path)
         .map_err(|e| e.to_string())
         .and_then(|bytes| serde_json::from_slice(&bytes).map_err(|e| e.to_string()))
@@ -1515,14 +1526,269 @@ fn root_publish(arguments: &[String]) -> ExitCode {
         Vec::new()
     };
 
-    let request_hash = match stozher_core::jcs::object_hash(&request) {
+    let evidence = if enrolling {
+        serde_json::json!({
+            "schema": "kernel.enroll_root.v1",
+            "media-type": "application/json",
+            "payload-hash": args_hash,
+            "retain-until": match stozher_kernel::clock::shift(
+                &match offline_clock(arguments) {
+                    Ok(clock) => clock.now(),
+                    Err(e) => {
+                        eprintln!("{e}");
+                        return ExitCode::FAILURE;
+                    }
+                },
+                365 * 86_400,
+            ) {
+                Ok(retain_until) => retain_until,
+                Err(e) => {
+                    eprintln!("clock: {e}");
+                    return ExitCode::FAILURE;
+                }
+            }
+        })
+    } else {
+        serde_json::Value::Null
+    };
+    publish_effect(
+        arguments, url, &token, key_path, &request, &evidence, &payloads,
+    )
+}
+
+/// Build the action request for any gated kernel action — the general form of `policy-request`.
+///
+/// Three of the five actions §05 §5 rule 6 puts beyond policy's reach have their own ceremony above,
+/// because each carries a rule a general command cannot check: a policy change binds a document, an
+/// enrolment binds a human's name. The other two — `kernel.conformance_run` and
+/// `kernel.register_component` — carry no such rule, and had no command at all: the v0.4 gate
+/// *"a component not written by us registers through the documented path"* was met by a helper in
+/// the test kit, which is not a path an operator has.
+///
+/// `--args-hash` is separate from `--evidence` on purpose. A registration commits to its manifest,
+/// so the two are the same hash; a conformance run commits to the manifest it attests while
+/// carrying the run report as evidence, so they are not.
+fn effect_request(arguments: &[String]) -> ExitCode {
+    let value = |name: &str| value(arguments, name);
+    let (
+        Some(action),
+        Some(target),
+        Some(requester),
+        Some(key_path),
+        Some(mandate),
+        Some(in_force),
+        Some(out),
+    ) = (
+        value("--action"),
+        value("--target"),
+        value("--requester"),
+        value("--key"),
+        value("--mandate"),
+        value("--in-force"),
+        value("--out"),
+    )
+    else {
+        eprintln!(
+            "effect-request requires --action, --target, --requester, --key, --mandate, \
+             --in-force and --out"
+        );
+        return ExitCode::FAILURE;
+    };
+    let args_hash = match (value("--args-hash"), value("--args-from")) {
+        (Some(hash), None) if stozher_core::crypto::is_digest_hex(hash) => hash.to_owned(),
+        (Some(hash), None) => {
+            eprintln!("--args-hash {hash} is not 64 lowercase hex digits");
+            return ExitCode::FAILURE;
+        }
+        (None, Some(path)) => match std::fs::read(path)
+            .map_err(|e| e.to_string())
+            .and_then(|bytes| {
+                serde_json::from_slice::<serde_json::Value>(&bytes).map_err(|e| e.to_string())
+            })
+            .and_then(|document| {
+                stozher_core::jcs::object_hash(&document).map_err(|e| e.detail().to_owned())
+            }) {
+            Ok(hash) => hash,
+            Err(e) => {
+                eprintln!("hashing {path}: {e}");
+                return ExitCode::FAILURE;
+            }
+        },
+        _ => {
+            eprintln!("effect-request requires exactly one of --args-hash or --args-from <path>");
+            return ExitCode::FAILURE;
+        }
+    };
+    let classification = value("--classification").unwrap_or("consequential");
+    let key = match seed_key(arguments, key_path, keys::ROLE_HUMAN_ROOT) {
+        Ok(key) => key,
+        Err(e) => {
+            eprintln!("{e}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let now = match offline_clock(arguments) {
+        Ok(clock) => clock.now(),
+        Err(e) => {
+            eprintln!("{e}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let minutes = value("--minutes")
+        .and_then(|m| m.parse::<i64>().ok())
+        .unwrap_or(60);
+    let (Ok(not_after), Ok(nonce)) = (
+        stozher_kernel::clock::shift(&now, minutes * 60),
+        genesis::request_nonce(),
+    ) else {
+        eprintln!("could not stamp the request");
+        return ExitCode::FAILURE;
+    };
+    let request = serde_json::json!({
+        "v": stozher_core::VERSION,
+        "kind": "action-request",
+        "requested-at": now,
+        "subject": requester,
+        "key": key.id().as_str(),
+        "component": value("--emitting-component").unwrap_or("kernel"),
+        "mandate-ref": mandate,
+        "policy-version": in_force,
+        "classification": classification,
+        "action": action,
+        "target": target,
+        "args-hash": args_hash,
+        "nonce": nonce,
+        "not-after": not_after
+    });
+    let (Ok(canonical), Ok(hash)) = (
+        stozher_core::jcs::canonicalize(&request),
+        stozher_core::jcs::object_hash(&request),
+    ) else {
+        eprintln!("canonicalizing the request");
+        return ExitCode::FAILURE;
+    };
+    if let Err(e) = std::fs::write(out, &canonical) {
+        eprintln!("writing {out}: {e}");
+        return ExitCode::FAILURE;
+    }
+    println!("{hash}");
+    eprintln!("wrote {out} — park it, have a root approve {hash}, then effect-publish");
+    ExitCode::SUCCESS
+}
+
+/// Record an approved gated action — the general form of `policy-publish`.
+fn effect_publish(arguments: &[String]) -> ExitCode {
+    let value = |name: &str| value(arguments, name);
+    let (Some(url), Some(request_path), Some(key_path)) =
+        (value("--url"), value("--request"), value("--key"))
+    else {
+        eprintln!("effect-publish requires --url <base>, --request <path> and --key <path>");
+        return ExitCode::FAILURE;
+    };
+    let Some(token) = credential(arguments) else {
+        return ExitCode::FAILURE;
+    };
+    let request: serde_json::Value = match std::fs::read(request_path)
+        .map_err(|e| e.to_string())
+        .and_then(|bytes| serde_json::from_slice(&bytes).map_err(|e| e.to_string()))
+    {
+        Ok(request) => request,
+        Err(e) => {
+            eprintln!("reading {request_path}: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let action = request["action"].as_str().unwrap_or_default().to_owned();
+    // The evidence, if any, hashed here rather than taken on trust: an operator publishing the
+    // wrong file learns it now instead of from a refusal about a hash.
+    let (payloads, evidence_section) = match value("--evidence") {
+        None => (Vec::new(), serde_json::Value::Null),
+        Some(path) => {
+            let document: serde_json::Value = match std::fs::read(path)
+                .map_err(|e| e.to_string())
+                .and_then(|bytes| serde_json::from_slice(&bytes).map_err(|e| e.to_string()))
+            {
+                Ok(document) => document,
+                Err(e) => {
+                    eprintln!("reading {path}: {e}");
+                    return ExitCode::FAILURE;
+                }
+            };
+            let Ok(hash) = stozher_core::jcs::object_hash(&document) else {
+                eprintln!("hashing {path}");
+                return ExitCode::FAILURE;
+            };
+            // Policy caps retention per weight class (§09 §2), and a `benign` ceiling is much
+            // shorter than a `consequential` one — so this is a flag rather than a constant. The
+            // refusal names the ceiling when it is exceeded, which is what makes retrying obvious.
+            let retain_days = value("--retain-days")
+                .and_then(|d| d.parse::<i64>().ok())
+                .unwrap_or(365);
+            let retain_until = match stozher_kernel::clock::shift(
+                &match offline_clock(arguments) {
+                    Ok(clock) => clock.now(),
+                    Err(e) => {
+                        eprintln!("{e}");
+                        return ExitCode::FAILURE;
+                    }
+                },
+                retain_days * 86_400,
+            ) {
+                Ok(retain_until) => retain_until,
+                Err(e) => {
+                    eprintln!("clock: {e}");
+                    return ExitCode::FAILURE;
+                }
+            };
+            (
+                vec![serde_json::json!({
+                    "payload-hash": hash,
+                    "media-type": "application/json",
+                    "payload": document
+                })],
+                serde_json::json!({
+                    "schema": value("--schema").map_or_else(|| format!("{action}.v1"), str::to_owned),
+                    "media-type": "application/json",
+                    "payload-hash": hash,
+                    "retain-until": retain_until
+                }),
+            )
+        }
+    };
+    publish_effect(
+        arguments,
+        url,
+        &token,
+        key_path,
+        &request,
+        &evidence_section,
+        &payloads,
+    )
+}
+
+/// Sign and submit the effect an approved request describes, retrying a contended chain position.
+///
+/// Shared by [`effect_publish`] and [`root_publish`]: the difference between them is entirely in
+/// what they check *before* this point, and duplicating the retry — whose one subtle part is that
+/// exhausting it must not be reported as a permanent refusal — is how the two would come to differ.
+fn publish_effect(
+    arguments: &[String],
+    url: &str,
+    token: &str,
+    key_path: &str,
+    request: &serde_json::Value,
+    evidence: &serde_json::Value,
+    payloads: &[serde_json::Value],
+) -> ExitCode {
+    let stream = value(arguments, "--stream").unwrap_or("kernel:core");
+    let request_hash = match stozher_core::jcs::object_hash(request) {
         Ok(hash) => hash,
         Err(e) => {
             eprintln!("hashing the request: {e}");
             return ExitCode::FAILURE;
         }
     };
-    let decision = match fetch_decision(url, &token, &request_hash) {
+    let decision = match fetch_decision(url, token, &request_hash) {
         Ok(decision) => decision,
         Err(e) => {
             eprintln!("{e}");
@@ -1543,18 +1809,11 @@ fn root_publish(arguments: &[String]) -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
-    let retain_until = match stozher_kernel::clock::shift(&now, 365 * 86_400) {
-        Ok(retain_until) => retain_until,
-        Err(e) => {
-            eprintln!("clock: {e}");
-            return ExitCode::FAILURE;
-        }
-    };
 
     const ATTEMPTS: usize = 4;
     let mut last = String::new();
     for attempt in 0..ATTEMPTS {
-        let (seq, prev) = match head_of(url, &token, stream) {
+        let (seq, prev) = match head_of(url, token, stream) {
             Ok(head) => head,
             Err(e) => {
                 eprintln!("{e}");
@@ -1571,28 +1830,23 @@ fn root_publish(arguments: &[String]) -> ExitCode {
             "identity": {
                 "subject": request["subject"],
                 "key": key.id().as_str(),
-                "component": "kernel"
+                "component": request["component"]
             },
             "mandate-ref": request["mandate-ref"],
             "policy-version": request["policy-version"],
-            "classification": "consequential",
+            "classification": request["classification"],
             "execution": {
                 "action": request["action"],
                 "target": request["target"],
-                "args-hash": args_hash,
+                "args-hash": request["args-hash"],
                 "outcome": "applied",
                 "started-at": now,
                 "finished-at": now
             },
             "authorization": { "request": request, "decision": decision }
         });
-        if enrolling {
-            body["evidence"] = serde_json::json!({
-                "schema": "kernel.enroll_root.v1",
-                "media-type": "application/json",
-                "payload-hash": args_hash,
-                "retain-until": retain_until
-            });
+        if !evidence.is_null() {
+            body["evidence"] = evidence.clone();
         }
         let submission = key.sign(&body).and_then(|envelope| {
             stozher_core::jcs::canonicalize(
@@ -1606,7 +1860,7 @@ fn root_publish(arguments: &[String]) -> ExitCode {
                 return ExitCode::FAILURE;
             }
         };
-        match stozher_kernel::operator::ingest(url, &token, submission.as_bytes()) {
+        match stozher_kernel::operator::ingest(url, token, submission.as_bytes()) {
             Ok(answer) if answer.ok() => {
                 println!("{}", answer.body);
                 return ExitCode::SUCCESS;
@@ -1621,7 +1875,7 @@ fn root_publish(arguments: &[String]) -> ExitCode {
                 return ExitCode::FAILURE;
             }
             Err(e) => {
-                eprintln!("root-publish: {e}");
+                eprintln!("effect-publish: {e}");
                 return ExitCode::FAILURE;
             }
         }
