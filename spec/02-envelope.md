@@ -17,7 +17,7 @@ An envelope is a signed object (§01 §5). Top-level members:
 | `seq` | integer ≥ 0 | MUST | position in `stream`, strictly increasing by 1 |
 | `prev-hash` | string \| null | MUST | `null` iff `seq == 0`, else `id()` of `seq - 1` (§04) |
 | `identity` | object | MUST | §3 |
-| `mandate-ref` | string(64 hex) | MUST for effect kinds | `id()` of the governing mandate (§03) |
+| `mandate-ref` | string(64 hex) | MUST for effect kinds and `cognition` | `id()` of the governing mandate (§03) |
 | `policy-version` | string | MUST for effect kinds | which policy governed this effect (§05) |
 | `classification` | string | see §2 | one of `read`, `benign`, `consequential`, `prohibited` |
 | `execution` | object | see §2 | §4 |
@@ -52,18 +52,24 @@ exists; §2.1 says where it may appear, and both are conditions on the same refu
 
 | `kind` | Meaning | `classification` | `execution` | Extra required |
 |---|---|---|---|---|
-| `effect` | an effect was applied to the world | MUST | MUST | — |
-| `cognition` | resource was consumed with no external effect | MUST NOT | MUST NOT | `resource`, `cost` |
-| `aggregate` | folded record for mass `read` (§7) | MUST be `read` | MUST NOT | `window`, `counts`, `sample-hashes` |
+| `effect` | an effect was applied to the world | MUST | MUST | `mandate-ref`, `policy-version` |
+| `cognition` | resource was consumed with no external effect | MUST NOT | MUST NOT | `mandate-ref`, `resource`, `cost` |
+| `aggregate` | folded record for mass `read` (§7) | MUST be `read` | MUST NOT | `mandate-ref`, `policy-version`, `window`, `counts`, `sample-hashes` |
 | `mandate` | a mandate was granted (§03) | MUST NOT | MUST NOT | `mandate` |
 | `revocation` | a mandate was revoked (§03 §7) | MUST NOT | MUST NOT | `revocation`, `revokes`, `revoked-at` (`reason` OPTIONAL) |
-| `policy-change` | a policy version was published (§05 §5) | MUST be `consequential` | MUST | `authorization` |
+| `policy-change` | a policy version was published (§05 §5) | MUST be `consequential` | MUST | `mandate-ref`, `policy-version`, `authorization` |
 | `gate-decision` | an approval or denial was recorded (§06 §5) | MUST NOT | MUST NOT | `decision-of` (`decision` OPTIONAL) |
 | `signal` | an inbound signal was received (§07) | MUST NOT | MUST NOT | `signal` |
 | `checkpoint` | signed chain checkpoint (§04 §4) | MUST NOT | MUST NOT | `checkpoint` |
 
 An unknown `kind` MUST be rejected (`envelope-unknown-kind`). "Effect kinds" in this document means
 `effect`, `policy-change`, and `aggregate`.
+
+**The "extra required" column is complete.** Together with the eight common members it is the whole
+required set for that kind — an implementer needs no join against §1, which gives each member's
+*type* and not which kinds carry it. `mandate-ref` and `policy-version` are listed row by row for
+that reason: reading "MUST for effect kinds" in §1 and then having to recall which three kinds those
+are is where a reader silently builds a different envelope from ours.
 
 Rationale for `mandate`, `revocation`, `policy-change`, `gate-decision` and `checkpoint` being
 envelope kinds rather than side tables: everything that changes what the system will permit is

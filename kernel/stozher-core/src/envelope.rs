@@ -87,6 +87,30 @@ const COMMON: [&str; 8] = [
 /// drifting apart, which is how the two reference implementations came to disagree about them.
 const COMMON_OPTIONAL: [&str; 2] = ["memory-ref", "correlation-ref"];
 
+/// The members an envelope of this `kind` MUST and MAY carry, as `(required, optional)`.
+///
+/// The eight common members are folded into `required` and the two universally-optional ones into
+/// `optional`, so what comes back is the whole permitted set for that kind and nothing has to be
+/// joined onto it.
+///
+/// This is public for one reason: `tests/spec_member_tables.rs` reads the tables in
+/// `spec/02 §2` and §2.1 and compares them against this. The product's v0.9 gate is an independent
+/// implementation written from `spec/` alone passing the vector corpus, and nothing else in the
+/// repository makes that testable — a divergence between the prose and this file is invisible to
+/// every test that exercises *our* two implementations, because both read this file's rules and
+/// neither reads the prose. Two such divergences were sitting here when the check was written.
+///
+/// Returns `None` for a kind this version does not model.
+#[must_use]
+pub fn members_of(kind: &str) -> Option<(Vec<&'static str>, Vec<&'static str>)> {
+    let spec = kind_spec(kind)?;
+    let mut required = COMMON.to_vec();
+    required.extend_from_slice(spec.required);
+    let mut optional = COMMON_OPTIONAL.to_vec();
+    optional.extend_from_slice(spec.optional);
+    Some((required, optional))
+}
+
 struct KindSpec {
     required: &'static [&'static str],
     optional: &'static [&'static str],
