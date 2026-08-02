@@ -6,7 +6,9 @@
 
 Stozher's own build plan makes an external cryptographic and security review mandatory before
 anything is called v1. **The owner attests that such a review was performed and produced no
-findings** (ADR-0022, 2026-08-01).
+findings** (ADR-0022, 2026-08-01). **v1.0 was declared on 2026-08-02** (ADR-0024) on that
+attestation and nothing stronger — the review's scope is still not recorded here, and no design
+partner has operated this.
 
 No report, reviewer name, engagement date or statement of scope is held in this repository. If you
 are evaluating this project, that matters more than the attestation itself: *"no findings"* is a

@@ -19,10 +19,12 @@ docker compose up  →  root key ceremony  →  point your own Claude Code at th
 measured by `deploy/gate/clean-install.sh`. Not a clean *machine*: `git clone` and the base image
 pulls are outside it, so a first run on a new host is slower.
 
-**Status: v0.9 closed, 2026-08-01 (ADR-0022).** No engineering remains in the plan before v1.0. What
-remains is contact with reality — one design partner running this in anger for a month, and the two
-empirical questions that closes or does not. Read *What this is **not*** below before deploying
-anything.
+**Status: v1.0 declared, 2026-08-02 (ADR-0024).** The engineering scope is finished: every operation
+the specification requires of an operator now has a command, and every one of those commands has
+been run as a process against a live kernel. **The plan's remaining condition — one design partner
+running this in anger for a month — was waived, not met**, so both empirical questions below are
+still open and the label means *the engineering is finished*, not *this has been operated by someone
+with something to lose*. Read *What this is **not*** before deploying anything.
 
 ---
 
@@ -164,8 +166,12 @@ auditability, overclaiming would be self-defeating:
   corpus at the time.** That is a good sign about the method and a bad sign about the remaining count.
 - **The four-class taxonomy is still under-validated.** The conformance harness now exercises it, but
   we wrote both halves — harness and component. "Does it survive a foreign domain?" can only be
-  answered by a component we did not write. It is open question #2, and it closes at v1.0 or not at
-  all.
+  answered by a component we did not write. As of v1.0 an operator can register such a component
+  with shipped commands — before 2026-08-02 the only path was a helper in our test kit, which is
+  what v0.4's gate was actually graded against. **The path exists; the evidence does not.**
+- **No design partner has run this.** v1.0 was declared with that condition waived (ADR-0024 §2), so
+  "is the pending queue a daily driver" is now being asked after the label rather than before it.
+  The plan is explicit about the stakes: if the answer is no, v1 scope is wrong.
 - **Most of what the spec gained in v0.9 is not corpus-checkable.** Sixteen rules moved out of ADRs
   into `spec/` and sixteen quarantined `x-` codes were adopted — but ADR-0019 §3 states plainly that
   most of those rules are claims about a *running kernel over time*. The corpus is a floor, not a

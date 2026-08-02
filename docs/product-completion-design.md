@@ -3,11 +3,13 @@
 **Status:** Superseded as a status report; still current as a definition · **Date:** 2026-07-31 ·
 **Input to** a `/sc:implement` pass, not an implementation itself
 
-> **Read this before §3.** Every release below is closed. **v0.2, v0.3 and v0.4** delivered as
-> planned (ADR-0013, ADR-0014, ADR-0015); **v0.9 was closed on 2026-08-01 by owner decision** —
-> the external review attested without a recorded scope, and the independent-implementation half of
-> its gate **waived, not achieved** (ADR-0022). **v1.0 is the only one open**, and its remaining
-> condition is not engineering: *at least one design partner has run it in anger for a month.*
+> **Read this before §3.** Every release below is closed, **v1.0 included**. v0.2, v0.3 and v0.4
+> delivered as planned (ADR-0013, ADR-0014, ADR-0015); **v0.9 was closed on 2026-08-01 by owner
+> decision** — the external review attested without a recorded scope, and the
+> independent-implementation half of its gate **waived, not achieved** (ADR-0022); **v1.0 was
+> declared on 2026-08-02**, likewise by decision, with §3's design-partner condition **waived, not
+> met** (ADR-0024). Both empirical questions in §6 below are therefore still open, and ADR-0024 §2
+> says what that costs.
 >
 > §3's tables are what each release *was defined to deliver*, not a list of outstanding work. A
 > reader who takes them as a to-do list re-does finished work — which has happened, which is why
