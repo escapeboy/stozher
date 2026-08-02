@@ -79,6 +79,16 @@ if [ -z "$ROOT_SUBJECT" ]; then
   exit 2
 fi
 case "$ROOT_SUBJECT" in human:?*) ;; *) echo "--root must be of the form human:<name>" >&2; exit 2 ;; esac
+# Here and not at step 3, where the ceremony consumes it. Step 1 compiles the kernel, which takes
+# minutes on a cold cache, and an operator who named a second root without its key used to spend all
+# of them before being told. Every argument this script rejects, it rejects before it builds
+# anything.
+if [ -n "$SECOND_ROOT" ] || [ -n "$SECOND_ROOT_KEY" ]; then
+  [ -n "$SECOND_ROOT" ] && [ -n "$SECOND_ROOT_KEY" ] || {
+    echo "--second-root and --second-root-key are given together: a second root is a named human" >&2
+    echo "and the key they will sign with, and neither is inferable from the other." >&2
+    exit 2; }
+fi
 command -v docker >/dev/null || { echo "docker is required" >&2; exit 2; }
 
 # Debris is not a deployment. Docker's default for a missing bind source is to *create* it, and for
@@ -203,9 +213,7 @@ operator identity --key secrets/operator/operator.seed
 
 say "3/8  the ceremony — two envelopes, signed offline"
 second=()
-if [ -n "$SECOND_ROOT" ] || [ -n "$SECOND_ROOT_KEY" ]; then
-  [ -n "$SECOND_ROOT" ] && [ -n "$SECOND_ROOT_KEY" ] || {
-    echo "--second-root and --second-root-key are given together" >&2; exit 2; }
+if [ -n "$SECOND_ROOT" ]; then
   second=(--second-root "$SECOND_ROOT" --second-root-key "$SECOND_ROOT_KEY")
 fi
 ceremony_output="$(operator genesis \

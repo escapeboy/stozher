@@ -305,3 +305,137 @@ async fn every_console_page_carries_a_dark_palette_and_marks_the_page_it_is_on()
         page.body
     );
 }
+
+/// An effect whose evidence payload holds the call's arguments, as the gateway emits it.
+async fn effect_with_arguments(world: &World, amount: u64) -> String {
+    let body = json!({ "server": "github", "tool": "create_issue", "arguments": { "title": "refund ORD-88214", "amount_cents": amount } });
+    let hash = stozher_core::jcs::object_hash(&body).expect("payload hash");
+    let envelope = world
+        .gated_effect(
+            "github.create_issue",
+            json!({ "evidence": {
+                "schema": "github.create_issue.v1",
+                "media-type": "application/json",
+                "payload-hash": hash,
+                "retain-until": "2026-08-01T00:00:00.000Z"
+            } }),
+        )
+        .await;
+    world
+        .accept(
+            &envelope,
+            &[json!({ "payload-hash": hash, "media-type": "application/json", "payload": body })],
+        )
+        .await;
+    hash
+}
+
+#[tokio::test]
+async fn the_export_says_where_the_argument_values_are_without_putting_them_in_the_file() {
+    // An incident responder exported an applied refund, found `args-hash` and no amount, and
+    // reported that applied effects retain no arguments. They are retained — the payload is
+    // `{server, tool, arguments}` — and nothing between the export and them said so.
+    let world = world().await;
+    let hash = effect_with_arguments(&world, 4_999_000).await;
+
+    let export = get(&world, "/console/audit/export").await;
+    assert_eq!(export.status, StatusCode::OK);
+    assert_eq!(
+        export
+            .headers
+            .get("x-stozher-payload-route")
+            .map(|v| v.to_str().expect("an ASCII header")),
+        Some("/v1/payloads/{payload-hash}"),
+    );
+
+    // The guard, and the more important half: nothing was added to the bytes. Every line is still
+    // one envelope a verifier re-derives `id()` over, and the amount is *not* in the file — an
+    // export that started carrying argument values would breach the payload's retention ceiling by
+    // copying it into a document with none.
+    assert!(
+        !export.body.contains("4999000"),
+        "argument values leaked into the signed export"
+    );
+    for line in export.body.lines() {
+        let record: Value = serde_json::from_str(line).expect("each line is one JSON object");
+        let recomputed = stozher_core::signed::object_id(&record["envelope"]).expect("hashing");
+        assert_eq!(record["id"].as_str(), Some(recomputed.as_str()));
+    }
+
+    // And the advertised route answers for a hash taken out of the export.
+    let payload = get(&world, &format!("/v1/payloads/{hash}")).await;
+    assert_eq!(payload.status, StatusCode::OK);
+    assert!(
+        payload.body.contains("4999000"),
+        "the route the export advertises did not serve the arguments: {}",
+        payload.body
+    );
+}
+
+#[tokio::test]
+async fn the_export_renders_as_a_document_that_says_it_is_not_the_record() {
+    // "NDJSON is not a document" — a compliance officer hand-wrote the cover memo for their auditor
+    // because the product emitted no artefact a lawyer reads.
+    let world = world().await;
+    effect_with_arguments(&world, 4_999_000).await;
+
+    let document = get(
+        &world,
+        "/console/audit/export?classification=consequential&format=html",
+    )
+    .await;
+    assert_eq!(document.status, StatusCode::OK);
+    assert!(
+        document.body.contains("github.create_issue"),
+        "the document does not carry the record it is a reading of"
+    );
+    // It says which question it answers. A rendering that drops the filters is a file that looks
+    // like the answer to a question nobody asked.
+    assert!(
+        document.body.contains("classification=consequential"),
+        "the document does not restate the filters that produced it: {}",
+        document.body
+    );
+    // And it says what it is not.
+    assert!(
+        document.body.contains("not the record"),
+        "the document does not disclaim itself"
+    );
+}
+
+#[tokio::test]
+async fn the_default_export_is_still_the_signed_bytes() {
+    // The paired negative for the format switch: adding a rendering must not change what an
+    // existing caller — a regulator's verifier, or the console's own link — receives.
+    let world = world().await;
+    effect_with_arguments(&world, 4_999_000).await;
+
+    let default = get(&world, "/console/audit/export").await;
+    assert_eq!(
+        default
+            .headers
+            .get(axum::http::header::CONTENT_TYPE)
+            .map(|v| v.to_str().expect("an ASCII header")),
+        Some("application/x-ndjson; charset=utf-8"),
+    );
+    assert!(
+        !default.body.contains("<html"),
+        "the default turned into a page"
+    );
+    let explicit = get(&world, "/console/audit/export?format=ndjson").await;
+    assert_eq!(explicit.body, default.body, "naming the default changed it");
+}
+
+#[tokio::test]
+async fn an_unknown_export_format_is_refused_rather_than_quietly_defaulted() {
+    // The same rule the unknown-*filter* guard already enforces, for the same reason: a silent
+    // fallback hands back a file that looks like the answer to the question that was asked.
+    let world = world().await;
+    let refused = get(&world, "/console/audit/export?format=csv").await;
+    assert_eq!(refused.status, StatusCode::BAD_REQUEST);
+    assert!(
+        refused.body.contains("No such format: csv"),
+        "{}",
+        refused.body
+    );
+}

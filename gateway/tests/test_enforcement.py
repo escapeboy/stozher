@@ -9,7 +9,10 @@ is up has not implemented offline behaviour, it has implemented optimism.
 from __future__ import annotations
 
 import json
+import logging
 import secrets
+import sys
+import time
 from pathlib import Path
 from typing import Any
 
@@ -49,7 +52,7 @@ DEVICE = SigningKey(bytes.fromhex("cc" * 32), "agent:claude-code/test")
 class Harness:
     """A gateway chokepoint with a real store, real keys and a kernel that is not there."""
 
-    def __init__(self, tmp_path: Path) -> None:
+    def __init__(self, tmp_path: Path, park_notify: list[str] | None = None) -> None:
         now = clock_module.now()
         self.store = GatewayStore(tmp_path / "gateway.db")
         self.policy = Policy.verified(
@@ -69,7 +72,13 @@ class Harness:
         )
         self.config = GatewayConfig.model_validate(
             {
-                "gateway": {"enabled": True, "device": "test", "aggregate_max_events": 100},
+                "gateway": {
+                    "enabled": True,
+                    "device": "test",
+                    "aggregate_max_events": 100,
+                    "park_notify": park_notify or [],
+                    "park_notify_timeout_seconds": 2.0,
+                },
                 "org": {
                     "policy_key": POLICY_KEY.id,
                     "roots": [{"subject": ROOT.subject, "key": ROOT.id}],
@@ -195,6 +204,35 @@ def test_an_unknown_tool_parks_even_when_the_heuristic_says_read(harness: Harnes
     assert document["result"] == "parked"
     assert document["classification-tier"] == "heuristic"
     assert harness.forwarded == []
+
+
+def test_a_first_call_park_says_the_decision_also_classifies_the_tool(harness: Harness) -> None:
+    """§10 §4.3 seeds the catalog from the decision, and the refusal is where anyone learns it.
+
+    Two independent adoption evaluations read this refusal, concluded the product demands a human
+    signature for every read, and rejected it without making the second call. §06 §4.1 bars a
+    refusal from carrying a route around the gate; naming what the decision *does* is not one.
+    """
+    schema = {"type": "object", "properties": {"query": {"type": "string"}}}
+    with pytest.raises(RefusalError) as refused:
+        harness.call("search_everything", schema=schema, query="secrets")
+    hint = refused.value.document["hint"]
+    assert "not yet classified" in hint
+    assert "later calls resolve through it" in hint
+
+
+def test_a_park_of_an_already_classified_tool_promises_no_such_thing(harness: Harness) -> None:
+    """The paired negative. Without it the positive passes against a constant string.
+
+    `create_issue` is classified `consequential` by the manifest, so it parks on every call. A
+    refusal telling its caller that later calls resolve without parking would be the gateway
+    promising something the next call disproves.
+    """
+    with pytest.raises(RefusalError) as refused:
+        harness.call("create_issue", title="ship it")
+    hint = refused.value.document["hint"]
+    assert "not yet classified" not in hint
+    assert "later calls resolve" not in hint
 
 
 def test_an_approval_signed_by_a_stranger_permits_nothing(harness: Harness) -> None:
@@ -739,3 +777,77 @@ def test_the_component_never_submits_arguments_the_request_does_not_commit_to() 
     with pytest.raises(GateArgumentsError) as refused:
         check_arguments({"a": "x" * ARGUMENTS_MAX_BYTES}, "0" * 64)
     assert refused.value.code == "gate-arguments-too-large"
+
+
+# -- the park notifier ---------------------------------------------------------------------------
+#
+# "No notification channel is configured. Nothing pings an approver when something parks." An
+# incident responder read that on `/console/pending` with nine requests waiting, and wrote: the
+# control that stopped this is a web page someone has to remember to open.
+
+
+def _notifier(tmp_path: Path, script: str) -> tuple[list[str], Path]:
+    """A hook that records what it was handed, plus whatever else `script` does."""
+    seen = tmp_path / "notified.json"
+    body = f"import sys, pathlib\npathlib.Path({str(seen)!r}).write_text(sys.stdin.read())\n{script}"
+    return [sys.executable, "-c", body], seen
+
+
+def test_a_park_hands_the_notifier_the_request_and_none_of_the_arguments(tmp_path: Path) -> None:
+    argv, seen = _notifier(tmp_path, "")
+    harness = Harness(tmp_path, park_notify=argv)
+    with pytest.raises(RefusalError) as refused:
+        harness.call("create_issue", title="a very secret issue title")
+    harness.enforcer.drain_park_notifications(timeout=5.0)
+
+    notified = json.loads(seen.read_text())
+    assert notified["request-hash"] == refused.value.document["request-hash"]
+    assert notified["action"] == "github.create_issue"
+    assert notified["classification"] == "consequential"
+    # The parked *arguments* have a retention ceiling and an authenticated route; a notification has
+    # neither and goes wherever the operator wired it. It is a pointer, not a copy.
+    assert "a very secret issue title" not in seen.read_text()
+
+
+def test_a_notifier_that_fails_changes_neither_the_refusal_nor_the_queue(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """A notifier that can fail the call makes the gate less available than no notifier at all."""
+    argv, _ = _notifier(tmp_path, "sys.exit(3)")
+    harness = Harness(tmp_path, park_notify=argv)
+    with caplog.at_level(logging.WARNING, logger="stozher_gateway.enforce"):
+        with pytest.raises(RefusalError) as refused:
+            harness.call("create_issue", title="ship it")
+        harness.enforcer.drain_park_notifications(timeout=5.0)
+
+    assert refused.value.document["reason-code"] == "gate-parked"
+    assert len(harness.store.pending()) == 1, "the park itself must be unaffected"
+    assert harness.forwarded == []
+    # And it is not swallowed: "nothing pinged me" and "the ping failed" must not look identical.
+    assert any("exited 3" in record.getMessage() for record in caplog.records), (
+        f"the notifier failed silently: {[r.getMessage() for r in caplog.records]}"
+    )
+
+
+def test_a_notifier_that_hangs_does_not_hold_the_caller(tmp_path: Path) -> None:
+    """The refusal is a terminal answer (§06 §4.2); a slow notifier must not turn it into a wait."""
+    argv, _ = _notifier(tmp_path, "import time; time.sleep(30)")
+    harness = Harness(tmp_path, park_notify=argv)
+    started = time.monotonic()
+    with pytest.raises(RefusalError):
+        harness.call("create_issue", title="ship it")
+    elapsed = time.monotonic() - started
+    # Tighter than `park_notify_timeout_seconds` (2.0 in this harness), and that is the whole
+    # assertion. A bound above the timeout passes against a *synchronous* notifier too — the timeout
+    # would cap the wait and the test would report success while the caller sat through it. The
+    # first version of this test was written that way and survived being made synchronous.
+    assert elapsed < 1.0, f"the caller waited {elapsed:.2f}s on the notifier"
+
+
+def test_no_notifier_configured_parks_exactly_as_before(tmp_path: Path) -> None:
+    """The paired negative: the default install must be unchanged by all of the above."""
+    harness = Harness(tmp_path)
+    with pytest.raises(RefusalError) as refused:
+        harness.call("create_issue", title="ship it")
+    assert refused.value.document["reason-code"] == "gate-parked"
+    assert len(harness.store.pending()) == 1

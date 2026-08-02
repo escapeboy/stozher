@@ -1,0 +1,79 @@
+#!/usr/bin/env bash
+# Take a copy of every stream's checkpoint head, to be kept where this deployment cannot reach it.
+#
+# `spec/04 §4.7`: checkpoints SHOULD be exported off-box, because "a checkpoint that only ever
+# exists inside the box it attests proves little". The kernel signs them on an interval and stores
+# them beside the records they attest — which answers "has this store been edited?" and does not
+# answer "was this store rebuilt?", since a party able to rebuild the records can rebuild the
+# checkpoints with them. What answers the second question is a copy taken before the fact and held
+# by someone else.
+#
+# This command produces that copy and stops. It sends nothing anywhere: the destination is the
+# operator's to choose, and choosing it is the entire mechanism. A copy this deployment mailed to a
+# server this deployment configured would reproduce the problem one hop further out.
+#
+# What to do with the file, in rough order of what it buys:
+#
+#   - commit it to a repository this deployment has no credential for, on a schedule
+#   - mail it to a distribution that includes someone outside the operating team
+#   - hand it to the auditor with the NDJSON export, so a later export can be checked against it
+#
+# Any of those beats the file staying here. The value is not the format; it is the second custodian.
+#
+# Verifying one later: for each head, fetch the checkpoint envelope named by `checkpoint-envelope`
+# from `/v1/envelopes/<id>`, check its signature, and confirm it commits to `head-hash` at `to-seq`.
+# A store rebuilt after this file was taken cannot produce a chain that both reaches these heads and
+# omits what they cover.
+#
+# Usage:
+#   bin/stozher-anchor                      # to stdout
+#   bin/stozher-anchor --out anchors/$(date -u +%Y-%m-%dT%H%M%SZ).json
+
+set -euo pipefail
+
+DEPLOY="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$DEPLOY"
+
+IMAGE="${STOZHER_KERNEL_IMAGE:-stozher-kernel:0.1.0}"
+OUT=""
+
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --out) OUT="$2"; shift 2 ;;
+    -h|--help) sed -n '2,30p' "$0"; exit 0 ;;
+    *) echo "unknown argument $1" >&2; exit 2 ;;
+  esac
+done
+
+[ -f .env ] || { echo ".env is missing — run bin/stozher-bootstrap first" >&2; exit 2; }
+# shellcheck disable=SC1091
+set -a; . ./.env; set +a
+
+# The network this project's kernel is on, asked of docker rather than assumed: with
+# COMPOSE_PROJECT_NAME set, a hardcoded default would anchor the *other* install on this host, and
+# an anchor naming the wrong deployment is worse than none — it would verify, against nothing.
+CONTAINER="$(docker compose ps -q kernel)"
+[ -n "$CONTAINER" ] || { echo "the kernel container is not running — start it with 'docker compose up -d kernel'" >&2; exit 1; }
+NETWORK="$(docker inspect -f '{{range $name, $_ := .NetworkSettings.Networks}}{{$name}}{{end}}' "$CONTAINER")"
+[ -n "$NETWORK" ] || { echo "the kernel container is on no network" >&2; exit 1; }
+
+heads="$(docker run --rm -i -u "$(id -u):$(id -g)" --network "$NETWORK" \
+  -e STOZHER_KERNEL_TOKEN="$STOZHER_KERNEL_TOKEN" "$IMAGE" \
+  anchor --url http://kernel:8787)"
+
+# An anchor over no checkpoints is not an anchor, and writing the file anyway would put a document
+# in an auditor's hands that attests nothing while looking like it does. A young deployment has not
+# reached its first checkpoint interval yet; that is a reason to wait, not to export a shape.
+if ! printf '%s' "$heads" | grep -q '"head-hash"'; then
+  echo "no checkpoint has been recorded yet, so there is nothing to anchor." >&2
+  echo "checkpoints are emitted on the policy's interval — see /console/streams." >&2
+  exit 1
+fi
+
+if [ -n "$OUT" ]; then
+  mkdir -p "$(dirname "$OUT")"
+  printf '%s\n' "$heads" > "$OUT"
+  echo "wrote $OUT — it is worth nothing until a copy of it lives somewhere this deployment cannot write." >&2
+else
+  printf '%s\n' "$heads"
+fi

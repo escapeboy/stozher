@@ -1,0 +1,101 @@
+<!doctype html>
+<html lang="en">
+{# Standalone on purpose: this file leaves the building. It carries no console navigation, because
+   every link in it would be dead for the person it is written for, and a document whose menu goes
+   nowhere reads as a screenshot of a system rather than a statement about one. #}
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{ title }}</title>
+<style>
+:root { color-scheme: light dark; --line: #c9c9c9; --dim: #666; --bad: #a11; --warn: #a60; --ok: #060; }
+@media (prefers-color-scheme: dark) {
+  :root { --line: #666; --dim: #a8a8a8; --bad: #ff8a80; --warn: #ffb454; --ok: #6ede8a; }
+}
+* { box-sizing: border-box; }
+body { margin: 0 auto; padding: 2rem 1rem; max-width: 70rem; font: 14px/1.6 ui-monospace, SFMono-Regular, Menlo, monospace; }
+h1 { font-size: 1.2rem; margin: 0 0 .2rem; }
+h2 { font-size: 1rem; margin: 1.8rem 0 .4rem; }
+p { max-width: 62rem; }
+dl.facts { display: grid; grid-template-columns: max-content 1fr; gap: .2rem 1rem; margin: 1rem 0; }
+dl.facts dt { color: var(--dim); }
+dl.facts dd { margin: 0; word-break: break-all; }
+table { border-collapse: collapse; width: 100%; margin-bottom: 1rem; }
+th, td { border-bottom: 1px solid var(--line); padding: .25rem .5rem; text-align: left; vertical-align: top; }
+th { font-weight: 600; white-space: nowrap; }
+td.hash { white-space: nowrap; }
+.prohibited, .violation { color: var(--bad); font-weight: 600; }
+.consequential { color: var(--warn); }
+.read, .benign { color: var(--dim); }
+.note { border-left: 3px solid var(--line); padding: .4rem .8rem; margin: 1rem 0; color: var(--dim); }
+.empty { color: var(--dim); font-style: italic; }
+@media print { body { max-width: none; } .note { break-inside: avoid; } }
+</style>
+</head>
+<body>
+<h1>{{ title }}</h1>
+
+{# The first thing the document says is what it is not. A rendering that lets itself be mistaken for
+   the record is worse than no rendering: it invites a reader to check a signature that is not here
+   and conclude the system has none. #}
+<div class="note">
+<b>This is a reading of the record, not the record.</b> It carries no signatures and proves nothing
+on its own. The evidence is the NDJSON export of the same query — canonical envelopes exactly as
+they were signed — from which any reader can re-derive each envelope's identity and verify its
+signature and its place in the chain without trusting this page or the system that produced it.
+Where the two disagree, the NDJSON is correct.
+</div>
+
+<dl class="facts">
+<dt>Records</dt><dd>{{ records }}</dd>
+<dt>Filters</dt><dd>{% if query.is_empty() %}<span class="empty">none — every record</span>{% else %}<code>{{ query }}</code>{% endif %}</dd>
+<dt>Record of evidence</dt><dd><code>/console/audit/export{% if !query.is_empty() %}?{{ query }}{% endif %}</code></dd>
+<dt>Argument values</dt><dd><code>{{ payload_route }}</code></dd>
+</dl>
+
+<p>Every row below states what was done, by which subject, under whose authority, and how it ended.
+An action that was refused is as much a record as one that was applied, and both appear here.
+A row's <b>evidence</b> column names the payload the envelope commits to; for an executed effect
+that payload holds the call's arguments, and it is served — authenticated — at the route above with
+that row's payload hash.</p>
+
+<h2>Records</h2>
+{% if rows.is_empty() %}
+<p class="empty">No records matched these filters. That is a statement about the filters, not an
+assurance that nothing happened — widen them, or take the unfiltered export, before reading it as
+one.</p>
+{% else %}
+<table>
+<thead>
+<tr>
+<th>emitted</th><th>subject</th><th>action</th><th>target</th><th>class</th>
+<th>outcome</th><th>approved by</th><th>evidence</th><th>envelope</th>
+</tr>
+</thead>
+<tbody>
+{% for r in rows %}
+<tr>
+<td>{{ r.emitted_at }}</td>
+<td>{{ r.subject }}</td>
+<td>{{ r.action }}</td>
+<td>{{ r.target }}</td>
+<td class="{{ r.class }}">{{ r.class }}</td>
+<td{% if !r.violation.is_empty() %} class="violation"{% endif %}>{{ r.outcome }}{% if !r.violation.is_empty() %} · {{ r.violation }}{% endif %}</td>
+<td>{% if r.decided_by.is_empty() %}<span class="empty">—</span>{% else %}{{ r.decided_by }}{% endif %}</td>
+<td class="hash">{{ r.evidence }}{% if !r.payload_hash.is_empty() %}<br><code>{{ r.payload_hash }}</code>{% endif %}</td>
+<td class="hash">{{ r.short }}</td>
+</tr>
+{% endfor %}
+</tbody>
+</table>
+{% endif %}
+
+<h2>How to check this without trusting it</h2>
+<p>Take the NDJSON export named above. Each line is one envelope in canonical form. For each line:
+re-derive the envelope identity by hashing the canonical bytes, verify the Ed25519 signature against
+the key the envelope names, and confirm that the sequence numbers within each stream run without
+gaps and that each record's <code>prev-hash</code> matches the previous one. A missing record breaks
+the sequence and the hash chain at the point it was removed. None of that requires this document,
+and none of it requires software written by the operator of the system.</p>
+</body>
+</html>

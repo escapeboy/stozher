@@ -85,8 +85,10 @@ if [ -z "$RESUME" ]; then
 
   if [ -z "$MANDATE" ]; then
     echo "--mandate <64 hex> is required: the mandate '$SUBJECT' publishes under." >&2
-    echo "It must cover kernel.publish_policy at class consequential — sign one with" >&2
-    echo "  bin/stozher-grant, or reuse the id shown on /console/mandates." >&2
+    echo "It must cover kernel.publish_policy at class consequential. Reuse the id shown on" >&2
+    echo "/console/mandates, or sign a new one with the kernel's 'grant' subcommand — there is" >&2
+    echo "deliberately no wrapper for it; deploy/README.md 'Changing policy' has the exact" >&2
+    echo "invocation." >&2
     exit 2
   fi
 

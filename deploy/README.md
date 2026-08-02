@@ -295,6 +295,40 @@ compromised kernel process, not for its own maintenance code. The party that enf
 structurally unable to satisfy it. That is a property, not a slogan, and the copy-paste step is what
 buys it (ADR-0009 §2).
 
+### Being told that something is waiting
+
+None of the above helps if nobody knows there is anything to sign. A fresh install notifies no one:
+the request lands on `/console/pending`, the agent receives a terminal `parked` refusal, and the
+only thing joining the two is an operator remembering to open a web page. An incident responder
+evaluating this product found nine requests waiting that way and wrote that the control which
+stopped the incident was a page someone had to remember to look at. **A gate nobody is pinged about
+is a queue, not a control.**
+
+Set `park_notify` in the gateway's config to an argv — a script that posts to Slack, sends a push,
+writes to a pager, whatever your team already reads:
+
+```toml
+[gateway]
+park_notify = ["/usr/local/bin/notify-approver"]
+park_notify_timeout_seconds = 10.0
+```
+
+It receives one JSON object on stdin: the request hash, subject, action, target, classification and
+the time it parked. Three things it deliberately does not do, each of which could have gone the
+other way:
+
+- **It never carries the call's argument values.** Those have a retention ceiling and an
+  authenticated route; a notification is delivered wherever you wired it and has neither. What you
+  get is a pointer — take the request hash to `/console/pending` to read the arguments.
+- **It cannot fail the call.** A non-zero exit or a timeout is logged and changes nothing the agent
+  sees. A notifier able to turn a park into an error would make the gate less available than no
+  notifier at all: the agent would get a broken tool because a chat server was down.
+- **It never delays the refusal.** It runs alongside; a hook that hangs is abandoned after its
+  timeout and the caller is answered immediately either way.
+
+Parked requests expire after an hour (`spec/06 §4.3`), so a notifier that nobody reads is not much
+better than no notifier — the practical minimum is a channel someone is actually on.
+
 ### Changing policy
 
 ```sh
@@ -516,6 +550,36 @@ Verify any time, without a restore:
 docker compose exec -T kernel stozher-kernel verify --config /etc/stozher/kernel-config.json
 ```
 
+### Anchoring the chain off-box
+
+`verify` answers "has this store been *edited*?". It does not answer "was this store *rebuilt*?" —
+and neither does a checkpoint, as long as the checkpoint lives here. Whoever could rebuild the
+records could rebuild the checkpoints attesting them, so a deployment attesting its own history is
+the party under examination vouching for itself. `spec/04 §4.7` names the fix and this is the
+command for it:
+
+```sh
+./bin/stozher-anchor --out anchors/$(date -u +%Y-%m-%dT%H%M%SZ).json
+```
+
+It prints every stream's newest checkpoint head — the covered range, the head hash, and the id of
+the signed checkpoint envelope that attests it — and stops. **It sends nothing anywhere, and that is
+the mechanism, not a missing feature.** A copy this deployment mailed to a server this deployment
+configured would move the problem one hop and solve none of it. Put the file where this deployment
+has no credential:
+
+- a git commit in a repository it cannot write to, on a schedule (weekly beats never; daily beats weekly)
+- an email to a list that includes somebody outside the operating team
+- handed to the auditor alongside the NDJSON export, so a later export can be checked against it
+
+To check one later: for each head, fetch `/v1/envelopes/<checkpoint-envelope>`, verify its
+signature, and confirm it commits to `head-hash` at `to-seq`. A store rebuilt after the anchor was
+taken cannot produce a chain that both reaches those heads and omits what they covered.
+
+The command refuses to write a file when no checkpoint exists yet — a document that attests nothing
+while looking like it does is worse in an auditor's hands than no document. A deployment younger
+than one checkpoint interval has simply not reached its first.
+
 ### Undoing a restore by hand
 
 `bin/stozher-restore` rolls itself back when the chain fails to verify. The case this section is for
@@ -682,8 +746,9 @@ versioning is stamped and re-verified rather than rebuilt.
 
 * **Root on the host.** Someone with root can read the kernel's seed from memory, forge anything
   that key can sign, and delete data. `spec/09 §8` does not defend against this; it makes it
-  non-silent. Export checkpoints off-box (`spec/04 §4.7`) so a post-hoc rebuild contradicts
-  something.
+  non-silent — but only if a head of the chain exists somewhere they cannot reach. `bin/stozher-anchor`
+  takes that copy; see *Anchoring the chain off-box* below. Until you run it on a schedule and put
+  the output somewhere this deployment has no credential for, a post-hoc rebuild contradicts nothing.
 * **TLS is not terminated by these images.** `spec/09 §8` requires component↔kernel traffic to be
   TLS. The compose file publishes the kernel on `127.0.0.1` only for exactly this reason. Exposing
   it beyond the host is a deliberate act that needs a TLS terminator in front of it — nginx, Caddy,
@@ -700,9 +765,12 @@ versioning is stamped and re-verified rather than rebuilt.
   That is enforcement staying up while convenience goes down, and it is the intended trade.
 * **The chain proves integrity, not truth.** It proves an emitter said this and nobody changed it
   afterwards. Whether the emitter was honest is what mandates and gates are for.
-* **Not reviewed externally yet.** `docs/build-plan.md` requires an external crypto and security
-  review before anything is called v1. The hand-rolled calendar arithmetic in `clock.rs` is flagged
-  in ADR-0006 as the highest-value thing for a reviewer to attack.
+* **The external review is an attestation, not a report.** The owner attests that a review was
+  performed and produced no findings (ADR-0022), and v1.0 was declared on that (ADR-0024). No
+  reviewer name, date or statement of scope is held in this repository, so "no findings" is a claim
+  about a scope nobody here can read. `SECURITY.md` says the same at more length; weigh it as an
+  owner's word. The hand-rolled calendar arithmetic in `clock.rs` is flagged in ADR-0006 as the
+  highest-value thing for a reviewer to attack.
 
 ---
 

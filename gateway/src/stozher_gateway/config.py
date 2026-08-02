@@ -193,6 +193,18 @@ class GatewaySection(BaseModel):
     #: mandated and gated like anything else.
     govern_native_tools: bool = True
     park_timeout_seconds: float = Field(default=120.0, gt=0)
+    #: Argv of a command run when a request parks — empty means nothing is run.
+    #:
+    #: An incident responder found nine requests sitting in the queue with nothing configured to
+    #: tell anyone, and wrote: "the control that stopped this is a web page someone has to remember
+    #: to open." A gate nobody is notified about is a queue, not a control.
+    #:
+    #: Argv rather than a shell string on purpose. The one thing this command is handed is a
+    #: request hash, and a shell string would invite an operator to interpolate it into `sh -c`.
+    park_notify: list[str] = Field(default_factory=list)
+    #: How long the notifier may take before it is abandoned. It never delays the refusal — the
+    #: caller is answered from a different thread — so this bounds the notifier's own lifetime.
+    park_notify_timeout_seconds: float = Field(default=10.0, gt=0)
     #: Aggregation window bounds (§10 §5). The elapsed bound comes from policy.
     aggregate_max_events: int = Field(default=500, gt=0)
     aggregate_max_samples: int = Field(default=8, gt=0, le=16)

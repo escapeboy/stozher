@@ -20,8 +20,11 @@ precedes it is the write-ahead row that makes the envelope recoverable if `emit`
 
 from __future__ import annotations
 
+import json
 import logging
 import secrets
+import subprocess
+import threading
 from collections.abc import Callable
 from typing import Any, NamedTuple
 
@@ -164,6 +167,15 @@ class Enforcer:
             )
         self._clock = clock or clock_module.Clock()
         self._component = config.gateway.component
+        #: Live park notifiers, so a shutdown can wait for them rather than kill them mid-write.
+        self._notifiers: list[threading.Thread] = []
+        if not config.gateway.park_notify:
+            # Same rule as the three feeds above: a gap that changes what the operator gets is
+            # stated once at construction, never left to be discovered. An install with no notifier
+            # still gates every call correctly — it just does so where nobody is looking.
+            logger.info(
+                "no park notifier is configured: a parked request waits until someone opens the console"
+            )
 
     # -- the one entry point ------------------------------------------------------------------
 
@@ -638,6 +650,7 @@ class Enforcer:
             )
             arguments = None
         not_queued = self._queue_with_kernel(request, arguments)
+        self._notify_parked(request_hash, ask)
         raise refusal(
             "parked",
             "gate-parked",
@@ -659,8 +672,83 @@ class Enforcer:
                 f"pending request {request_hash}; once approved, the same call may be made again"
                 if not_queued is None
                 else f"pending request {request_hash} (held locally; {not_queued})"
+            )
+            # Only on a first call, where it is true: the decision seeds the catalog entry (§10
+            # §4.3) and later calls of this tool resolve through it. A tool the catalog already
+            # classifies `consequential` parks every time, and saying this there would be the
+            # refusal promising something the next call disproves. Two independent evaluators read
+            # a first-call park as "this product asks a human to sign every read", concluded it was
+            # unusable, and never made the second call — the shape §4.1 calls being refused legibly.
+            + (
+                ". This tool is not yet classified here, so the first call is gated whatever its "
+                "class; the decision also records that classification, and later calls resolve "
+                "through it"
+                if first_call
+                else ""
             ),
         )
+
+    def _notify_parked(self, request_hash: str, ask: ActionRequest) -> None:
+        """Tell the operator something is waiting. Never blocks the gate, never fails the call.
+
+        Three properties, each of which could reasonably have gone the other way and did not:
+
+        1. **It cannot fail the call.** A notifier that turns a park into an error makes the gate
+           less available than no notifier at all — the agent gets a broken tool because the
+           operator's chat server was down, and the gate stops being the thing that decided.
+        2. **It carries no argument values.** Those are the sensitive half: they have a retention
+           ceiling and an authenticated route, and a notification is delivered to whatever the
+           operator wired up, with neither. A pointer, not a copy.
+        3. **A failure is logged.** Otherwise "nothing pinged me" and "the ping failed" look
+           identical from the console, which is the exact defect class this whole change is about.
+        """
+        argv = self._config.gateway.park_notify
+        if not argv:
+            return
+        message = json.dumps(
+            {
+                "stozher": "stozher/0.1",
+                "event": "parked",
+                "request-hash": request_hash,
+                "subject": ask.subject,
+                "action": ask.action,
+                "target": ask.target,
+                "classification": ask.classification,
+                "parked-at": self._clock.now(),
+            }
+        )
+        timeout = self._config.gateway.park_notify_timeout_seconds
+
+        def run() -> None:
+            try:
+                finished = subprocess.run(
+                    argv,
+                    input=message,
+                    capture_output=True,
+                    text=True,
+                    timeout=timeout,
+                    check=False,
+                )
+            except (OSError, subprocess.SubprocessError) as e:
+                logger.warning("the park notifier for %s could not run: %s", request_hash, e)
+                return
+            if finished.returncode != 0:
+                logger.warning(
+                    "the park notifier for %s exited %s: %s",
+                    request_hash,
+                    finished.returncode,
+                    finished.stderr.strip()[:200],
+                )
+
+        thread = threading.Thread(target=run, name=f"park-notify-{request_hash[:12]}", daemon=True)
+        self._notifiers = [t for t in self._notifiers if t.is_alive()]
+        self._notifiers.append(thread)
+        thread.start()
+
+    def drain_park_notifications(self, timeout: float | None = None) -> None:
+        """Wait for in-flight notifiers. For shutdown, so a notifier is not killed mid-write."""
+        for thread in list(self._notifiers):
+            thread.join(timeout)
 
     def _approvers(
         self,

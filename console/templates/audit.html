@@ -54,8 +54,18 @@ fractional digits (<code>spec/01 §2.3</code>).</span>
 <p><b>{{ matched }}</b> record(s) match these filters; <b>{{ shown }}</b> shown below{% if paged %},
 continuing from an earlier page{% endif %}.
 <a href="/console/audit/export?{{ query }}">export all {{ matched }} for regulators (NDJSON)</a>
+· <a href="/console/audit/export?{{ query }}{% if query != "" %}&{% endif %}format=html">as a document to read</a>
 {% if f.stream != "" %} · <a href="/console/streams/{{ f.stream }}/verify">verify this stream's chain</a>{% endif %}
 </p>
+
+{# An incident responder exported this and reported that applied effects retain no arguments,
+   because the envelope commits to `args-hash` and the export never said where the values are. They
+   are retained — an effect's payload is `{server, tool, arguments}` — and the only thing missing was
+   this sentence. #}
+<div class="note">The table shows what each envelope <em>commits to</em>. The values behind
+<code>args-hash</code> — for an executed effect, the arguments the call was made with — are held as
+the envelope's evidence payload and served at <code>/v1/payloads/&lt;payload-hash&gt;</code> until
+its retention ceiling. Each row's envelope page carries the hash and the link.</div>
 
 {% if truncated %}
 <div class="note"><b class="violation">This table is not the whole answer.</b> It shows

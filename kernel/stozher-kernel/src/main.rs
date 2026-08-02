@@ -65,6 +65,9 @@ usage:
                           hand an action request to the pending queue
   stozher-kernel policy-current --url <base> [--token-env <VAR>]
                           print the policy version in force — what --in-force takes
+  stozher-kernel anchor   --url <base> [--token-env <VAR>]
+                          print every stream's checkpoint head, to be kept off this machine
+                          (spec 04 section 4.7)
   stozher-kernel policy-draft --url <base> --version <new> --out <path> [--token-env <VAR>]
                           write the policy in force out as a draft of <new>, signature stripped
   stozher-kernel policy-sign --document <path> --key <path> --out <path>
@@ -201,6 +204,7 @@ fn main() -> ExitCode {
         "policy-request" => policy_request(&arguments),
         "park" => park(&arguments),
         "policy-current" => policy_current(&arguments),
+        "anchor" => anchor(&arguments),
         "policy-draft" => policy_draft(&arguments),
         "policy-sign" => policy_sign(&arguments),
         "policy-publish" => policy_publish(&arguments),
@@ -1113,6 +1117,40 @@ fn policy_current(arguments: &[String]) -> ExitCode {
         }
         Err(e) => {
             eprintln!("policy-current: {e}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
+/// Print every stream's checkpoint head, for the operator to keep somewhere this system cannot.
+///
+/// `spec/04 §4.7` calls for checkpoints to be exported off-box and says why: *"A checkpoint that
+/// only ever exists inside the box it attests proves little."* The kernel has computed them since
+/// v0.2 and until now offered no way out, so the console could say "anchored: yes" about a fact
+/// only the audited party held.
+///
+/// The output goes to stdout and nowhere else. This command mails nothing, commits nothing and
+/// contacts no third party — where the copy goes is the operator's decision and the whole value of
+/// the copy is that this system did not choose it.
+fn anchor(arguments: &[String]) -> ExitCode {
+    let Some(url) = value(arguments, "--url") else {
+        eprintln!("anchor requires --url <base>");
+        return ExitCode::FAILURE;
+    };
+    let Some(token) = credential(arguments) else {
+        return ExitCode::FAILURE;
+    };
+    match stozher_kernel::operator::read(url, &token, "v1/checkpoints/heads") {
+        Ok(answer) if answer.ok() => {
+            println!("{}", answer.body);
+            ExitCode::SUCCESS
+        }
+        Ok(answer) => {
+            eprintln!("the kernel refused it ({}): {}", answer.status, answer.body);
+            ExitCode::FAILURE
+        }
+        Err(e) => {
+            eprintln!("anchor: {e}");
             ExitCode::FAILURE
         }
     }
