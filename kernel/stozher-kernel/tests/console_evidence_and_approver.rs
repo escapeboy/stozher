@@ -193,6 +193,72 @@ async fn the_pending_queue_answers_on_whose_authority() {
 }
 
 #[tokio::test]
+async fn the_operator_client_can_find_its_csrf_token_on_the_page_the_console_actually_renders() {
+    // `bin/stozher-approve` submits through `stozher-kernel answer`, which fetches this page and
+    // reads the token out of it. The parser was written against a `<form>`; when the form came out
+    // of the template — the route is `Bearer`-authenticated, so a browser form could never have
+    // reached it — every unit test kept passing, because each one builds its own page with a form
+    // in it. Nothing compared the parser to the template, so the only signal was an operator
+    // getting `console-csrf-invalid` for a request that was sitting right there.
+    let world = world().await;
+    let draft = world
+        .effect("github.create_issue", "consequential", json!({}))
+        .await;
+    let request_object = world.action_request(&stozher_testkit::Ask {
+        requester: &world.agent,
+        component: "gateway",
+        mandate_ref: &world.standing_mandate,
+        policy_version: &world.policy_version,
+        classification: "consequential",
+        action: "github.create_issue",
+        target: draft["execution"]["target"].as_str().expect("target"),
+        args_hash: draft["execution"]["args-hash"].as_str().expect("args-hash"),
+    });
+    let parked = Request::builder()
+        .method("POST")
+        .uri("/v1/gate/requests")
+        .header("authorization", format!("Bearer {TOKEN}"))
+        .header("content-type", "application/json")
+        .body(Body::from(
+            stozher_core::jcs::canonicalize(&request_object).expect("canonicalizing"),
+        ))
+        .expect("a request");
+    let response = http::router(Arc::clone(&world.kernel))
+        .oneshot(parked)
+        .await
+        .expect("the router responds");
+    assert_eq!(response.status(), StatusCode::CREATED);
+    let request_hash = serde_json::from_slice::<Value>(
+        &response
+            .into_body()
+            .collect()
+            .await
+            .expect("collecting the body")
+            .to_bytes(),
+    )
+    .expect("a JSON answer")["request-hash"]
+        .as_str()
+        .expect("a request hash")
+        .to_owned();
+
+    let page = get(&world, "/console/pending").await;
+    let found = stozher_kernel::operator::csrf_for(&page.body, &request_hash);
+    assert_eq!(
+        found.as_deref(),
+        // The token the kernel would accept from this caller for this request. Asserting only
+        // "some token was found" would pass on a parser that read a neighbouring row's.
+        Some(
+            world
+                .kernel
+                .csrf_token("agent:test-harness", &request_hash)
+                .as_str()
+        ),
+        "the operator client cannot read its token off the rendered page: {}",
+        page.body
+    );
+}
+
+#[tokio::test]
 async fn an_unauthenticated_console_page_answers_in_the_consoles_own_voice() {
     // Same rule as everywhere else (§05 §2.2) and the same status. What changes is that a person who
     // opened this in a browser now gets a page that says what to do, and the browser gets a

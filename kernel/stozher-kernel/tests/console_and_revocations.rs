@@ -409,6 +409,162 @@ async fn the_revocation_feed_requires_a_credential() {
     assert_eq!(answer.status, StatusCode::UNAUTHORIZED);
 }
 
+/// `POST` an already-signed revocation object, the way `bin/stozher-revoke` does.
+async fn post_revocation(world: &World, object: &Value) -> Answer {
+    let body = stozher_core::jcs::canonicalize(object).expect("canonicalizing");
+    let request = Request::builder()
+        .method("POST")
+        .uri("/v1/revocations")
+        .header("authorization", format!("Bearer {TOKEN}"))
+        .header("content-type", "application/json")
+        .body(Body::from(body))
+        .expect("a request");
+    let response = http::router(Arc::clone(&world.kernel))
+        .oneshot(request)
+        .await
+        .expect("the router responds");
+    let status = response.status();
+    let bytes = response
+        .into_body()
+        .collect()
+        .await
+        .expect("collecting the body")
+        .to_bytes();
+    Answer {
+        status,
+        etag: None,
+        body: String::from_utf8_lossy(&bytes).into_owned(),
+    }
+}
+
+/// The revocation object a revoker signs offline — what `stozher-kernel revoke` prints.
+fn signed_revocation(revoker: &stozher_testkit::TestKey, target: &str) -> Value {
+    revoker.sign(&json!({
+        "v": stozher_core::VERSION,
+        "kind": "revocation",
+        "revokes": target,
+        "revoked-at": NOW,
+        "reason": "laptop lost"
+    }))
+}
+
+#[tokio::test]
+async fn the_revocation_route_wraps_a_signature_it_could_not_have_produced() {
+    // The product shipped with no way to revoke: while the envelope *was* the revocation object, the
+    // revoker's signature covered `stream`, `seq` and `prev-hash`, so revoking meant holding the
+    // seed and the kernel's chain in one process. This route is the other half of §03 §7's nesting —
+    // the revoker signs offline, the kernel signs the envelope.
+    let world = world().await;
+    let answer = post_revocation(
+        &world,
+        &signed_revocation(&world.root, &world.standing_mandate),
+    )
+    .await;
+    assert_eq!(answer.status, StatusCode::CREATED, "{}", answer.body);
+    assert_eq!(
+        answer.json()["revoked-by"].as_str(),
+        Some(world.root.id.as_str()),
+        "the answer must name the key that carried the authority, not the one that wrapped it"
+    );
+
+    let envelope_id = answer.json()["envelope-id"]
+        .as_str()
+        .expect("an envelope id")
+        .to_owned();
+    let stored = get(&world, &format!("/v1/envelopes/{envelope_id}")).await;
+    assert_eq!(stored.status, StatusCode::OK);
+    let envelope = &stored.json()["envelope"];
+    // Two signatures over two different things. The kernel's says where in the chain this sits; the
+    // root's says who decided. A reader that checked the outer one would accept a revocation nobody
+    // with standing had asked for.
+    assert_eq!(
+        envelope["identity"]["subject"].as_str(),
+        Some("agent:kernel")
+    );
+    assert_eq!(
+        envelope["revocation"]["sig"]["key"].as_str(),
+        Some(world.root.id.as_str())
+    );
+    // The projection is built here from the object, so the two spellings cannot disagree.
+    for member in ["revokes", "revoked-at", "reason"] {
+        assert_eq!(
+            envelope[member], envelope["revocation"][member],
+            "the envelope's {member} is not the object's"
+        );
+    }
+
+    let feed = get(&world, "/v1/revocations").await;
+    assert_eq!(feed.json()["count"].as_u64(), Some(1));
+}
+
+#[tokio::test]
+async fn reaching_the_revocation_route_is_not_being_allowed_to_revoke() {
+    // The caller here is authenticated — it holds the deployment's credential — and the object is
+    // validly signed. It is signed by the wrong person: `agent:gateway/dev` is the mandate's
+    // *grantee*, and §03 §7 admits only the grantor, an ancestor's grantor, or an enrolled root.
+    let world = world().await;
+    let answer = post_revocation(
+        &world,
+        &signed_revocation(&world.agent, &world.standing_mandate),
+    )
+    .await;
+    assert_eq!(answer.status, StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(
+        answer.json()["reason-code"].as_str(),
+        Some("revocation-not-authorized"),
+        "{}",
+        answer.body
+    );
+
+    let feed = get(&world, "/v1/revocations").await;
+    assert_eq!(
+        feed.json()["count"].as_u64(),
+        Some(0),
+        "a refused revocation must not reach the feed"
+    );
+}
+
+#[tokio::test]
+async fn a_member_the_revoker_did_not_sign_is_not_carried_into_the_envelope() {
+    // The one way a caller could try to make the envelope say something the revoker did not: add a
+    // member to the body. It is not a mismatch to catch downstream — the projection is built from
+    // the object, so the added member would have to be inside the signature, and then it is not
+    // added, it is signed. What the caller actually produces is bytes that do not verify.
+    let world = world().await;
+    let mut object = signed_revocation(&world.root, &world.standing_mandate);
+    object["revokes"] = Value::from("0".repeat(64));
+    let answer = post_revocation(&world, &object).await;
+    assert_eq!(answer.status, StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(
+        answer.json()["reason-code"].as_str(),
+        Some("sig-invalid"),
+        "{}",
+        answer.body
+    );
+}
+
+#[tokio::test]
+async fn the_revocation_route_requires_a_credential() {
+    let world = world().await;
+    let request = Request::builder()
+        .method("POST")
+        .uri("/v1/revocations")
+        .header("content-type", "application/json")
+        .body(Body::from(
+            stozher_core::jcs::canonicalize(&signed_revocation(
+                &world.root,
+                &world.standing_mandate,
+            ))
+            .expect("canonicalizing"),
+        ))
+        .expect("a request");
+    let response = http::router(Arc::clone(&world.kernel))
+        .oneshot(request)
+        .await
+        .expect("the router responds");
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+}
+
 #[tokio::test]
 async fn envelopes_can_be_filtered_by_kind() {
     let world = world().await;

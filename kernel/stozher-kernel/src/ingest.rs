@@ -177,6 +177,92 @@ impl Ingest {
         &self.config.policy_key
     }
 
+    /// Build, sign and submit an envelope the kernel itself emits, on its own core stream.
+    ///
+    /// The kernel signs an envelope in exactly the situations where **somebody else signed the
+    /// object**: a gate decision (§06 §1.3), a revocation (§03 §7). Those objects are produced
+    /// offline, on a machine that holds a seed and does not hold the chain, so their signer cannot
+    /// cover `stream`, `seq` and `prev-hash` — values known only at the moment of append. The
+    /// kernel's signature attests receipt and chain position and no authority whatever; the
+    /// authority is the nested object, and [`Self::validate`] re-verifies it independently of who
+    /// wrapped it. A kernel-signed envelope around a forged object is refused by the same code path
+    /// that would refuse it from anyone else.
+    ///
+    /// The core stream has several writers — genesis, root changes, policy publication, decisions,
+    /// revocations — so the chain position is taken under contention and retried a bounded number of
+    /// times. A retry re-signs, because `seq` and `prev-hash` are inside the signed bytes.
+    ///
+    /// # Errors
+    ///
+    /// The `(reason-code, detail)` of a refusal, or [`codes::STORE_UNAVAILABLE`] when every attempt
+    /// lost the race. Reporting the last chain code instead would tell the caller their object was
+    /// permanently rejected, when in fact nothing was recorded and retrying is exactly right.
+    pub async fn append_as_kernel(
+        &self,
+        kind: &str,
+        members: Map<String, Value>,
+        what: &str,
+    ) -> std::result::Result<String, (String, String)> {
+        const ATTEMPTS: usize = 8;
+        let unavailable = |e: Error| (e.code().to_owned(), e.detail().to_owned());
+        let stream = self.config.kernel_core_stream.clone();
+        let mut last = None;
+        for attempt in 0..ATTEMPTS {
+            // Eight immediate re-reads of the same head is eight writers colliding at the same
+            // instant. A short escalating pause between them is what turns a burst into a queue.
+            if attempt > 0 {
+                tokio::time::sleep(std::time::Duration::from_millis(2 << attempt.min(6))).await;
+            }
+            let head = self.store.stream_head(&stream).await.map_err(unavailable)?;
+            let (seq, prev) = match head {
+                Some((head_seq, head_id)) => (head_seq + 1, Some(head_id)),
+                None => (0, None),
+            };
+            let key = self.kernel_key();
+            let mut body = serde_json::json!({
+                "v": stozher_core::VERSION,
+                "kind": kind,
+                "emitted-at": self.clock.now(),
+                "stream": stream,
+                "seq": seq,
+                "prev-hash": prev,
+                "identity": {
+                    "subject": "agent:kernel",
+                    "key": key.id().as_str(),
+                    "component": "kernel"
+                }
+            });
+            body.as_object_mut()
+                .expect("the literal above is a JSON object")
+                .extend(members.clone());
+            let envelope = key.sign(&body).map_err(unavailable)?;
+            let request = serde_json::json!({ "envelope": envelope, "payloads": [] });
+            let raw = jcs::canonicalize(&request).map_err(unavailable)?;
+            match self.submit(raw.as_bytes(), Some("agent:kernel")).await {
+                Outcome::Accepted(appended) => return Ok(appended.id),
+                Outcome::Rejected { reason, detail, .. }
+                    if reason == "chain-seq-duplicate" || reason == "chain-prev-hash-mismatch" =>
+                {
+                    last = Some((reason, detail));
+                }
+                Outcome::Rejected { reason, detail, .. } => return Err((reason, detail)),
+                Outcome::Unavailable(detail) => {
+                    return Err((codes::STORE_UNAVAILABLE.to_owned(), detail));
+                }
+            }
+        }
+        let detail = last.map_or_else(
+            || format!("the kernel's core stream is too contended to record {what}"),
+            |(code, detail)| {
+                format!(
+                    "the kernel's core stream is too contended to record {what}: \
+                     {ATTEMPTS} attempts, last {code} ({detail})"
+                )
+            },
+        );
+        Err((codes::STORE_UNAVAILABLE.to_owned(), detail))
+    }
+
     /// Submit an ingest request: `{ "envelope": …, "payloads": [ … ] }`.
     ///
     /// A refusal is recorded in the kernel's rejection stream before this returns, with the reason

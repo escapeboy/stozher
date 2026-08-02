@@ -1054,86 +1054,21 @@ async fn decide(
 
 /// Build, sign and submit the `gate-decision` envelope (§06 §5).
 ///
-/// The kernel's core stream is written by more than this route — genesis, root changes, policy
-/// publication — so the chain position is taken under contention and retried a bounded number of
-/// times. A retry re-signs, because `seq` and `prev-hash` are inside the signed bytes.
+/// The wrapping, the contention retry and the refusal mapping live in
+/// [`crate::Ingest::append_as_kernel`], which the revocation route (§03 §7) uses for the same
+/// reason: an object a human signed offline cannot carry its own chain position.
 async fn submit_decision(
     kernel: &Kernel,
     request_hash: &str,
     decision: &Value,
 ) -> std::result::Result<String, (String, String)> {
-    const ATTEMPTS: usize = 8;
-    let unavailable = |e: stozher_core::error::Error| (e.code().to_owned(), e.detail().to_owned());
-    let stream = kernel.config.kernel_core_stream.clone();
-    let mut last = None;
-    for attempt in 0..ATTEMPTS {
-        // Eight immediate re-reads of the same head is eight writers colliding at the same instant.
-        // A short escalating pause between them is what turns a burst of approvals into a queue.
-        if attempt > 0 {
-            tokio::time::sleep(std::time::Duration::from_millis(2 << attempt.min(6))).await;
-        }
-        let head = kernel
-            .ingest
-            .store()
-            .stream_head(&stream)
-            .await
-            .map_err(unavailable)?;
-        let (seq, prev) = match head {
-            Some((head_seq, head_id)) => (head_seq + 1, Some(head_id)),
-            None => (0, None),
-        };
-        let key = kernel.ingest.kernel_key();
-        let envelope = key
-            .sign(&serde_json::json!({
-                "v": stozher_core::VERSION,
-                "kind": "gate-decision",
-                "emitted-at": kernel.ingest.clock().now(),
-                "stream": stream,
-                "seq": seq,
-                "prev-hash": prev,
-                "identity": {
-                    "subject": "agent:kernel",
-                    "key": key.id().as_str(),
-                    "component": "kernel"
-                },
-                "decision-of": request_hash,
-                "decision": decision
-            }))
-            .map_err(unavailable)?;
-        let request = serde_json::json!({ "envelope": envelope, "payloads": [] });
-        let raw = stozher_core::jcs::canonicalize(&request).map_err(unavailable)?;
-        match kernel
-            .ingest
-            .submit(raw.as_bytes(), Some("agent:kernel"))
-            .await
-        {
-            crate::Outcome::Accepted(appended) => return Ok(appended.id),
-            crate::Outcome::Rejected { reason, detail, .. }
-                if reason == "chain-seq-duplicate" || reason == "chain-prev-hash-mismatch" =>
-            {
-                last = Some((reason, detail));
-            }
-            crate::Outcome::Rejected { reason, detail, .. } => return Err((reason, detail)),
-            crate::Outcome::Unavailable(detail) => {
-                return Err((crate::codes::STORE_UNAVAILABLE.to_owned(), detail));
-            }
-        }
-    }
-    // Running out of attempts is contention, not a defect in what the approver signed. Returning
-    // the last chain code made the handler answer 422 with `retryable: false`, which is the one
-    // thing a caller must not be told here: the decision was *not* recorded, and the human who
-    // pressed approve was told their approval was permanently rejected. `STORE_UNAVAILABLE` is
-    // what the handler already maps to 503 with `retryable: true`, which is the truth.
-    let detail = last.map_or_else(
-        || "the kernel's core stream is too contended to record the decision".to_owned(),
-        |(code, detail)| {
-            format!(
-                "the kernel's core stream is too contended to record the decision: \
-                 {ATTEMPTS} attempts, last {code} ({detail})"
-            )
-        },
-    );
-    Err((crate::codes::STORE_UNAVAILABLE.to_owned(), detail))
+    let mut members = serde_json::Map::new();
+    members.insert("decision-of".to_owned(), Value::from(request_hash));
+    members.insert("decision".to_owned(), decision.clone());
+    kernel
+        .ingest
+        .append_as_kernel("gate-decision", members, "the decision")
+        .await
 }
 
 /// Pull `(csrf, decision)` out of a JSON or form-encoded submission.

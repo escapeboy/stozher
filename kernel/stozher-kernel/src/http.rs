@@ -18,6 +18,12 @@
 //! to a table with no chain-bearing column. It appends nothing, and a row it writes permits nothing:
 //! the answer is a human's signature, which enters through `POST /v1/ingest` like everything else.
 //!
+//! `POST /v1/revocations` (§03 §7) is the third of the same shape, and it is the reason to state the
+//! shape once: it carries an object **someone else signed offline**, wraps it in an envelope whose
+//! kernel signature attests chain position only, and submits it through `POST /v1/ingest`'s own
+//! pipeline, which re-checks the inner signature against the grantor chain. A route that wraps is
+//! not a route that authorizes.
+//!
 //! The console ([`crate::console`]) is merged into this table. It registers `get` routes for every
 //! page and exactly one `post` — the decision route — which likewise appends only by submitting a
 //! signed envelope through `POST /v1/ingest`'s own pipeline.
@@ -42,7 +48,10 @@ pub fn router(kernel: Arc<Kernel>) -> Router {
         .route("/v1/ingest", post(post_ingest))
         .route("/v1/policy/current", get(get_policy_current))
         .route("/v1/policy/{policy_version}", get(get_policy_version))
-        .route("/v1/revocations", get(get_revocations))
+        .route(
+            "/v1/revocations",
+            get(get_revocations).post(post_revocation),
+        )
         .route(
             "/v1/gate/requests",
             post(post_gate_request).get(get_gate_requests),
@@ -276,6 +285,103 @@ async fn get_revocations(State(kernel): State<Arc<Kernel>>, headers: HeaderMap) 
             .insert(axum::http::header::ETAG, value);
     }
     response
+}
+
+/// Record a revocation — §03 §7, the mutating half of the feed above.
+///
+/// # Why this route exists at all
+///
+/// A revocation is an envelope, and for the product's whole life to date the only way to append one
+/// was to build that envelope yourself: the revoker's signature had to cover `stream`, `seq` and
+/// `prev-hash`, so the revoker's seed and a connection to the kernel had to meet in one process.
+/// That is precisely the person this operation is for — a root whose seed exists on one laptop —
+/// and it is why the product shipped with no `revoke` command. §03 §7 now nests the **signed
+/// revocation object** the same way an approval is nested, and this is the channel that carries it.
+///
+/// # What it does not do
+///
+/// It decides nothing and permits nothing. It takes an object signed by a key this kernel has never
+/// held, wraps it in an envelope the kernel signs for chain position only, and submits it through
+/// `POST /v1/ingest`'s own pipeline, where [`crate::ingest`] re-checks the inner signature against
+/// the revoked mandate's grantor chain and the root set. An authenticated caller who is not
+/// entitled to revoke gets `revocation-not-authorized` from the same code that would refuse them
+/// anywhere else.
+///
+/// The three projected members are **built from the object here**, never read from the caller, so
+/// the `revocation-object-mismatch` this route could otherwise introduce is not merely rejected
+/// downstream — it is unconstructible.
+async fn post_revocation(
+    State(kernel): State<Arc<Kernel>>,
+    headers: HeaderMap,
+    body: axum::body::Bytes,
+) -> Response {
+    if let Caller::Refused(response) = caller(&kernel, &headers) {
+        return response;
+    }
+    let Ok(object) = serde_json::from_slice::<Value>(&body) else {
+        return refusal(
+            StatusCode::BAD_REQUEST,
+            "jcs-malformed-json",
+            "the body is not a JSON revocation object",
+            None,
+        );
+    };
+    let (Some(revokes), Some(revoked_at)) = (
+        object
+            .get("revokes")
+            .and_then(Value::as_str)
+            .map(str::to_owned),
+        object
+            .get("revoked-at")
+            .and_then(Value::as_str)
+            .map(str::to_owned),
+    ) else {
+        return refusal(
+            StatusCode::BAD_REQUEST,
+            "schema-missing-member",
+            "a revocation object carries revokes and revoked-at",
+            None,
+        );
+    };
+    let mut members = serde_json::Map::new();
+    members.insert("revokes".to_owned(), Value::from(revokes.as_str()));
+    members.insert("revoked-at".to_owned(), Value::from(revoked_at));
+    // §03 §7: `reason` is present in the envelope iff it is present in the object. Projecting a
+    // `null` for an object that omits it would be a mismatch the caller never made.
+    if let Some(reason) = object.get("reason") {
+        members.insert("reason".to_owned(), reason.clone());
+    }
+    let revoked_by = object
+        .get("sig")
+        .and_then(|sig| sig.get("key"))
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_owned();
+    members.insert("revocation".to_owned(), object);
+
+    match kernel
+        .ingest
+        .append_as_kernel("revocation", members, "the revocation")
+        .await
+    {
+        Ok(envelope_id) => json(
+            StatusCode::CREATED,
+            &serde_json::json!({
+                "stozher": stozher_core::VERSION,
+                "result": "recorded",
+                "revokes": revokes,
+                "revoked-by": revoked_by,
+                "envelope-id": envelope_id
+            }),
+        ),
+        Err((code, detail)) if code == codes::STORE_UNAVAILABLE => refusal(
+            StatusCode::SERVICE_UNAVAILABLE,
+            codes::STORE_UNAVAILABLE,
+            &detail,
+            None,
+        ),
+        Err((code, detail)) => refusal(StatusCode::UNPROCESSABLE_ENTITY, &code, &detail, None),
+    }
 }
 
 /// Submit a parked request to the kernel-native pending queue — `spec/06 §4.3`, ADR-0008 §A.

@@ -295,6 +295,32 @@ compromised kernel process, not for its own maintenance code. The party that enf
 structurally unable to satisfy it. That is a property, not a slogan, and the copy-paste step is what
 buys it (ADR-0009 §2).
 
+### Withdrawing a mandate
+
+```sh
+./bin/stozher-revoke <mandate-id> --root human:ivan --reason "laptop lost"
+```
+
+The same two-process split, for the same reason: the revoker signs, a second process with no seed
+mounted submits. The mandate id is on `/console/mandates`, and `--root` must name a human the
+ceremony enrolled — §03 §7 admits the mandate's grantor, the grantor of any ancestor in its chain,
+or an enrolled root, and *nobody else*. Being able to reach the route is not being able to revoke:
+the kernel wraps what you signed for chain position and re-checks the inner signature against that
+list, so the deployment credential buys delivery and nothing more.
+
+**Revocation is preventive only once the holder has seen it, and it is not free.** Components poll
+`GET /v1/revocations` and evaluate the cached set locally, so between the revocation and the
+holder's next poll it keeps building its local chain under a mandate the kernel will now refuse.
+Every one of those envelopes is rejected — recorded, not silently dropped — and `spec/04 §3` admits
+no gap in a stream, so **the component's stream is wedged at that position until an operator
+intervenes.** Nothing is lost and nothing is accepted that should not be. But an operator who
+expects revocation to be free finds a stopped component and, unless they read this, no explanation.
+
+A revocation applies from its `revoked-at` forward, to the mandate and everything delegated beneath
+it. Effects already recorded stay valid: the audit says what was permitted at the time, and
+rewriting that is not a feature. Backdating to erase a window of authority is refused outright
+(`revocation-before-issue`), which is why `revoke` stamps the current time rather than taking a flag.
+
 ### Reading the console
 
 ```sh
@@ -630,6 +656,7 @@ deploy/
   Dockerfile.gateway        gateway: harbormaster-mcp + stozher-gateway[crypto]
   bin/stozher-bootstrap     the ceremony, start to finish
   bin/stozher-approve       sign in one process, submit in another
+  bin/stozher-revoke        the same split, for withdrawing a mandate
   bin/stozher-console       localhost header-injecting proxy, so a browser can read the console
   bin/stozher-backup        VACUUM INTO snapshot + keys + config, mode 0600
   bin/stozher-restore       restore, then refuse to call it restored until the chain verifies
@@ -645,6 +672,6 @@ deploy/
 ### Moving a deployment to a real server
 
 `secrets/operator/` stays on your laptop. `secrets/kernel/`, `secrets/gateway/`, `config/` and
-`var/` are what the server needs. Run the operator-side commands (`genesis`, `grant`, `decide`)
-locally against the remote kernel's URL; they are the only ones that touch the root key, and none of
-them needs to run where the service runs.
+`var/` are what the server needs. Run the operator-side commands (`genesis`, `grant`, `decide`,
+`revoke`) locally against the remote kernel's URL; they are the only ones that touch the root key,
+and none of them needs to run where the service runs.

@@ -1,13 +1,14 @@
 //! The Stozher kernel binary: `serve`, `keygen`, `identity`, `token`, `genesis`, `verify`, `decide`,
-//! `conformance`.
+//! `revoke`, `conformance`.
 //!
 //! Argument parsing is hand-written. The surface is a handful of subcommands and flags; a parser
 //! generator would be a dependency in a product whose pitch is a minimal auditable surface
 //! (ADR-0003), and there is nothing here it would make clearer.
 //!
-//! Four of the seven subcommands — `keygen`, `identity`, `token`, `genesis` — open no socket, read
-//! no configuration and touch no database. They are the operator's half of the install, and they run
-//! on the operator's own machine so that a private seed never has to exist on the server.
+//! Six subcommands — `keygen`, `identity`, `token`, `genesis`, `decide`, `revoke` — open no socket,
+//! read no configuration and touch no database. They are the operator's half of the install and of
+//! every authority decision after it, and they run on the operator's own machine so that a private
+//! seed never has to exist on the server.
 
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
@@ -51,6 +52,11 @@ usage:
                           [--minutes <n>] [--role <n>] [--index <n>] [--config <path>]
                           sign a gate decision and print it; submit it to
                           POST /console/pending/<request-hash>/decide
+  stozher-kernel revoke   --mandate <64 hex> --key <path> [--reason <text>]
+                          [--role <n>] [--index <n>] [--config <path>]
+                          sign a revocation and print it (spec 03 section 7)
+  stozher-kernel submit-revocation --url <base> [--file <path>] [--token-env <VAR>]
+                          hand an already-signed revocation to POST /v1/revocations
   stozher-kernel conformance --manifest <path> --component <command>
                           [--vectors <dir>] [--at <timestamp>]
                           run spec 08 section 4 against a component and print the result;
@@ -59,21 +65,24 @@ usage:
 
 The kernel refuses to start if its seed file is readable by anyone but its owner (spec 09 section 8).
 
-`keygen`, `identity`, `token`, `genesis` and `decide` open no socket and read no configuration: they
-run in the operator's own process, on the operator's own machine, so a private seed never has to
-exist on the server. `genesis` prints two ordinary POST /v1/ingest bodies; nothing about them is
-privileged and every ingest check runs over them.
+`keygen`, `identity`, `token`, `genesis`, `decide` and `revoke` open no socket and read no
+configuration: they run in the operator's own process, on the operator's own machine, so a private
+seed never has to exist on the server. `genesis` prints two ordinary POST /v1/ingest bodies; nothing
+about them is privileged and every ingest check runs over them.
 
-`decide` reads the approver's own key file. The service never holds approver key material and has no
-route that produces an approver's signature, so it cannot manufacture an approval — the friction
-here is what buys that.
+`decide` reads the approver's own key file, and `revoke` the revoker's. The service never holds
+either, and has no route that produces such a signature, so it cannot manufacture an approval or a
+revocation — the friction here is what buys that.
 
-An approver enrolled by `genesis` holds the root key at role 0': sign with `--role 0 --index 0`.
+A root enrolled by `genesis` holds its key at role 0': approve or revoke with `--role 0 --index 0`.
+A component's own grantor, revoking something it delegated, signs at the role that grant was made
+under.
 
-`grant` and `decide` take an optional `--config`, and only a deployment running a `clock-advance`
-needs it (ADR-0023): the kernel is then ahead of the host, and a mandate or an approval stamped
-with real time is expired before it can be submitted. `genesis` deliberately has no such flag —
-its two documents are the deployment's founding record and outlive any demonstration.
+`grant`, `decide` and `revoke` take an optional `--config`, and only a deployment running a
+`clock-advance` needs it (ADR-0023): the kernel is then ahead of the host, so a mandate or an
+approval stamped with real time is expired before it can be submitted, and a revocation is stamped
+before the issue it names. `genesis` deliberately has no such flag — its two documents are the
+deployment's founding record and outlive any demonstration.
 ";
 
 /// An approval is a permission to act now, not a licence (spec 06 section 1.2).
@@ -147,6 +156,8 @@ fn main() -> ExitCode {
         "serve" => run(flag("--config"), Mode::Serve),
         "verify" => run(flag("--config"), Mode::Verify),
         "decide" => decide(&arguments),
+        "revoke" => revoke(&arguments),
+        "submit-revocation" => submit_revocation(&arguments),
         "conformance" => conformance(&arguments),
         "help" | "--help" | "-h" => {
             print!("{USAGE}");
@@ -671,6 +682,114 @@ fn submit(arguments: &[String]) -> ExitCode {
         }
         Err(e) => {
             eprintln!("submit: {e}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
+/// Sign a revocation, in the revoker's own process — §03 §7.
+///
+/// This command exists because the revocation *object* is now nested inside the envelope. While the
+/// envelope was itself the revocation, its signature covered `stream`, `seq` and `prev-hash` —
+/// values only the kernel knows at append — so the revoker's seed and a connection to the kernel had
+/// to meet in one process. There was therefore no `revoke` command for the whole life of the
+/// product: the person most likely to need one is a root whose seed exists on a single laptop, and
+/// that is exactly the person the old shape excluded.
+fn revoke(arguments: &[String]) -> ExitCode {
+    let value = |name: &str| value(arguments, name);
+    let (Some(mandate), Some(key_path)) = (value("--mandate"), value("--key")) else {
+        eprintln!("revoke requires --mandate <64 hex> and --key <path>");
+        return ExitCode::FAILURE;
+    };
+    if !stozher_core::crypto::is_digest_hex(mandate) {
+        eprintln!("--mandate must be 64 lowercase hex digits");
+        return ExitCode::FAILURE;
+    }
+    let role = value("--role")
+        .and_then(|r| r.parse::<u32>().ok())
+        .unwrap_or(1);
+    let index = value("--index")
+        .and_then(|i| i.parse::<u32>().ok())
+        .unwrap_or(0);
+    let seed = match keys::Seed::load(&PathBuf::from(key_path)) {
+        Ok(seed) => seed,
+        Err(e) => {
+            eprintln!("key: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let key = match seed.derive(role, index) {
+        Ok(key) => key,
+        Err(e) => {
+            eprintln!("derivation: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
+    // Now, and not a flag. §03 §7 refuses a `revoked-at` earlier than the mandate's `issued-at`
+    // outright — backdating a revocation to erase a window of authority is a rejection, not a
+    // workflow — and a revocation dated in the future is a mandate that is still live.
+    let now = match offline_clock(arguments) {
+        Ok(clock) => clock.now(),
+        Err(e) => {
+            eprintln!("{e}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let mut object = serde_json::Map::new();
+    object.insert("v".to_owned(), stozher_core::VERSION.into());
+    object.insert("kind".to_owned(), "revocation".into());
+    object.insert("revokes".to_owned(), mandate.into());
+    object.insert("revoked-at".to_owned(), now.clone().into());
+    // §03 §7: `reason` is present in the envelope iff it is present in the object, so an absent
+    // reason is an absent member — not a null, which the projection could not match.
+    if let Some(reason) = value("--reason") {
+        if reason.trim().is_empty() {
+            eprintln!("--reason, if given, must say something");
+            return ExitCode::FAILURE;
+        }
+        object.insert("reason".to_owned(), reason.into());
+    }
+    match key
+        .sign(&serde_json::Value::Object(object))
+        .and_then(|object| stozher_core::jcs::canonicalize(&object))
+    {
+        Ok(canonical) => {
+            println!("{canonical}");
+            eprintln!("signed by {} — revokes {mandate} at {now}", key.id());
+            ExitCode::SUCCESS
+        }
+        Err(e) => {
+            eprintln!("signing: {e}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
+/// Hand a signed revocation to the kernel. The revocation is read, never produced, here.
+fn submit_revocation(arguments: &[String]) -> ExitCode {
+    let Some(url) = value(arguments, "--url") else {
+        eprintln!("submit-revocation requires --url <base>");
+        return ExitCode::FAILURE;
+    };
+    let (Some(token), Ok(body)) = (credential(arguments), document(arguments)) else {
+        return ExitCode::FAILURE;
+    };
+    let Ok(object) = String::from_utf8(body) else {
+        eprintln!("the revocation must be UTF-8 JSON");
+        return ExitCode::FAILURE;
+    };
+    match stozher_kernel::operator::revoke(url, &token, object.trim()) {
+        Ok(answer) => {
+            println!("{}", answer.body);
+            if answer.ok() {
+                ExitCode::SUCCESS
+            } else {
+                eprintln!("the kernel refused it ({})", answer.status);
+                ExitCode::FAILURE
+            }
+        }
+        Err(e) => {
+            eprintln!("submit-revocation: {e}");
             ExitCode::FAILURE
         }
     }

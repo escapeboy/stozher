@@ -73,6 +73,13 @@ MCP servers / 174 tools → a **conservative heuristic** for anything unknown. A
 parks on first call, and the approver's decision seeds the org's catalog. *Unknown is not ungoverned;
 unknown is expensive until classified.*
 
+Authority granted this way can be withdrawn the same way: `bin/stozher-revoke <mandate-id> --root
+human:you` signs a revocation on your own machine and a second process delivers it. Components poll
+the revocation feed and evaluate it locally, so the withdrawal is preventive rather than a refusal
+after the fact — at the cost of wedging the holder's stream at its next append, which
+`deploy/README.md` §3 states in full because an operator should not learn it from a stopped
+component.
+
 ## The gate, and why it cannot be bypassed
 
 The design's central lesson came from studying a prior system that bypassed its own approval gate
