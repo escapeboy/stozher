@@ -349,6 +349,25 @@ most valuable grant in the deployment, and a one-liner that issues it — with d
 eventually widen — is the wrong thing to make convenient. `--days 1` above is not caution for its own
 sake: the mandate only has to outlive the four steps below it.
 
+### Rotating a key or a mandate
+
+`spec/03 §8`: rotation is **grant + revoke, never mutation** — a mandate object is immutable because
+its id is its content hash. So there is no `rotate` command; there is an order, and the order is the
+whole of it:
+
+1. `grant` the new mandate (new `nonce`, new `not-after`, same or narrower scope) and submit it.
+2. Point the holder at the new `mandate-ref` and let it pick the change up.
+3. `bin/stozher-revoke <old-mandate-id> --root human:you`.
+
+**Doing it the other way round stops the component.** Between the revocation and the holder's next
+pull of `/v1/revocations` it keeps emitting under a mandate the kernel now refuses; §04 §3 admits no
+gap in a stream, so its stream wedges at that position until an operator intervenes. Nothing is lost
+and nothing is silently accepted — but an incident is a poor place to learn the ordering.
+
+Rotating a *subject's key* is the same shape: the new key needs its own mandate, and envelopes the
+old key already signed stay valid forever. Retiring a key MUST NOT invalidate history, which is the
+point of an audit log rather than a concession.
+
 ### Changing the root set
 
 ```sh
