@@ -348,14 +348,51 @@ class GatewayStore:
         return None
 
     def seeded_pending(self) -> list[Parked]:
-        """Decided requests carrying a catalog seed. The seed is about *future* calls of the tool,
-        so it is applied when the decision exists, not when the original call happens to be retried.
+        """Decided requests carrying an **answered** catalog seed. The seed is about *future* calls
+        of the tool, so it is applied when the decision exists, not when the original call happens
+        to be retried.
+
+        The decision is required in the query, not merely hoped for. Since a first call parks its
+        seed request alongside the call, `seed_json` exists from the moment of parking and carries
+        a null decision until an approver answers it — a row selected on the column's presence
+        alone would be a request nobody has answered, offered to `_seed_catalog` as authority.
         """
         with self._connect() as connection:
             rows = connection.execute(
-                "SELECT * FROM parked WHERE seed_json IS NOT NULL ORDER BY created_at"
+                "SELECT * FROM parked WHERE seed_json IS NOT NULL "
+                "AND json_extract(seed_json, '$.decision') IS NOT NULL ORDER BY created_at"
             ).fetchall()
         return [Parked(row) for row in rows]
+
+    def park_seed(self, request_hash: str, seed_request: dict[str, Any], catalog_class: str) -> None:
+        """Record the catalog-seed request parked beside a first call, before anyone answers it.
+
+        §10 §4.3 makes classifying the tool a second decision with its own signature. Until
+        2026-08-02 that second request existed only inside the gateway's own `decide --classify`,
+        so an operator approving through the console — the path `deploy/README.md` teaches — never
+        produced one, the catalog stayed empty forever, and every call of the tool parked again.
+        Parking the seed request here is what lets the same approval command answer both.
+        """
+        with self._connect() as connection:
+            connection.execute(
+                "UPDATE parked SET seed_json = ?, catalog_class = ? WHERE request_hash = ?",
+                (json.dumps({"request": seed_request, "decision": None}), catalog_class, request_hash),
+            )
+
+    def attach_seed_decision(self, request_hash: str, decision: dict[str, Any]) -> None:
+        """Fill in the answer to a parked seed request, leaving the request it commits to intact."""
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT seed_json FROM parked WHERE request_hash = ?", (request_hash,)
+            ).fetchone()
+            if row is None or not row["seed_json"]:
+                return
+            seed = json.loads(row["seed_json"])
+            seed["decision"] = decision
+            connection.execute(
+                "UPDATE parked SET seed_json = ? WHERE request_hash = ?",
+                (json.dumps(seed), request_hash),
+            )
 
     def consume(self, request_hash: str, at: str) -> None:
         """Mark a parked request used, so a later call parks afresh rather than reusing it."""
@@ -377,6 +414,19 @@ class GatewayStore:
                 "SELECT * FROM parked WHERE decision_json IS NULL ORDER BY created_at"
             ).fetchall()
         return [Parked(row) for row in rows]
+
+    def record_gate_decision(self, request_hash: str, decision: dict[str, Any]) -> None:
+        """Store the answer to the *call*, touching neither the catalog class nor the seed.
+
+        `record_decision` below writes all three, which is right for `decide --classify` where one
+        invocation produces every part. It is wrong for a decision collected from the kernel: that
+        path passed `None` for the other two and so erased the seed request parked beside the call.
+        """
+        with self._connect() as connection:
+            connection.execute(
+                "UPDATE parked SET decision_json = ? WHERE request_hash = ?",
+                (json.dumps(decision), request_hash),
+            )
 
     def record_decision(
         self,

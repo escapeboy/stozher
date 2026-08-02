@@ -28,7 +28,6 @@ set -euo pipefail
 DEPLOY="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$DEPLOY"
 
-IMAGE="${STOZHER_KERNEL_IMAGE:-stozher-kernel:0.1.0}"
 SEED="secrets/operator/operator.seed"
 MANDATE=""
 ROOT=""
@@ -58,6 +57,13 @@ done
 
 # shellcheck disable=SC1091
 set -a; . ./.env; set +a
+
+# Resolved AFTER .env, never before. The ceremony writes STOZHER_KERNEL_IMAGE into .env so that
+# two installs on one host do not share a tag; read earlier, that assignment is invisible and
+# every one of these commands silently runs the *other* deployment's binary against this
+# deployment's kernel. It presented as `unknown command "anchor"` — a command this repository
+# ships, executed from an image built before it existed.
+IMAGE="${STOZHER_KERNEL_IMAGE:-stozher-kernel:0.1.0}"
 UID_GID="$(id -u):$(id -g)"
 
 # The network this project's kernel is actually on, asked of docker. A hardcoded `stozher_default`

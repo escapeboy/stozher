@@ -65,23 +65,30 @@ that row's payload hash.</p>
 assurance that nothing happened — widen them, or take the unfiltered export, before reading it as
 one.</p>
 {% else %}
+{# `kind` is the first column, not an omitted one. Without it every envelope that is not an effect
+   — a gate-decision, a policy-change, a mandate, a revocation — renders as a row of dashes,
+   because the rest of this table reads `execution.*` and those kinds have none. Six human
+   decisions came out as six identical blank lines, and an auditor could not tell them apart. #}
 <table>
 <thead>
 <tr>
-<th>emitted</th><th>subject</th><th>action</th><th>target</th><th>class</th>
-<th>outcome</th><th>approved by</th><th>evidence</th><th>envelope</th>
+<th>emitted</th><th>kind</th><th>subject</th><th>action</th><th>target</th><th>class</th>
+<th>outcome</th><th>decision</th><th>evidence</th><th>envelope</th>
 </tr>
 </thead>
 <tbody>
 {% for r in rows %}
 <tr>
 <td>{{ r.emitted_at }}</td>
+<td>{{ r.kind }}</td>
 <td>{{ r.subject }}</td>
-<td>{{ r.action }}</td>
-<td>{{ r.target }}</td>
+<td>{% if r.action.is_empty() %}<span class="empty">—</span>{% else %}{{ r.action }}{% endif %}</td>
+<td>{% if r.target.is_empty() %}<span class="empty">—</span>{% else %}{{ r.target }}{% endif %}</td>
 <td class="{{ r.class }}">{{ r.class }}</td>
-<td{% if !r.violation.is_empty() %} class="violation"{% endif %}>{{ r.outcome }}{% if !r.violation.is_empty() %} · {{ r.violation }}{% endif %}</td>
-<td>{% if r.decided_by.is_empty() %}<span class="empty">—</span>{% else %}{{ r.decided_by }}{% endif %}</td>
+<td{% if !r.violation.is_empty() %} class="violation"{% endif %}>{% if r.outcome.is_empty() %}<span class="empty">—</span>{% else %}{{ r.outcome }}{% endif %}{% if !r.violation.is_empty() %} · {{ r.violation }}{% endif %}</td>
+{# The approver, the verdict and the reason they gave, together. A denial whose reason is missing
+   records that somebody said no and destroys the only part an auditor came to read. #}
+<td>{% if r.decided_by.is_empty() %}<span class="empty">—</span>{% else %}{% if !r.decision.is_empty() %}<b>{{ r.decision }}</b> · {% endif %}{{ r.decided_by }}{% if !r.decision_reason.is_empty() %}<br>“{{ r.decision_reason }}”{% endif %}{% endif %}</td>
 <td class="hash">{{ r.evidence }}{% if !r.payload_hash.is_empty() %}<br><code>{{ r.payload_hash }}</code>{% endif %}</td>
 <td class="hash">{{ r.short }}</td>
 </tr>

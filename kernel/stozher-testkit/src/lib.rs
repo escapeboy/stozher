@@ -289,7 +289,7 @@ impl World {
             .sign(&stozher_kernel::policy::baseline_conservative(
                 "2026.07.1",
                 NOW,
-                &self.root.subject,
+                &[self.root.subject.as_str()],
             ));
         self.policy_version = "2026.07.1".to_owned();
         self.publish_policy(&document).await;

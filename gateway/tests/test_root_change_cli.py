@@ -23,6 +23,7 @@ Every step is the real binary as a subprocess against a live kernel.
 
 from __future__ import annotations
 
+import json
 import os
 import secrets
 import subprocess
@@ -128,6 +129,48 @@ def mandate_from_mira_to_ivan(kernel: Kernel) -> str:
         )
     )
     return object_id(mandate)
+
+
+def mandate_through_the_shipped_commands(
+    kernel: Kernel, grantor_seed: Any, publisher_seed: Any, work: Any
+) -> str:
+    """The same mandate, produced and published the way an operator has to: two subprocesses.
+
+    The fixture above builds the envelope in Python, and for a year that was the only way it could
+    be built — `grant` writes a bare mandate object and nothing in the kernel published one, so a
+    human's mandate could be signed and never made resolvable. Three independent evaluators hit
+    that in one day, from three directions; each was told `mandate-unresolved` by a ceremony
+    `deploy/README.md` documents end to end.
+
+    The test above therefore proved the ceremony works *given* a published mandate, while imitating
+    the one step no operator could perform. This is the binding version.
+    """
+    path = work / "mira-to-ivan.json"
+    granted = run(
+        "grant",
+        "--key", str(grantor_seed),
+        "--root", kernel.second_root.subject,
+        "--grantee", kernel.human_root.subject,
+        "--grantee-key", kernel.human_root.id,
+        "--actions", "kernel.enroll_root,kernel.retire_root",
+        "--classes", "consequential",
+        "--days", "1",
+        "--out", str(path),
+        token=kernel.token,
+    )
+    assert granted.returncode == 0, granted.stderr.decode()
+
+    published = run(
+        "submit-mandate",
+        "--url", kernel.url,
+        "--mandate", str(path),
+        "--key", str(publisher_seed),
+        "--subject", kernel.human_root.subject,
+        "--stream", CORE_STREAM,
+        token=kernel.token,
+    )
+    assert published.returncode == 0, published.stderr.decode()
+    return object_id(json.loads(path.read_text()))
 
 
 def test_two_roots_can_enrol_a_third_and_the_human_is_the_name_recorded(world: Any) -> None:
@@ -251,3 +294,80 @@ def test_enrolling_without_naming_a_human_is_refused_before_a_request_exists(wor
         )
         assert refused.returncode != 0, f"{subject} produced a request"
         assert not (root / "never.json").exists()
+
+
+def test_an_operator_can_put_a_granted_mandate_on_the_chain_and_then_use_it(world: Any) -> None:
+    """The gap three evaluators found: signed mandates that nothing could publish.
+
+    `grant` writes the object; `submit-mandate` wraps it into the envelope and submits it. Until
+    the second existed, `deploy/README.md`'s own human-only root-change ceremony ran four commands
+    and died on the last one with `mandate-unresolved`, and the root set could never change after
+    install — which is exactly the day the person who ran the ceremony leaves.
+    """
+    kernel, ivan_file, mira_file, root = world
+    work = root / "handover"
+    work.mkdir(exist_ok=True)
+
+    mandate_id = mandate_through_the_shipped_commands(kernel, mira_file, ivan_file, work)
+
+    # Resolvable is the whole point: an envelope that cites it must now be judged on its merits
+    # rather than refused for a mandate the kernel has never seen.
+    request = work / "enrol.json"
+    built = run(
+        "root-request",
+        "--requester", kernel.human_root.subject,
+        "--key", str(ivan_file),
+        "--mandate", mandate_id,
+        "--in-force", kernel.policy_version,
+        "--enrol", "ed25519:" + "ab" * 32,
+        "--subject", THIRD_ROOT,
+        "--out", str(request),
+        token=kernel.token,
+    )
+    assert built.returncode == 0, built.stderr.decode()
+    parked = run("park", "--url", kernel.url, "--file", str(request), token=kernel.token)
+    assert parked.returncode == 0, parked.stderr.decode()
+
+    # It reached the gate, which is only reachable once the mandate resolved.
+    assert b"mandate-unresolved" not in parked.stdout + parked.stderr
+
+
+def test_submit_mandate_tells_an_envelope_from_a_mandate(world: Any) -> None:
+    """The refusal an operator actually met, and what it cost them.
+
+    Following the README's `submit --file <the grant>` answered `schema-unknown-member: grantee` —
+    a complaint about a member of the *inner* object, which reads as "your mandate is malformed"
+    when the mandate is correct and the wrapping is what is missing. Both directions are named
+    here instead.
+    """
+    kernel, ivan_file, mira_file, root = world
+    work = root / "shapes"
+    work.mkdir(exist_ok=True)
+
+    not_a_mandate = work / "policy.json"
+    not_a_mandate.write_text(json.dumps({"kind": "policy", "policy-version": "2026.07.1"}))
+    refused = run(
+        "submit-mandate",
+        "--url", kernel.url,
+        "--mandate", str(not_a_mandate),
+        "--key", str(ivan_file),
+        "--subject", kernel.human_root.subject,
+        token=kernel.token,
+    )
+    assert refused.returncode != 0
+    assert b"is not a mandate" in refused.stderr, refused.stderr.decode()
+
+    already_wrapped = work / "wrapped.json"
+    already_wrapped.write_text(
+        json.dumps({"kind": "mandate", "stream": CORE_STREAM, "seq": 7, "mandate": {}})
+    )
+    refused = run(
+        "submit-mandate",
+        "--url", kernel.url,
+        "--mandate", str(already_wrapped),
+        "--key", str(ivan_file),
+        "--subject", kernel.human_root.subject,
+        token=kernel.token,
+    )
+    assert refused.returncode != 0
+    assert b"already an envelope" in refused.stderr, refused.stderr.decode()

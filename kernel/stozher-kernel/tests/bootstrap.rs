@@ -82,7 +82,7 @@ async fn the_carve_out_cannot_be_used_a_second_time() {
         .sign(&stozher_kernel::policy::baseline_conservative(
             "2026.07.2",
             NOW,
-            &world.root.subject,
+            &[world.root.subject.as_str()],
         ));
     let hash = stozher_core::jcs::object_hash(&document).expect("policy hash");
     let unapproved = world
@@ -118,7 +118,7 @@ async fn a_second_policy_version_publishes_and_both_resolve_forever() {
         .sign(&stozher_kernel::policy::baseline_conservative(
             "2026.07.2",
             NOW,
-            &world.root.subject,
+            &[world.root.subject.as_str()],
         ));
     world.publish_policy(&document).await;
 
@@ -153,7 +153,7 @@ async fn a_policy_version_is_never_reused() {
         .sign(&stozher_kernel::policy::baseline_conservative(
             "2026.07.1",
             "2026-07-26T09:30:00.000Z",
-            &world.root.subject,
+            &[world.root.subject.as_str()],
         ));
     let hash = stozher_core::jcs::object_hash(&document).expect("policy hash");
     let authorization = world.authorize(&Ask {

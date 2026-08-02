@@ -174,6 +174,15 @@ pub struct Row {
     pub payload_hash: String,
     /// The approver, when the envelope carries a decision.
     pub decided_by: String,
+    /// `approve` or `deny`, when the envelope carries a decision.
+    pub decision: String,
+    /// The reason a decision gave, which for a denial is the whole content of the record.
+    ///
+    /// A compliance officer exported six human decisions and got six identical blank rows: the
+    /// table was built from `execution.*`, which a `gate-decision` does not have, and the denial
+    /// reason — *"no DBA sign-off on the lock estimate; re-file with an EXPLAIN"* — existed only
+    /// in the NDJSON. An export that drops the sentence a human wrote is not an audit artefact.
+    pub decision_reason: String,
 }
 
 /// One stream, with the quiet-stream finding already computed.
@@ -1550,6 +1559,14 @@ fn row(record: &Value) -> Row {
         },
         payload_hash: evidence["payload-hash"].as_str().unwrap_or("").to_owned(),
         decided_by: short_key(&text(&envelope["authorization"]["decision"]["sig"]["key"])),
+        decision: envelope["authorization"]["decision"]["decision"]
+            .as_str()
+            .unwrap_or("")
+            .to_owned(),
+        decision_reason: envelope["authorization"]["decision"]["reason"]
+            .as_str()
+            .unwrap_or("")
+            .to_owned(),
     }
 }
 

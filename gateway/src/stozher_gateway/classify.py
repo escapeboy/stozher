@@ -71,6 +71,12 @@ class Classification(NamedTuple):
     action: str
     classification: str
     tier: str
+    #: What this classifier proposed, before policy's `default-unknown` escalated an unknown tool.
+    #:
+    #: The escalated class is what gates the call; the proposal is what a catalog entry would hold,
+    #: so the approver of a first call is answering "is this tool a `read`?" and not "is
+    #: `consequential` correct?" — which is the question policy already answered by not knowing.
+    proposed: str = ""
 
     @property
     def known(self) -> bool:

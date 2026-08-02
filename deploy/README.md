@@ -375,8 +375,24 @@ docker run --rm -i -u "$(id -u):$(id -g)" --network none -v "$PWD:/work" -w /wor
         --grantee agent:bootstrap --grantee-key "$(…identity --key … --role 1 --index 0)" \
         --actions 'kernel.publish_policy' --classes consequential --days 1 \
         --out var/publish-mandate.json
-./bin/stozher-approve …   # the grant is submitted like any envelope: stozher-kernel submit
 ```
+
+`grant` writes a signed mandate **object**, not an envelope: its signature covers the grant, and the
+chain position is not the grantor's to assert. Putting it on the chain is a second command, run by
+whoever holds a key on the stream it goes to:
+
+```sh
+docker run --rm -i -u "$(id -u):$(id -g)" --network "$(…kernel network…)" -v "$PWD:/work" -w /work \
+  -e STOZHER_KERNEL_TOKEN="$STOZHER_KERNEL_TOKEN" "${STOZHER_KERNEL_IMAGE:-stozher-kernel:0.1.0}" \
+  submit-mandate --url http://kernel:8787 --mandate var/publish-mandate.json \
+                 --key secrets/operator/operator.seed --subject human:ivan
+```
+
+Until 2026-08-02 this page told you to use `stozher-kernel submit`, which takes envelopes and
+answers a bare mandate with `schema-unknown-member: grantee` — a complaint about the mandate, which
+is fine, when the wrapping is what was missing. There was no command that did it, so **no mandate
+signed after the install could be made resolvable**, and the root-set ceremony below could not
+complete. Anything citing an unpublished mandate is refused `mandate-unresolved`.
 
 There is deliberately no `bin/stozher-grant` wrapper. A standing mandate to rewrite policy is the
 most valuable grant in the deployment, and a one-liner that issues it — with defaults somebody would

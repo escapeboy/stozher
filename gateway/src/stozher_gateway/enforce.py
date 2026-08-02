@@ -390,7 +390,7 @@ class Enforcer:
             proposed.classification if from_manifest else None,
             catalog_class=None if from_manifest else proposed.classification,
         )
-        return Classification(proposed.action, effective, proposed.tier)
+        return Classification(proposed.action, effective, proposed.tier, proposed.classification)
 
     def _args_hash(
         self,
@@ -650,6 +650,8 @@ class Enforcer:
             )
             arguments = None
         not_queued = self._queue_with_kernel(request, arguments)
+        if first_call and classification.proposed:
+            self._park_catalog_seed(ask, call, classification, request_hash)
         self._notify_parked(request_hash, ask)
         raise refusal(
             "parked",
@@ -687,6 +689,45 @@ class Enforcer:
                 else ""
             ),
         )
+
+    def _park_catalog_seed(
+        self, ask: ActionRequest, call: Call, classification: Classification, request_hash: str
+    ) -> None:
+        """Park the *second* request of §10 §4.3 beside the first: what class this tool is.
+
+        Approving a first call and classifying the tool are two decisions with two signatures, and
+        the catalog entry does not come into force without its own — otherwise "deny once" quietly
+        becomes "allow forever at the heuristic's class". The gateway's `decide --classify` produced
+        both from one invocation, and the console path produced only the first, so on the documented
+        route the catalog was never written and every call of the tool parked again forever. Three
+        evaluations reported that as "this product wants a human signature for every read".
+
+        The class proposed is the classifier's own, not the escalated one policy gated on: the
+        approver is being asked whether this tool is a `read`, which is the question `default-unknown`
+        could not answer.
+        """
+        entry = {"server": call.server, "tool": call.tool, "class": classification.proposed}
+        now = self._clock.now()
+        seed_request = action_request(
+            ActionRequest(
+                subject=ask.subject,
+                key=ask.key,
+                component=ask.component,
+                mandate_ref=ask.mandate_ref,
+                policy_version=ask.policy_version,
+                classification="consequential",
+                action="kernel.seed_catalog_entry",
+                target=f"tool:{call.server}/{call.tool}",
+                args_hash=object_hash(entry),
+            ),
+            requested_at=now,
+            not_after=clock_module.shift(now, _REQUEST_LIFETIME_SECONDS),
+        )
+        self._store.park_seed(request_hash, seed_request, classification.proposed)
+        # The values behind `args-hash` go with it for the same reason the call's do (§06 §4.4
+        # rule 2): an approver reading the queue an hour later cannot ask this process anything,
+        # and "classify tool:x/y as read" is unanswerable without knowing which class.
+        self._queue_with_kernel(seed_request, entry)
 
     def _notify_parked(self, request_hash: str, ask: ActionRequest) -> None:
         """Tell the operator something is waiting. Never blocks the gate, never fails the call.
@@ -821,9 +862,26 @@ class Enforcer:
             logger.error(
                 "the kernel refused a parked request: %s %s", answer.status, answer.reason_code
             )
-            return (
-                f"the kernel refused to queue it ({answer.reason_code or answer.status}), "
-                "so no approver can see it"
+            # Raised, not returned. The two remaining paths above are "held locally, and a human
+            # will see it when the kernel is back" — `parked` is a true answer there. This one is
+            # not: the queue rejected the request on purpose, no notification fires, no console row
+            # exists, and no approval will ever arrive. Reported as `parked`, an agent waits for a
+            # decision nobody can make, and an operator finds sixty receipts against zero queue
+            # entries. `blocked` is the §06 §4.1 word for a call that did not happen and cannot
+            # proceed as it stands, and it carries the kernel's own reason code rather than a
+            # gateway paraphrase.
+            raise refusal(
+                "blocked",
+                answer.reason_code or "gate-not-queued",
+                f"the kernel refused to queue this request ({answer.reason_code or answer.status}), "
+                "so it is in no approval queue and no decision can be made about it",
+                action=request["action"],
+                classification=request["classification"],
+                request_hash=object_hash(request),
+                hint=(
+                    "nothing is pending: the request never entered a queue. Whatever the kernel's "
+                    "reason code names has to change before this call can be answered."
+                ),
             )
         return None
 
@@ -847,7 +905,28 @@ class Enforcer:
                 return
             decision = answer.body.get("decision")
             if isinstance(decision, dict):
-                self._store.record_decision(parked.request_hash, decision, None, None)
+                self._store.record_gate_decision(parked.request_hash, decision)
+            self._collect_seed_decision(parked)
+
+    def _collect_seed_decision(self, parked: Any) -> None:
+        """Ask the kernel whether the catalog-seed request parked beside this call was answered.
+
+        Separate from the call's own decision because the two are separately answerable: an
+        approver may permit the action once and refuse to classify the tool, which is a coherent
+        answer and the reason §10 §4.3 makes them two signatures rather than one.
+        """
+        if self._kernel is None or parked.seed is None or parked.seed.get("decision") is not None:
+            return
+        seed_request = parked.seed.get("request")
+        if not isinstance(seed_request, dict):
+            return
+        try:
+            answer = self._kernel.gate_request(object_hash(seed_request))
+        except (KernelUnreachableError, CanonicalizationError):
+            return
+        decision = answer.body.get("decision")
+        if isinstance(decision, dict):
+            self._store.attach_seed_decision(parked.request_hash, decision)
 
     def _consume(
         self,

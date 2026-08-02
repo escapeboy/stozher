@@ -439,3 +439,31 @@ async fn an_unknown_export_format_is_refused_rather_than_quietly_defaulted() {
         refused.body
     );
 }
+
+#[tokio::test]
+async fn the_document_keeps_every_envelope_that_is_not_an_effect() {
+    // A compliance officer exported six human decisions and received six identical blank rows: the
+    // table was built from `execution.*`, and a mandate, a policy change and a gate decision have
+    // none. The `kind` column — which the ordinary audit page has always had — is what tells them
+    // apart, and without it the artefact built for auditors was worse than the page built for the
+    // operator.
+    let world = world().await;
+    effect_with_arguments(&world, 4_999_000).await;
+
+    let document = get(&world, "/console/audit/export?format=html").await;
+    assert_eq!(document.status, StatusCode::OK);
+    assert!(
+        document.body.contains("<th>kind</th>"),
+        "the document has no kind column, so non-effect envelopes are indistinguishable"
+    );
+    // The ceremony's own mandate is in every store, carries no `execution`, and is exactly the
+    // shape that rendered as dashes.
+    assert!(
+        document.body.contains("<td>mandate</td>"),
+        "a mandate envelope is not named in the document: {}",
+        document.body
+    );
+    // And the effect still renders its action, so naming the kinds did not cost the rows that
+    // always worked.
+    assert!(document.body.contains("github.create_issue"));
+}
