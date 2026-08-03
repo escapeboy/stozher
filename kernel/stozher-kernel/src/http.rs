@@ -437,6 +437,25 @@ async fn post_gate_request(
     {
         Ok(arguments) => arguments,
         Err(e) => {
+            // Said out loud, because ADR-0011 §2 asked for the *surfacing* half and §06 §4.4 rule 4
+            // kept only the predicate. Admission-time checking is the stronger half and it shipped;
+            // what went with it was the sentence "itself a finding worth surfacing, not an error to
+            // swallow". A component that submits values which are not what its own `args-hash`
+            // commits to is either broken or lying, and until this line the only party told was the
+            // component itself — a bare 422, no queue row, no rejection record, not even a log.
+            //
+            // A rejection record would be the stronger answer and is not available here: §04 §7's
+            // records are about *envelopes*, and a gate submission is not one. That gap is recorded
+            // in `docs/spec-debt.md` rather than papered over with a record of the wrong kind.
+            tracing::warn!(
+                subject = %submitted_by,
+                action = %queued.action,
+                request_hash = %queued.request_hash,
+                reason = %e.code(),
+                detail = %e.detail(),
+                "a component submitted arguments its own request does not commit to; the request \
+                 was refused and nothing was queued"
+            );
             return refusal(StatusCode::UNPROCESSABLE_ENTITY, e.code(), e.detail(), None);
         }
     };

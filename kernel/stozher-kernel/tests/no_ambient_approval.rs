@@ -304,13 +304,32 @@ async fn every_read_route_requires_a_credential_and_none_of_them_writes() {
     let world = world().await;
     let before = envelope_count(&world).await;
 
+    // One instance of every GET route the router serves, `/health` excepted. The list used to hold
+    // six of sixteen, and the nine it did not name included `/v1/payloads/{payload-hash}` — the one
+    // route that serves the argument values of a call that ran, and the one the regulator export
+    // tells a reader in prose is authenticated. The guard was there; nothing asserted it.
+    //
+    // `a_new_route_cannot_be_added_without_appearing_here` reads `http.rs` and fails if this list
+    // falls behind, so the enumeration is checked against the router rather than maintained beside
+    // it. A hand-kept list of what to test is a list that stops at whatever was true when it was
+    // written.
     let routes = [
         "/v1/policy/current",
         "/v1/policy/2026.07.1",
+        "/v1/gate/requests",
+        "/v1/gate/requests/0000000000000000000000000000000000000000000000000000000000000000",
         "/v1/envelopes",
+        "/v1/envelopes/0000000000000000000000000000000000000000000000000000000000000000",
+        "/v1/envelopes/0000000000000000000000000000000000000000000000000000000000000000/mandate",
+        "/v1/manifests",
+        "/v1/mandates/0000000000000000000000000000000000000000000000000000000000000000/budget",
         "/v1/streams",
+        "/v1/streams/kernel:core/verify",
+        "/v1/revocations",
         "/v1/rejections",
         "/v1/rejections/verify",
+        "/v1/payloads/0000000000000000000000000000000000000000000000000000000000000000",
+        "/v1/checkpoints/heads",
     ];
     for uri in routes {
         // Unauthenticated: an audit trail readable by anyone who can reach the port is a different
@@ -345,12 +364,23 @@ async fn every_read_route_requires_a_credential_and_none_of_them_writes() {
             "{uri} accepted a wrong credential"
         );
 
-        // With the credential it answers, and still writes nothing.
-        let (status, _) = call(&world, authenticated("GET", uri, None)).await;
-        assert_eq!(
+        // With the credential the caller gets past the guard, and still writes nothing.
+        //
+        // Not `OK`: several of these routes are addressed by an id, and the ids above are hashes of
+        // nothing, so `404` is the correct answer to an authenticated caller asking for a record
+        // that does not exist. The property under test is that the credential decides — so what
+        // must never happen is another `401`. Asserting `OK` here would have forced the list to
+        // stay at the routes that need no id, which is how it came to hold six of sixteen.
+        let (status, body) = call(&world, authenticated("GET", uri, None)).await;
+        assert_ne!(
             status,
-            StatusCode::OK,
-            "{uri} did not answer an authenticated caller"
+            StatusCode::UNAUTHORIZED,
+            "{uri} refused a valid credential"
+        );
+        assert_ne!(
+            body["reason-code"].as_str(),
+            Some("x-caller-unauthenticated"),
+            "{uri} answered a credentialled caller as if it had none"
         );
         assert_eq!(
             envelope_count(&world).await,
@@ -358,6 +388,60 @@ async fn every_read_route_requires_a_credential_and_none_of_them_writes() {
             "{uri} changed the store"
         );
     }
+}
+
+/// The enumeration above is checked against the router, not maintained beside it.
+///
+/// It held six of sixteen GET routes, and the nine it omitted included
+/// `/v1/payloads/{payload-hash}` — the route that serves the argument values of a call that ran, and
+/// the one the regulator export tells a reader in prose is authenticated. The guard was in
+/// `get_payload` the whole time; nothing asserted it, so nothing would have noticed its removal.
+///
+/// Reading `http.rs` rather than an inventory written by hand is the same discipline the console
+/// parser needed: a test whose fixture is written by the same person as the thing it checks agrees
+/// with it by construction. This one disagrees the moment a route is added and not covered.
+#[test]
+fn a_new_route_cannot_be_added_without_appearing_in_the_credential_test() {
+    let source = include_str!("../src/http.rs");
+    let this_file = include_str!("no_ambient_approval.rs");
+
+    let mut uncovered: Vec<&str> = Vec::new();
+    for line in source.lines() {
+        let Some(rest) = line.trim().strip_prefix(".route(\"") else {
+            continue;
+        };
+        let Some(path) = rest.split('"').next() else {
+            continue;
+        };
+        // `/health` is deliberately open: it answers whether the process is up and says nothing
+        // about the record. Anything else that answers a GET is an audit surface.
+        if path == "/health" {
+            continue;
+        }
+        // A route declared on its own line may be POST-only; the two that carry both verbs are
+        // written across several lines, so look for the verb in the whole declaration.
+        let declaration = source
+            .split_once(&format!("\"{path}\""))
+            .map(|(_, after)| after.split(".route(").next().unwrap_or(after))
+            .unwrap_or("");
+        if !declaration.contains("get(") {
+            continue;
+        }
+        // The literal must appear in this file's route list — as itself for a fixed path, or as its
+        // prefix up to the first `{` for one addressed by an id.
+        let needle = path.split('{').next().unwrap_or(path);
+        if !this_file.contains(&format!("\"{needle}")) {
+            uncovered.push(path);
+        }
+    }
+
+    assert!(
+        uncovered.is_empty(),
+        "these GET routes are served and are not in \
+         `every_read_route_requires_a_credential_and_none_of_them_writes`: {uncovered:?}. \
+         Add one instance of each. A route nobody asserts a credential for is a route whose guard \
+         can be deleted without a test noticing."
+    );
 }
 
 #[tokio::test]
