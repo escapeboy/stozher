@@ -42,6 +42,33 @@ class KernelResponse(NamedTuple):
         code = self.body.get("reason-code")
         return str(code) if code is not None else None
 
+    @property
+    def refuses_the_object(self) -> bool:
+        """Whether this answer is a refusal **of the bytes submitted** (§05 §7.1's third outcome).
+
+        Not every non-acceptance is one, and the difference decides whether a stream wedges. The
+        kernel answers `422` with a normative reason code when it has judged the object and said no;
+        it answers `503` `x-store-unavailable` — *"the kernel could not answer; retry"* — when it has
+        judged nothing, and `401` `x-caller-unauthenticated` when there was no subject to judge it
+        for. Those two are `unreachable` wearing an HTTP status: the kernel reached the socket and
+        still said nothing about these bytes.
+
+        Read the code, not only the status: §00 §1 makes an `x-` prefix mean "a condition this
+        specification does not name", and `codes.rs::REGISTER`'s six are exactly the conditions that
+        are **not refusals of an object at all**. So the prefix is the contract-level discriminator
+        and the status is the transport-level one, and this requires both to say "refusal".
+
+        Treating one as the other in this direction is what §05 §7.1 clause 1 forbids in the other:
+        a component that wedged on a momentary blip would convert an outage into a hard stop, which
+        is the denial-of-service failure the bounded grace window exists to avoid.
+        """
+        if self.accepted:
+            return False
+        if self.status >= 500 or self.status in (401, 403):
+            return False
+        code = self.reason_code
+        return code is not None and not code.startswith("x-")
+
 
 class KernelClient:
     """A thin, timeout-bounded client for the kernel's route table."""

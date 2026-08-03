@@ -25,6 +25,46 @@ default runs.
 | DEF-3 | closed | scope limit, stated | — | `Governor` does not support `async def`. It now refuses at decoration instead of recording `applied` before the body runs. |
 | DEF-4 | open | **spec hole** (tooling/documentation) | high for adoption, none for security | No way to obtain a verified policy without a live kernel, so a cold CI container cannot open a session at all. The offline profile itself works. |
 | DEF-5 | not a defect | — | — | Proposed: ambient-state authorization on the `Governor` path. Investigated and **not found**; four independent bindings recompute authority per call. |
+| DEF-6 | closed | implementation defect, introduced by DEF-2's fix | high (availability) | One `503 x-store-unavailable` — the kernel's own *"could not answer; retry"* — wedged the emitter's stream permanently. Found by an intermittent `blocked` where `parked` was expected; reproduced deterministically. |
+
+## DEF-6 — a kernel that could not answer was recorded as one that said no
+
+**Introduced by DEF-2's fix, found during merge verification of it, and reproduced deterministically
+rather than left as a flake.** The symptom was `assert parked["result"] == "parked"` failing with
+`'blocked'` in `test_s4_native_gates.py`, twice, never on a targeted re-run.
+
+**The exact break.** `emitter.py::push_pending` recorded a wedge on `if response.accepted:` being
+false, and `KernelResponse.accepted` (`kernel_client.py`) is
+`status in (200, 201) and body["result"] in (None, "ok", "accepted")`. The kernel answers a genuine
+refusal with **422** and a normative reason code (`http.rs`, `ingest::Outcome::Rejected`); it answers
+**503 `x-store-unavailable`, *"the kernel could not answer; retry"*** for any store error, and **401
+`x-caller-unauthenticated`** when there is no subject to judge for. All three were "not accepted", so
+all three wedged.
+
+**Why it was severe rather than untidy.** A wedged stream is one `push_pending` stops submitting on,
+so nothing can ever be accepted on it, so **the wedge can never clear itself** — §05 §7.2 rule 2
+makes acceptance the only exit. A momentary SQLite contention in the kernel therefore became a hard
+stop liftable only by a root-signed §04 §7.2 resume, and every `consequential` call in between was
+refused outright instead of parking. That is precisely the denial-of-service failure §05 §7.1's
+rationale paragraph claims the bounded grace window avoids — reintroduced one layer below the
+decision function, where `sync.decide` could not see it. The decision function was never wrong; the
+*storage* blurred two outcomes it is required to distinguish.
+
+**The fix.** `KernelResponse.refuses_the_object` — an answer is a refusal only when the kernel judged
+the bytes: not 5xx, not 401/403, and carrying a reason code without the `x-` prefix that §00 §1
+reserves for conditions this specification does not name (`codes.rs::REGISTER` is exactly the set of
+non-refusals). Anything else is §05 §7.1's `unreachable`: retried, logged at `warning`, no wedge.
+`spec/05 §7.1` clause 1 gains the converse MUST NOT, because only one direction of it was obvious.
+
+**Evidence:** `gateway/tests/test_def2_mandate_swap.py::test_a_kernel_that_could_not_answer_does_not_wedge_the_stream`
+(parametrized over 503 and 401) and `::test_a_kernel_that_refused_the_object_still_wedges_the_stream`
+as its control. Unquarantined and in the default run. Mutation-tested: restoring
+`return not self.accepted` fails both parametrizations and leaves the control green.
+
+**Not proven:** that a 503 is what the two observed `test_s4_native_gates.py` failures actually hit.
+The mechanism is proven to produce exactly that symptom from a transient condition, and the failing
+runs' logs were not kept. A recurrence is self-identifying — the emitter logs the reason code and the
+stream on both paths, and they no longer read alike.
 
 ## DEF-1 — the queue duplicates on replay
 
