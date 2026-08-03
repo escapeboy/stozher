@@ -233,6 +233,35 @@ The path must be absolute — the client's working directory is not yours.
 
 Nothing changes on the agent side. It sees ordinary MCP tools, and it imports nothing of ours.
 
+### If your tools are Python functions, not an MCP server
+
+The route above is for agents that already speak MCP. If yours is a plain Python program with a tool
+registry, you do not have to build an MCP server to be governed — an engineer who evaluated this
+product measured that path at 134 lines of adapter against a 123-line application, and their tool
+state had to move into a subprocess:
+
+```python
+from stozher_gateway import Governor
+
+with Governor.from_config("config/stozher-gateway.toml") as governor:
+
+    @governor.governed(server="billing")
+    def issue_refund(order_id: str, amount_cents: int) -> str:
+        ...
+
+    issue_refund("ORD-88214", 4_999_00)
+```
+
+Same enforcement, one process: classified, mandated, gated and recorded through the same
+`Enforcer.call` a proxied tool transits. A refusal raises `RefusalError` and **the function body
+does not run**. The `with` block is not decoration — `read` calls fold into an aggregate that is
+emitted on a window boundary, and a process that exits without flushing loses the record of every
+read since the last one.
+
+This is not a weaker boundary than the MCP one. The gateway holds no approver's private key in
+either topology, and in the MCP setup it is your own client that spawns it, on your host, as you.
+What it is not, in either shape, is protection against the operator of the process — see ADR-0026.
+
 ### Adding your own downstream servers
 
 The image ships one demo server (`notes`) so the first session has something to call. Yours are
@@ -295,6 +324,40 @@ compromised kernel process, not for its own maintenance code. The party that enf
 structurally unable to satisfy it. That is a property, not a slogan, and the copy-paste step is what
 buys it (ADR-0009 §2).
 
+### Being told that something is waiting
+
+None of the above helps if nobody knows there is anything to sign. A fresh install notifies no one:
+the request lands on `/console/pending`, the agent receives a terminal `parked` refusal, and the
+only thing joining the two is an operator remembering to open a web page. An incident responder
+evaluating this product found nine requests waiting that way and wrote that the control which
+stopped the incident was a page someone had to remember to look at. **A gate nobody is pinged about
+is a queue, not a control.**
+
+Set `park_notify` in the gateway's config to an argv — a script that posts to Slack, sends a push,
+writes to a pager, whatever your team already reads:
+
+```toml
+[gateway]
+park_notify = ["/usr/local/bin/notify-approver"]
+park_notify_timeout_seconds = 10.0
+```
+
+It receives one JSON object on stdin: the request hash, subject, action, target, classification and
+the time it parked. Three things it deliberately does not do, each of which could have gone the
+other way:
+
+- **It never carries the call's argument values.** Those have a retention ceiling and an
+  authenticated route; a notification is delivered wherever you wired it and has neither. What you
+  get is a pointer — take the request hash to `/console/pending` to read the arguments.
+- **It cannot fail the call.** A non-zero exit or a timeout is logged and changes nothing the agent
+  sees. A notifier able to turn a park into an error would make the gate less available than no
+  notifier at all: the agent would get a broken tool because a chat server was down.
+- **It never delays the refusal.** It runs alongside; a hook that hangs is abandoned after its
+  timeout and the caller is answered immediately either way.
+
+Parked requests expire after an hour (`spec/06 §4.3`), so a notifier that nobody reads is not much
+better than no notifier — the practical minimum is a channel someone is actually on.
+
 ### Changing policy
 
 ```sh
@@ -341,8 +404,24 @@ docker run --rm -i -u "$(id -u):$(id -g)" --network none -v "$PWD:/work" -w /wor
         --grantee agent:bootstrap --grantee-key "$(…identity --key … --role 1 --index 0)" \
         --actions 'kernel.publish_policy' --classes consequential --days 1 \
         --out var/publish-mandate.json
-./bin/stozher-approve …   # the grant is submitted like any envelope: stozher-kernel submit
 ```
+
+`grant` writes a signed mandate **object**, not an envelope: its signature covers the grant, and the
+chain position is not the grantor's to assert. Putting it on the chain is a second command, run by
+whoever holds a key on the stream it goes to:
+
+```sh
+docker run --rm -i -u "$(id -u):$(id -g)" --network "$(…kernel network…)" -v "$PWD:/work" -w /work \
+  -e STOZHER_KERNEL_TOKEN="$STOZHER_KERNEL_TOKEN" "${STOZHER_KERNEL_IMAGE:-stozher-kernel:0.1.0}" \
+  submit-mandate --url http://kernel:8787 --mandate var/publish-mandate.json \
+                 --key secrets/operator/operator.seed --subject human:ivan
+```
+
+Until 2026-08-02 this page told you to use `stozher-kernel submit`, which takes envelopes and
+answers a bare mandate with `schema-unknown-member: grantee` — a complaint about the mandate, which
+is fine, when the wrapping is what was missing. There was no command that did it, so **no mandate
+signed after the install could be made resolvable**, and the root-set ceremony below could not
+complete. Anything citing an unpublished mandate is refused `mandate-unresolved`.
 
 There is deliberately no `bin/stozher-grant` wrapper. A standing mandate to rewrite policy is the
 most valuable grant in the deployment, and a one-liner that issues it — with defaults somebody would
@@ -371,20 +450,40 @@ point of an audit log rather than a concession.
 ### Changing the root set
 
 ```sh
-K="docker run --rm -i -u $(id -u):$(id -g) -v $PWD:/work -w /work ${STOZHER_KERNEL_IMAGE:-stozher-kernel:0.1.0}"
+# Two shapes, because half of this runs offline and half needs the kernel's network. `NET` is the
+# network the kernel container is actually on — `docker compose ps -q kernel` then `docker inspect`,
+# exactly as bin/stozher-approve does it, because a hardcoded default is wrong for any install that
+# set COMPOSE_PROJECT_NAME.
+OFF="docker run --rm -i -u $(id -u):$(id -g) --network none -v $PWD:/work -w /work ${STOZHER_KERNEL_IMAGE:-stozher-kernel:0.1.0}"
+ON="docker run --rm -i -u $(id -u):$(id -g) --network $NET -e STOZHER_KERNEL_TOKEN=$STOZHER_KERNEL_TOKEN -v $PWD:/work -w /work ${STOZHER_KERNEL_IMAGE:-stozher-kernel:0.1.0}"
 
-# ivan asks. --mandate is a mandate MIRA granted him: §03 §1 forbids self-grant, and an effect
-# needs one, which is the whole reason this takes two humans.
-$K root-request --requester human:ivan --key secrets/operator/operator.seed \
-                --mandate <64 hex> --in-force "$($K policy-current --url http://kernel:8787)" \
-                --enrol ed25519:<their root key> --subject human:third \
-                --out var/enrol.json
-$K park --url http://kernel:8787 --file var/enrol.json     # needs the kernel's network
+# 1. MIRA grants ivan the mandate. §03 §1 forbids self-grant and an effect needs one, which is the
+#    whole reason this takes two humans. `--components kernel` is not optional and is the step
+#    people lose an hour to: `grant` defaults to `gateway`, and a root-set change is emitted by the
+#    *kernel*, so the default produces `mandate-scope-not-permitted` at the very last command.
+$OFF grant --key secrets/operator/mira.seed --root human:mira \
+           --grantee human:ivan --grantee-key "$($OFF identity --key secrets/operator/operator.seed --role 0 --index 0)" \
+           --components kernel --actions 'kernel.enroll_root,kernel.retire_root' \
+           --classes consequential --days 1 --out var/mira-to-ivan.json
 
-./bin/stozher-approve <request-hash> --root human:mira      # MIRA answers, not ivan
+# 2. Put it on the chain. `grant` writes a signed mandate *object*; nothing can cite a mandate the
+#    kernel has never seen. Without this every command below ends in `mandate-unresolved`.
+$ON submit-mandate --url http://kernel:8787 --mandate var/mira-to-ivan.json \
+                   --key secrets/operator/operator.seed --subject human:ivan
 
-$K root-publish --url http://kernel:8787 --request var/enrol.json \
-                --key secrets/operator/operator.seed
+# 3. ivan asks. --mandate is the ref `grant` printed in step 1.
+$OFF root-request --requester human:ivan --key secrets/operator/operator.seed \
+                  --mandate <64 hex> --in-force "$($ON policy-current --url http://kernel:8787)" \
+                  --enrol ed25519:<their root key> --subject human:third \
+                  --out var/enrol.json --evidence-out var/enrol-evidence.json
+$ON park --url http://kernel:8787 --file var/enrol.json
+
+./bin/stozher-approve <request-hash> --root human:mira --key secrets/operator/mira.seed
+
+# 4. Publish it. `--evidence` is required: the enrolment's `args-hash` commits to the document that
+#    names the human, and the kernel refuses an enrolment whose evidence was not supplied.
+$ON root-publish --url http://kernel:8787 --request var/enrol.json \
+                 --key secrets/operator/operator.seed --evidence var/enrol-evidence.json
 ```
 
 **`--subject human:<name>` is not a label.** The root set is `(key, subject)` pairs and the subject
@@ -515,6 +614,36 @@ Verify any time, without a restore:
 ```sh
 docker compose exec -T kernel stozher-kernel verify --config /etc/stozher/kernel-config.json
 ```
+
+### Anchoring the chain off-box
+
+`verify` answers "has this store been *edited*?". It does not answer "was this store *rebuilt*?" —
+and neither does a checkpoint, as long as the checkpoint lives here. Whoever could rebuild the
+records could rebuild the checkpoints attesting them, so a deployment attesting its own history is
+the party under examination vouching for itself. `spec/04 §4.7` names the fix and this is the
+command for it:
+
+```sh
+./bin/stozher-anchor --out anchors/$(date -u +%Y-%m-%dT%H%M%SZ).json
+```
+
+It prints every stream's newest checkpoint head — the covered range, the head hash, and the id of
+the signed checkpoint envelope that attests it — and stops. **It sends nothing anywhere, and that is
+the mechanism, not a missing feature.** A copy this deployment mailed to a server this deployment
+configured would move the problem one hop and solve none of it. Put the file where this deployment
+has no credential:
+
+- a git commit in a repository it cannot write to, on a schedule (weekly beats never; daily beats weekly)
+- an email to a list that includes somebody outside the operating team
+- handed to the auditor alongside the NDJSON export, so a later export can be checked against it
+
+To check one later: for each head, fetch `/v1/envelopes/<checkpoint-envelope>`, verify its
+signature, and confirm it commits to `head-hash` at `to-seq`. A store rebuilt after the anchor was
+taken cannot produce a chain that both reaches those heads and omits what they covered.
+
+The command refuses to write a file when no checkpoint exists yet — a document that attests nothing
+while looking like it does is worse in an auditor's hands than no document. A deployment younger
+than one checkpoint interval has simply not reached its first.
 
 ### Undoing a restore by hand
 
@@ -682,8 +811,9 @@ versioning is stamped and re-verified rather than rebuilt.
 
 * **Root on the host.** Someone with root can read the kernel's seed from memory, forge anything
   that key can sign, and delete data. `spec/09 §8` does not defend against this; it makes it
-  non-silent. Export checkpoints off-box (`spec/04 §4.7`) so a post-hoc rebuild contradicts
-  something.
+  non-silent — but only if a head of the chain exists somewhere they cannot reach. `bin/stozher-anchor`
+  takes that copy; see *Anchoring the chain off-box* below. Until you run it on a schedule and put
+  the output somewhere this deployment has no credential for, a post-hoc rebuild contradicts nothing.
 * **TLS is not terminated by these images.** `spec/09 §8` requires component↔kernel traffic to be
   TLS. The compose file publishes the kernel on `127.0.0.1` only for exactly this reason. Exposing
   it beyond the host is a deliberate act that needs a TLS terminator in front of it — nginx, Caddy,
@@ -700,9 +830,12 @@ versioning is stamped and re-verified rather than rebuilt.
   That is enforcement staying up while convenience goes down, and it is the intended trade.
 * **The chain proves integrity, not truth.** It proves an emitter said this and nobody changed it
   afterwards. Whether the emitter was honest is what mandates and gates are for.
-* **Not reviewed externally yet.** `docs/build-plan.md` requires an external crypto and security
-  review before anything is called v1. The hand-rolled calendar arithmetic in `clock.rs` is flagged
-  in ADR-0006 as the highest-value thing for a reviewer to attack.
+* **The external review is an attestation, not a report.** The owner attests that a review was
+  performed and produced no findings (ADR-0022), and v1.0 was declared on that (ADR-0024). No
+  reviewer name, date or statement of scope is held in this repository, so "no findings" is a claim
+  about a scope nobody here can read. `SECURITY.md` says the same at more length; weigh it as an
+  owner's word. The hand-rolled calendar arithmetic in `clock.rs` is flagged in ADR-0006 as the
+  highest-value thing for a reviewer to attack.
 
 ---
 

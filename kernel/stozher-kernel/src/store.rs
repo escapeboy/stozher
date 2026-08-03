@@ -1439,6 +1439,41 @@ impl Store {
         }))
     }
 
+    /// The newest checkpoint of every stream that has one — what §04 §4.7 asks to leave the box.
+    ///
+    /// Unlike [`Self::last_checkpoint`] this carries `envelope_id` and `observed_at`, because the
+    /// reader is outside: a head hash on its own is a number to compare, while the envelope id lets
+    /// them fetch the signed checkpoint later and check that the number was attested rather than
+    /// asserted by whoever mailed the file.
+    ///
+    /// # Errors
+    ///
+    /// [`codes::STORE_UNAVAILABLE`].
+    pub async fn checkpoint_heads(&self) -> Result<Vec<Value>> {
+        let rows = sqlx::query(
+            "SELECT c.stream, c.from_seq, c.to_seq, c.head_hash, c.envelope_id, c.observed_at \
+             FROM checkpoints c JOIN (SELECT stream, MAX(to_seq) AS top FROM checkpoints \
+             GROUP BY stream) latest ON latest.stream = c.stream AND latest.top = c.to_seq \
+             ORDER BY c.stream",
+        )
+        .fetch_all(&self.pool)
+        .await
+        .map_err(db)?;
+        Ok(rows
+            .iter()
+            .map(|r| {
+                serde_json::json!({
+                    "stream": r.get::<String, _>("stream"),
+                    "from-seq": as_u64(r, "from_seq"),
+                    "to-seq": as_u64(r, "to_seq"),
+                    "head-hash": r.get::<String, _>("head_hash"),
+                    "checkpoint-envelope": r.get::<String, _>("envelope_id"),
+                    "observed-at": r.get::<String, _>("observed_at"),
+                })
+            })
+            .collect())
+    }
+
     /// The last checkpoint recorded for a stream, if any (§04 §4.4 contiguity).
     ///
     /// # Errors

@@ -170,10 +170,47 @@ impl Kernel {
         kernel_key: keys::SigningKey,
         clock: clock::SharedClock,
     ) -> Result<Self> {
-        for root in &config.roots {
-            store
-                .seed_configured_root(&root.key, &root.subject, &root.enrolled_at)
-                .await?;
+        // Configuration seeds the root set **once**, into an empty one. That is genesis, where the
+        // circularity is unavoidable and §05 §5.2 licenses it: the first root cannot be enrolled by
+        // an envelope nobody yet has authority to approve.
+        //
+        // Every boot after that, `roots[]` is read and ignored. It used to be replayed
+        // unconditionally, so appending one line to `config.json` and restarting added a trusted
+        // approver — with `envelope_id='configuration'`, no envelope, and a chain whose head hash
+        // did not move. A security reviewer added `human:mallory`, restarted, and found the store
+        // byte-identical: the product's headline control is that the approving key never touches
+        // the server, and this reached the same end without needing it. `roots` is also in
+        // `REBUILDABLE_TABLES` — declared recomputable from the envelope stream — while holding
+        // rows the stream does not contain, so the invariant contradicted itself.
+        //
+        // Post-genesis enrolment already has a path: `kernel.enroll_root`, gated, chained, and
+        // root-approved whatever policy says (§05 §5 rule 6). Ignoring rather than refusing is
+        // deliberate — a root legitimately retired through that path stays listed in an operator's
+        // `config.json`, and a fatal mismatch would turn a stale comment into an outage. It is
+        // ignored *loudly*: silence here would be the same defect wearing the opposite sign.
+        let existing = store.roots_at(&clock.now()).await?;
+        if existing.is_empty() {
+            for root in &config.roots {
+                store
+                    .seed_configured_root(&root.key, &root.subject, &root.enrolled_at)
+                    .await?;
+            }
+        } else {
+            let known: std::collections::HashSet<&str> =
+                existing.iter().map(|(key, _)| key.as_str()).collect();
+            for root in config
+                .roots
+                .iter()
+                .filter(|r| !known.contains(r.key.as_str()))
+            {
+                tracing::warn!(
+                    subject = %root.subject,
+                    key = %root.key.as_str(),
+                    "config.json names a root this deployment has not enrolled; it is being \
+                     ignored. After the ceremony, the root set changes only through a signed, \
+                     chained kernel.enroll_root — see deploy/README.md 'Changing the root set'."
+                );
+            }
         }
         let ingest = Ingest::new(
             store,

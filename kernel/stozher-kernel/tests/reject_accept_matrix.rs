@@ -1038,7 +1038,7 @@ async fn policy_rows(report: &mut Report, world: &World) {
         .sign(&stozher_kernel::policy::baseline_conservative(
             "2026.08.1",
             NOW,
-            &world.root.subject,
+            &[world.root.subject.as_str()],
         ));
     let (envelope, payloads) = world.policy_change(&forged).await;
     row(
@@ -1057,7 +1057,7 @@ async fn policy_rows(report: &mut Report, world: &World) {
         .sign(&stozher_kernel::policy::baseline_conservative(
             "2026.08.2",
             NOW,
-            &world.root.subject,
+            &[world.root.subject.as_str()],
         ));
     let (envelope, _) = world.policy_change(&good).await;
     row(
@@ -1107,8 +1107,11 @@ async fn policy_rows(report: &mut Report, world: &World) {
     .await;
 
     // Documents the kernel refuses to enforce at all, checked at parse time.
-    let mut gated_offline =
-        stozher_kernel::policy::baseline_conservative("2026.08.3", NOW, &world.root.subject);
+    let mut gated_offline = stozher_kernel::policy::baseline_conservative(
+        "2026.08.3",
+        NOW,
+        &[world.root.subject.as_str()],
+    );
     gated_offline["offline"]["consequential"] = Value::from("allow");
     let signed_doc = world.policy_key.sign(&gated_offline);
     report.rejected(codes::POLICY_OFFLINE_ALLOWS_GATED);
@@ -1122,7 +1125,7 @@ async fn policy_rows(report: &mut Report, world: &World) {
     );
 
     let mut group_approver =
-        stozher_kernel::policy::baseline_conservative("2026.08.4", NOW, "the-team");
+        stozher_kernel::policy::baseline_conservative("2026.08.4", NOW, &["the-team"]);
     group_approver["gate-rules"][1]["approvers"] = json!(["the-team"]);
     let signed_doc = world.policy_key.sign(&group_approver);
     report.rejected("gate-approver-not-human");

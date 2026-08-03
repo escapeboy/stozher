@@ -113,6 +113,27 @@ that starts from a map is worth more than one that starts from a README.
   bounded, preceded by the §04 §5.4 checkpoint, and preceded in the same chain by a signed
   declaration stamped with the host's real time. The chain cannot lie about it afterwards; the
   payload is still gone. ADR-0023 §4.
+- **`config.json` was a way to become an approver, silently. It is not any more (ADR-0025).**
+  Until 2026-08-02 every boot replayed `roots[]` into the root set, so appending one entry and
+  restarting added a trusted approver with no envelope and no movement in the chain's head hash —
+  defeating the property that the key which can approve never touches the server, without needing
+  that key. Configuration now seeds the root set only when it is empty, which is genesis; later
+  additions are ignored and logged. **A store created before that change may already contain a root
+  enrolled this way, and nothing distinguishes it from the genesis root** — both are recorded
+  `envelope_id = 'configuration'`. A reviewer auditing an existing deployment should enumerate the
+  root set and confirm every member out of band. What this does *not* close: the same file still
+  carries the policy key id, the caller tokens and `clock-advance`, and `roots` is a projection with
+  no append-only triggers, so direct database write access still reaches it.
+- **The chain's second custodian is optional, and therefore usually absent.** `spec/04 §4.7` asks
+  that checkpoints be exported off-box, because one held only where it was made cannot distinguish
+  an intact store from a rebuilt one — the audited party is attesting to itself. `bin/stozher-anchor`
+  now produces that copy, and deliberately does not deliver it: a destination this deployment chose
+  and configured would be one it could also rewrite. So the property holds only for deployments
+  whose operators actually run it and keep the output somewhere the deployment has no credential
+  for. A reviewer should assume a given install has not, and treat the anchoring claim as a question
+  to ask the operator rather than a feature to check off. The console no longer implies otherwise:
+  it reports "attested by a signed checkpoint" separately from "verified from the origin of the
+  stream", and says in the affirmative case what an internal checkpoint does not prove.
 - **Payload decay has no second custodian.** Deleting a payload is the one destructive operation the
   kernel performs, and the property that makes it safe — chain verification never reads a payload —
   is enforced by the schema (no chain-bearing column in `payloads`) rather than by a separate

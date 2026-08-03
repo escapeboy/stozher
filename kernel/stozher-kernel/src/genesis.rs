@@ -180,10 +180,18 @@ pub fn build(seed: &Seed, ceremony: &Ceremony) -> Result<Genesis> {
     }))?;
 
     // -- seq 1: the bootstrap subject publishes the first policy, approved by the root ----------
+    // Every root this ceremony enrols, not just the founder. §06 §5 compares subjects, so a policy
+    // naming one root leaves that root unable to approve anything they ask for — and this ceremony
+    // demands a second root *because of* that rule. Naming only the first made the demand and then
+    // withheld what it was for.
+    let mut approvers = vec![ceremony.root_subject.as_str()];
+    if let Some((second, _)) = &ceremony.second_root {
+        approvers.push(second.as_str());
+    }
     let document = policy_key.sign(&crate::policy::baseline_conservative(
         &ceremony.policy_version,
         now,
-        &ceremony.root_subject,
+        &approvers,
     ))?;
     let document_hash = jcs::object_hash(&document)?;
     let target = format!("policy:{}", ceremony.policy_version);
@@ -540,6 +548,51 @@ mod tests {
             core_stream: "kernel:core".to_owned(),
             now: "2026-07-26T09:00:00.000Z".to_owned(),
         }
+    }
+
+    fn approvers_of(genesis: &Genesis) -> Vec<String> {
+        genesis.policy_document["gate-rules"]
+            .as_array()
+            .expect("gate-rules")
+            .iter()
+            .find(|rule| rule["decision"] == "gate")
+            .expect("a gate rule")["approvers"]
+            .as_array()
+            .expect("approvers")
+            .iter()
+            .filter_map(|a| a.as_str().map(str::to_owned))
+            .collect()
+    }
+
+    #[test]
+    fn the_first_policy_names_every_root_the_ceremony_enrolled() {
+        // §06 §5 compares subjects, so a policy naming only the founder leaves the founder unable
+        // to approve anything they themselves ask for — and this ceremony *demands* a second root
+        // because of that rule, then wrote a policy giving that root no standing. An ops lead
+        // enrolled their release manager as instructed, watched her approval come back
+        // `gate-approver-not-permitted`, and found the way out only by reading `ingest.rs`.
+        let mut two = ceremony();
+        two.second_root = Some((
+            "human:mira".to_owned(),
+            KeyId::parse(&format!("ed25519:{}", "ab".repeat(32))).unwrap(),
+        ));
+        let approvers = approvers_of(&build(&seed(), &two).unwrap());
+        assert!(
+            approvers.contains(&"human:ivan".to_owned()),
+            "{approvers:?}"
+        );
+        assert!(
+            approvers.contains(&"human:mira".to_owned()),
+            "the second root the ceremony insisted on cannot approve: {approvers:?}"
+        );
+    }
+
+    #[test]
+    fn a_one_root_ceremony_names_only_the_root_it_has() {
+        // The paired negative. A policy that named a second root a one-root install does not have
+        // would be an approver nobody can be, which is the same defect pointing the other way.
+        let approvers = approvers_of(&build(&seed(), &ceremony()).unwrap());
+        assert_eq!(approvers, vec!["human:ivan".to_owned()]);
     }
 
     #[test]

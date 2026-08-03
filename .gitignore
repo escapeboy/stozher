@@ -53,4 +53,7 @@ node_modules/
 .ruff_cache/
 .mypy_cache/
 .serena/
+# Throwaway checkouts an agent session creates. Not `.claude/` wholesale: project settings live
+# there too, and a blanket ignore would silently drop them from a clean clone.
+.claude/worktrees/
 *.log

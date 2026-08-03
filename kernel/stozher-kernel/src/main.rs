@@ -65,6 +65,13 @@ usage:
                           hand an action request to the pending queue
   stozher-kernel policy-current --url <base> [--token-env <VAR>]
                           print the policy version in force — what --in-force takes
+  stozher-kernel submit-mandate --url <base> --mandate <path> --key <path> --subject <name>
+                          [--stream <name>] [--component <name>] [--role <n>] [--index <n>]
+                          [--token-env <VAR>] [--config <path>]
+                          put a mandate `grant` wrote onto the chain, so envelopes may cite it
+  stozher-kernel anchor   --url <base> [--token-env <VAR>]
+                          print every stream's checkpoint head, to be kept off this machine
+                          (spec 04 section 4.7)
   stozher-kernel policy-draft --url <base> --version <new> --out <path> [--token-env <VAR>]
                           write the policy in force out as a draft of <new>, signature stripped
   stozher-kernel policy-sign --document <path> --key <path> --out <path>
@@ -201,6 +208,8 @@ fn main() -> ExitCode {
         "policy-request" => policy_request(&arguments),
         "park" => park(&arguments),
         "policy-current" => policy_current(&arguments),
+        "anchor" => anchor(&arguments),
+        "submit-mandate" => submit_mandate(&arguments),
         "policy-draft" => policy_draft(&arguments),
         "policy-sign" => policy_sign(&arguments),
         "policy-publish" => policy_publish(&arguments),
@@ -1113,6 +1122,175 @@ fn policy_current(arguments: &[String]) -> ExitCode {
         }
         Err(e) => {
             eprintln!("policy-current: {e}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
+/// Put a mandate `grant` produced onto the chain, so anything may cite it.
+///
+/// Until this existed, `grant` wrote a signed mandate *object* and nothing in the kernel could
+/// publish it. The only code in the product that did was the MCP gateway, for its own session
+/// mandate, at session open (`runtime.py::_publish_mandate`) — so in a deployment with no agent
+/// session, every mandate a human signed stayed unresolvable and every envelope citing it was
+/// refused `mandate-unresolved`. That blocked root rotation, human delegation, and every recovery
+/// path needing a new mandate after install. `deploy/README.md` said to submit the grant "like any
+/// envelope" with `submit`; a bare mandate object is not an envelope, and `submit` answered
+/// `schema-unknown-member: grantee` — an error about the wrong thing entirely.
+///
+/// Three independent evaluators hit this from three directions in one day. It is one command.
+fn submit_mandate(arguments: &[String]) -> ExitCode {
+    let value = |name: &str| value(arguments, name);
+    let (Some(url), Some(mandate_path), Some(key_path), Some(subject)) = (
+        value("--url"),
+        value("--mandate"),
+        value("--key"),
+        value("--subject"),
+    ) else {
+        eprintln!(
+            "submit-mandate requires --url <base>, --mandate <path>, --key <path> and \
+             --subject <name>"
+        );
+        return ExitCode::FAILURE;
+    };
+    let Some(token) = credential(arguments) else {
+        return ExitCode::FAILURE;
+    };
+    let mandate: serde_json::Value = match std::fs::read(mandate_path)
+        .map_err(|e| e.to_string())
+        .and_then(|bytes| serde_json::from_slice(&bytes).map_err(|e| e.to_string()))
+    {
+        Ok(mandate) => mandate,
+        Err(e) => {
+            eprintln!("reading {mandate_path}: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
+    // Told apart here rather than at ingest. Both mistakes below produce `schema-unknown-member`
+    // from the kernel, naming a member of the *inner* object, which reads as "your mandate is
+    // malformed" when the mandate is fine and the wrapping is what is wrong.
+    if mandate.get("kind").and_then(serde_json::Value::as_str) != Some("mandate") {
+        eprintln!(
+            "{mandate_path} is not a mandate: its `kind` is {}. This command takes the file \
+             `stozher-kernel grant --out` wrote.",
+            mandate.get("kind").unwrap_or(&serde_json::Value::Null)
+        );
+        return ExitCode::FAILURE;
+    }
+    if mandate.get("stream").is_some() || mandate.get("seq").is_some() {
+        eprintln!(
+            "{mandate_path} is already an envelope — it carries a chain position. Submit it with \
+             `stozher-kernel submit --file {mandate_path}` instead; this command is for the bare \
+             mandate object `grant` writes."
+        );
+        return ExitCode::FAILURE;
+    }
+    let key = match seed_key(arguments, key_path, keys::ROLE_HUMAN_ROOT) {
+        Ok(key) => key,
+        Err(e) => {
+            eprintln!("{e}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let now = match offline_clock(arguments) {
+        Ok(clock) => clock.now(),
+        Err(e) => {
+            eprintln!("{e}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let stream = value("--stream").unwrap_or("kernel:core");
+    let component = value("--component").unwrap_or("kernel");
+
+    // Same retry as `publish_effect`: the chain position is read, then written, and another writer
+    // may take it in between. Exhausting the attempts reports contention rather than the last chain
+    // code, so "somebody else was writing" never reaches an operator as "permanently rejected".
+    const ATTEMPTS: usize = 4;
+    let mut last = String::new();
+    for attempt in 0..ATTEMPTS {
+        let (seq, prev) = match head_of(url, &token, stream) {
+            Ok(head) => head,
+            Err(e) => {
+                eprintln!("{e}");
+                return ExitCode::FAILURE;
+            }
+        };
+        let body = serde_json::json!({
+            "v": stozher_core::VERSION,
+            "kind": "mandate",
+            "emitted-at": now,
+            "stream": stream,
+            "seq": seq,
+            "prev-hash": prev,
+            "identity": { "subject": subject, "key": key.id().as_str(), "component": component },
+            "mandate": mandate,
+        });
+        let submission = key.sign(&body).and_then(|envelope| {
+            stozher_core::jcs::canonicalize(
+                &serde_json::json!({ "envelope": envelope, "payloads": [] }),
+            )
+        });
+        let submission = match submission {
+            Ok(submission) => submission,
+            Err(e) => {
+                eprintln!("signing: {e}");
+                return ExitCode::FAILURE;
+            }
+        };
+        match stozher_kernel::operator::ingest(url, &token, submission.as_bytes()) {
+            Ok(answer) if answer.ok() => {
+                println!("{}", answer.body);
+                return ExitCode::SUCCESS;
+            }
+            Ok(answer) if attempt + 1 < ATTEMPTS && contended(&answer.body) => {
+                last = answer.body;
+                std::thread::sleep(std::time::Duration::from_millis(200 << attempt));
+            }
+            Ok(answer) => {
+                println!("{}", answer.body);
+                eprintln!("the kernel refused it ({})", answer.status);
+                return ExitCode::FAILURE;
+            }
+            Err(e) => {
+                eprintln!("submit-mandate: {e}");
+                return ExitCode::FAILURE;
+            }
+        }
+    }
+    eprintln!("{stream} stayed contended for {ATTEMPTS} attempts; nothing was recorded");
+    println!("{last}");
+    ExitCode::FAILURE
+}
+
+/// Print every stream's checkpoint head, for the operator to keep somewhere this system cannot.
+///
+/// `spec/04 §4.7` calls for checkpoints to be exported off-box and says why: *"A checkpoint that
+/// only ever exists inside the box it attests proves little."* The kernel has computed them since
+/// v0.2 and until now offered no way out, so the console could say "anchored: yes" about a fact
+/// only the audited party held.
+///
+/// The output goes to stdout and nowhere else. This command mails nothing, commits nothing and
+/// contacts no third party — where the copy goes is the operator's decision and the whole value of
+/// the copy is that this system did not choose it.
+fn anchor(arguments: &[String]) -> ExitCode {
+    let Some(url) = value(arguments, "--url") else {
+        eprintln!("anchor requires --url <base>");
+        return ExitCode::FAILURE;
+    };
+    let Some(token) = credential(arguments) else {
+        return ExitCode::FAILURE;
+    };
+    match stozher_kernel::operator::read(url, &token, "v1/checkpoints/heads") {
+        Ok(answer) if answer.ok() => {
+            println!("{}", answer.body);
+            ExitCode::SUCCESS
+        }
+        Ok(answer) => {
+            eprintln!("the kernel refused it ({}): {}", answer.status, answer.body);
+            ExitCode::FAILURE
+        }
+        Err(e) => {
+            eprintln!("anchor: {e}");
             ExitCode::FAILURE
         }
     }

@@ -16,6 +16,8 @@
 //! human. Nothing contradicted it: the configured roots of `Config` are seeded with real subjects,
 //! and every existing test uses those.
 
+use std::path::PathBuf;
+
 use serde_json::{Value, json};
 use stozher_core::signed;
 use stozher_kernel::clock::Clock;
@@ -181,4 +183,120 @@ async fn an_enrolment_whose_evidence_is_not_supplied_is_refused() {
     world
         .reject(&envelope, &[], "root-enrollment-malformed")
         .await;
+}
+
+/// Re-open the same database with a different configuration. What a restart is.
+async fn restart_with_roots(
+    path: &std::path::Path,
+    extra: &[(&str, &str)],
+) -> stozher_kernel::Kernel {
+    let mut roots: Vec<Value> = vec![
+        json!({ "subject": "human:ivan", "key": TestKey::new(0x11, "human:ivan").id.as_str(),
+                "enrolled-at": "2026-07-01T00:00:00.000Z" }),
+        json!({ "subject": "human:mira", "key": TestKey::new(0x12, "human:mira").id.as_str(),
+                "enrolled-at": "2026-07-01T00:00:00.000Z" }),
+    ];
+    for (subject, key) in extra {
+        roots.push(
+            json!({ "subject": subject, "key": key, "enrolled-at": "2026-07-01T00:00:00.000Z" }),
+        );
+    }
+    let config = stozher_kernel::config::Config::parse(&json!({
+        "bind": "127.0.0.1:0",
+        "database": path.to_string_lossy(),
+        "kernel-seed": "/nonexistent/kernel.seed",
+        "policy-key": TestKey::new(0x13, "org:policy").id.as_str(),
+        "kernel-core-stream": "kernel:core",
+        "checkpoint-stream": "kernel:checkpoints",
+        "rejection-stream": "kernel:rejections",
+        "roots": roots,
+        "callers": [{ "subject": "agent:test-harness",
+                      "token-sha256": stozher_core::crypto::sha256_hex(stozher_testkit::TOKEN.as_bytes()) }]
+    }))
+    .expect("a valid configuration");
+    let store = stozher_kernel::store::Store::open(path, "kernel:rejections")
+        .await
+        .expect("reopening the store");
+    let kernel_key = stozher_kernel::keys::Seed::generate()
+        .expect("entropy")
+        .derive(stozher_kernel::keys::ROLE_KERNEL_CHECKPOINT, 0)
+        .expect("derivation");
+    let clock = std::sync::Arc::new(
+        stozher_kernel::clock::FixedClock::new(stozher_testkit::NOW).expect("a clock"),
+    );
+    stozher_kernel::Kernel::assemble(config, store, kernel_key, clock)
+        .await
+        .expect("re-assembling the kernel")
+}
+
+#[tokio::test]
+async fn a_root_added_to_the_configuration_after_genesis_is_not_enrolled() {
+    // A security reviewer appended one `roots[]` entry to `config.json`, restarted, and gained a
+    // trusted approver: `envelope_id='configuration'`, no envelope, chain head byte-identical. The
+    // product's headline control is that the key which can approve never touches the server; this
+    // reached the same end without needing it, and the tamper-evident record showed nothing.
+    let path = scratch("config-root-injection");
+    let world = stozher_testkit::world_at(&path).await;
+    let before = world
+        .ingest()
+        .store()
+        .roots_at(stozher_testkit::NOW)
+        .await
+        .expect("reading the root set");
+    assert!(!before.is_empty(), "the ceremony enrolled roots");
+    drop(world);
+
+    let injected = format!("ed25519:{}", "ab".repeat(32));
+    let restarted = restart_with_roots(&path, &[("human:mallory", &injected)]).await;
+    let after = restarted
+        .ingest
+        .store()
+        .roots_at(stozher_testkit::NOW)
+        .await
+        .expect("reading the root set");
+
+    assert_eq!(
+        after.len(),
+        before.len(),
+        "configuration enrolled a root after genesis: {after:?}"
+    );
+    assert!(
+        !after.iter().any(|(key, _)| key.as_str() == injected),
+        "the injected key became an approver"
+    );
+}
+
+#[tokio::test]
+async fn configuration_still_seeds_the_first_root_of_an_empty_store() {
+    // The paired negative, and why this is "only into an empty set" rather than a flat refusal:
+    // genesis is the one place §05 §5.2 licenses the circularity, because the first root cannot be
+    // enrolled by an envelope nobody yet has authority to approve. Closing the path entirely would
+    // make a fresh install impossible, which is a worse defect than the one being fixed.
+    let world = world().await;
+    let roots = world
+        .ingest()
+        .store()
+        .roots_at(stozher_testkit::NOW)
+        .await
+        .expect("reading the root set");
+    assert!(
+        roots
+            .iter()
+            .any(|(_, subject)| subject == &world.root.subject),
+        "the ceremony's own root was not seeded from configuration: {roots:?}"
+    );
+}
+
+/// A database file of its own, so "restart" can reopen the same store.
+fn scratch(name: &str) -> PathBuf {
+    let dir = std::env::temp_dir().join(format!(
+        "stozher-store-{}-{name}-{:?}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0)
+    ));
+    std::fs::create_dir_all(&dir).expect("a scratch directory");
+    dir.join("stozher.db")
 }

@@ -92,6 +92,15 @@ const EXPORT_FILTERS: [&str; 17] = [
     // `the_export_carries_every_envelope_once_and_ignores_the_page_cursor` pins that.
     "after",
 ];
+/// The renderings the export offers. `ndjson` is the record; `html` is a reading of it.
+///
+/// Not a filter — it changes how the matched set is presented, never which records match — so it is
+/// permitted beside the filters rather than added to them, and an unrecognised *value* is refused
+/// for the same reason an unrecognised filter is: a silent fallback hands back a file that looks
+/// like the answer to the question that was asked.
+const EXPORT_FORMATS: [&str; 2] = ["ndjson", "html"];
+/// The route serving what an envelope's `evidence.payload-hash` commits to.
+const PAYLOAD_ROUTE: &str = "/v1/payloads/{payload-hash}";
 /// How far a mandate walk follows `parent` looking for the human root, matching the envelope page.
 const MANDATE_CHAIN_LINKS: u32 = 16;
 
@@ -155,8 +164,25 @@ pub struct Row {
     pub violation: String,
     /// A one-line description of the evidence commitment.
     pub evidence: String,
+    /// `evidence.payload-hash` in full, empty when the envelope commits to no payload.
+    ///
+    /// The whole hash and not `short()`'s twelve digits, because this one is a route and not a
+    /// label: `GET /v1/payloads/<hash>` serves the payload the envelope commits to, and for an
+    /// effect that payload holds the call's arguments. An incident responder read an export, found
+    /// `args-hash` and nothing else, and reported that applied effects retain no arguments — they
+    /// are retained, and nothing on the way from the export to them said where.
+    pub payload_hash: String,
     /// The approver, when the envelope carries a decision.
     pub decided_by: String,
+    /// `approve` or `deny`, when the envelope carries a decision.
+    pub decision: String,
+    /// The reason a decision gave, which for a denial is the whole content of the record.
+    ///
+    /// A compliance officer exported six human decisions and got six identical blank rows: the
+    /// table was built from `execution.*`, which a `gate-decision` does not have, and the denial
+    /// reason — *"no DBA sign-off on the lock estimate; re-file with an EXPLAIN"* — existed only
+    /// in the NDJSON. An export that drops the sentence a human wrote is not an audit artefact.
+    pub decision_reason: String,
 }
 
 /// One stream, with the quiet-stream finding already computed.
@@ -399,6 +425,26 @@ struct OverviewPage {
     quiet: Vec<StreamRow>,
 }
 
+/// The export as a document a person reads, rather than a file a verifier parses.
+///
+/// A compliance officer produced the cover memo for their auditor by hand, because the product
+/// emits NDJSON and NDJSON is not a document. This is the missing artefact — and it is deliberately
+/// not the artefact of record. It carries no signatures and re-derives nothing; a reader who wants
+/// to check the claim goes to the NDJSON, which this document says in its own text. A rendering
+/// that let itself be mistaken for evidence would be worse than no rendering.
+#[derive(Template)]
+#[template(path = "export.html")]
+struct ExportDocument {
+    title: &'static str,
+    /// The filters that produced this set, restated so the document says which question it answers.
+    query: String,
+    /// How many records matched.
+    records: String,
+    /// Where the values behind `args-hash` are served.
+    payload_route: &'static str,
+    rows: Vec<Row>,
+}
+
 #[derive(Template)]
 #[template(path = "audit.html")]
 struct AuditPage {
@@ -488,7 +534,17 @@ struct VerifyPage {
     valid: bool,
     count: String,
     head_hash: String,
-    anchored: bool,
+    /// Whether the verified range begins at the origin of the stream.
+    ///
+    /// `ChainResult::anchored` — `first_seq == 0 || expected_first_prev.is_some()` — which is a
+    /// statement about the *range*, not about a checkpoint. The page rendered it under the caption
+    /// "Anchored to a signed checkpoint", so a stream verified from seq 0 with no checkpoint at all
+    /// reported yes. A compliance evaluator read that as external attestation, which is the one
+    /// thing it has never meant.
+    rooted: bool,
+    /// Whether a signed checkpoint attests this stream's head. A different question, now asked
+    /// separately, because these two can and do disagree.
+    attested: bool,
     checkpoint: String,
     reason_code: String,
     reason: String,
@@ -697,7 +753,7 @@ async fn export(
     let unknown: Vec<&str> = params
         .keys()
         .map(String::as_str)
-        .filter(|name| !EXPORT_FILTERS.contains(name))
+        .filter(|name| !EXPORT_FILTERS.contains(name) && *name != "format")
         .collect();
     if !unknown.is_empty() {
         let mut names: Vec<&str> = unknown;
@@ -714,9 +770,23 @@ async fn export(
             ),
         );
     }
+    let format = params.get("format").map_or("ndjson", String::as_str);
+    if !EXPORT_FORMATS.contains(&format) {
+        return notice(
+            StatusCode::BAD_REQUEST,
+            "That export format does not exist, so the export was refused",
+            &format!(
+                "No such format: {format}. Nothing was exported. The formats this export accepts \
+                 are: {}. `ndjson` is the record — canonical envelopes exactly as signed; `html` is \
+                 a reading of that record and says so in its own text.",
+                EXPORT_FORMATS.join(", ")
+            ),
+        );
+    }
     let filters = Filters::from_params(&params);
     let store = kernel.ingest.store();
     let mut body = String::new();
+    let mut rows: Vec<Row> = Vec::new();
     let mut exported: u64 = 0;
     let mut resume: Option<store::OwnedCursor> = None;
     loop {
@@ -745,10 +815,25 @@ async fn export(
                 Err(e) => return unavailable(&e),
             }
         }
+        // Both renderings walk the same paged set once. The canonical body is built either way so
+        // that `html` cannot become a second, cheaper query answering a different question than the
+        // file it claims to be a reading of.
+        if format == "html" {
+            rows.extend(records.iter().map(row));
+        }
         exported += records.len() as u64;
         if i64::try_from(records.len()).unwrap_or(i64::MAX) < EXPORT_PAGE_ROWS {
             break;
         }
+    }
+    if format == "html" {
+        return render(&ExportDocument {
+            title: "Stozher audit export",
+            query: filters.to_export_query_string(),
+            records: exported.to_string(),
+            payload_route: PAYLOAD_ROUTE,
+            rows,
+        });
     }
     (
         StatusCode::OK,
@@ -766,6 +851,16 @@ async fn export(
             (
                 axum::http::HeaderName::from_static("x-stozher-export-records"),
                 exported.to_string(),
+            ),
+            // Where the values behind `execution.args-hash` are. They are retained — an effect's
+            // payload is `{server, tool, arguments}` — and until this header existed nothing on the
+            // path from the export to them said so, so a reader who grepped the file for an amount
+            // and found none concluded the arguments had never been recorded. A header and not a
+            // body line: every line of the body is an envelope a verifier re-derives `id()` over,
+            // and a marker line would break the parser that promise is for.
+            (
+                axum::http::HeaderName::from_static("x-stozher-payload-route"),
+                PAYLOAD_ROUTE.to_owned(),
             ),
         ],
         body,
@@ -1228,7 +1323,8 @@ async fn verify(
         valid: false,
         count: "0".to_owned(),
         head_hash: "—".to_owned(),
-        anchored: false,
+        rooted: false,
+        attested: false,
         checkpoint: "—".to_owned(),
         reason_code: String::new(),
         reason: String::new(),
@@ -1239,8 +1335,9 @@ async fn verify(
             page.valid = true;
             page.count = text(&report["count"]);
             page.head_hash = text(&report["head-hash"]);
-            page.anchored = report["anchored"].as_bool().unwrap_or(false);
+            page.rooted = report["anchored"].as_bool().unwrap_or(false);
             let attested = &report["last-checkpoint"];
+            page.attested = !attested.is_null();
             page.checkpoint = if attested.is_null() {
                 "—".to_owned()
             } else {
@@ -1460,7 +1557,16 @@ fn row(record: &Value) -> Row {
             Some(schema) => format!("{schema} · {}", short(&text(&evidence["payload-hash"]))),
             None => "—".to_owned(),
         },
+        payload_hash: evidence["payload-hash"].as_str().unwrap_or("").to_owned(),
         decided_by: short_key(&text(&envelope["authorization"]["decision"]["sig"]["key"])),
+        decision: envelope["authorization"]["decision"]["decision"]
+            .as_str()
+            .unwrap_or("")
+            .to_owned(),
+        decision_reason: envelope["authorization"]["decision"]["reason"]
+            .as_str()
+            .unwrap_or("")
+            .to_owned(),
     }
 }
 

@@ -74,7 +74,7 @@ async fn every_published_version_resolves_forever() {
         let document = world.policy_key.sign(&policy::baseline_conservative(
             version,
             NOW,
-            &world.root.subject,
+            &[world.root.subject.as_str()],
         ));
         world.publish_policy(&document).await;
     }
@@ -129,7 +129,8 @@ async fn revoke_cached_travels_in_the_document_it_tightens() {
         "the baseline does not tighten anything"
     );
 
-    let mut tightened = policy::baseline_conservative("2026.08.1", NOW, &world.root.subject);
+    let mut tightened =
+        policy::baseline_conservative("2026.08.1", NOW, &[world.root.subject.as_str()]);
     tightened["revoke-cached"] = Value::from(true);
     // A class raised: `github.get_file` moves from `read` to `consequential`.
     tightened["classification"]["by-action"]["github.get_file"] = Value::from("consequential");
@@ -169,11 +170,12 @@ async fn a_policy_change_binds_the_exact_document_bytes() {
     let intended = world.policy_key.sign(&policy::baseline_conservative(
         "2026.09.1",
         NOW,
-        &world.root.subject,
+        &[world.root.subject.as_str()],
     ));
     let (envelope, _) = world.policy_change(&intended).await;
 
-    let mut substituted = policy::baseline_conservative("2026.09.1", NOW, &world.root.subject);
+    let mut substituted =
+        policy::baseline_conservative("2026.09.1", NOW, &[world.root.subject.as_str()]);
     substituted["gate-rules"] = json!([{ "classes": ["read", "benign", "consequential", "prohibited"], "decision": "allow" }]);
     let substituted = world.policy_key.sign(&substituted);
     let payload = json!({

@@ -28,7 +28,6 @@ set -euo pipefail
 DEPLOY="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$DEPLOY"
 
-IMAGE="${STOZHER_KERNEL_IMAGE:-stozher-kernel:0.1.0}"
 SEED="secrets/operator/operator.seed"
 WORK="var/policy-request.json"
 DOCUMENT=""
@@ -58,6 +57,13 @@ done
 
 # shellcheck disable=SC1091
 set -a; . ./.env; set +a
+
+# Resolved AFTER .env, never before. The ceremony writes STOZHER_KERNEL_IMAGE into .env so that
+# two installs on one host do not share a tag; read earlier, that assignment is invisible and
+# every one of these commands silently runs the *other* deployment's binary against this
+# deployment's kernel. It presented as `unknown command "anchor"` — a command this repository
+# ships, executed from an image built before it existed.
+IMAGE="${STOZHER_KERNEL_IMAGE:-stozher-kernel:0.1.0}"
 UID_GID="$(id -u):$(id -g)"
 
 CONTAINER="$(docker compose ps -q kernel)"
@@ -85,8 +91,10 @@ if [ -z "$RESUME" ]; then
 
   if [ -z "$MANDATE" ]; then
     echo "--mandate <64 hex> is required: the mandate '$SUBJECT' publishes under." >&2
-    echo "It must cover kernel.publish_policy at class consequential — sign one with" >&2
-    echo "  bin/stozher-grant, or reuse the id shown on /console/mandates." >&2
+    echo "It must cover kernel.publish_policy at class consequential. Reuse the id shown on" >&2
+    echo "/console/mandates, or sign a new one with the kernel's 'grant' subcommand — there is" >&2
+    echo "deliberately no wrapper for it; deploy/README.md 'Changing policy' has the exact" >&2
+    echo "invocation." >&2
     exit 2
   fi
 

@@ -3,6 +3,12 @@
 **Status:** Accepted · **Date:** 2026-08-02 · **Follows** ADR-0022 (which closed v0.9 the same way) ·
 **Deviates from** `docs/product-completion-design.md` §3 (v1.0)
 
+> **§3's completeness claim was false when it was written, and was falsified on 2026-08-02 by eight
+> adoption evaluations — see ADR-0027.** Putting a mandate on the chain had no command, so the
+> sweep below missed the operation every ceremony in it depends on. The label stands and the text
+> here is unedited: it records what was decided on the evidence of that day, and the evidence was
+> wrong. Read ADR-0027 before acting on §3.
+
 v1.0 is declared by the owner's decision. This ADR records **what that decision rests on**, because
 the basis is narrower than the plan specified in a way a release note would be tempted to smooth
 over — and this is the one project that cannot afford to write that note.
@@ -48,7 +54,11 @@ Not "every planned item shipped" — v0.2 through v0.9 already closed those. It 
 every one of those commands has been run as a process against a live kernel.**
 
 That sweep was prompted by one question — *which operation has no command?* — and it found seven
-things, each sitting inside a release already closed as complete:
+things, each sitting inside a release already closed as complete. **It missed an eighth, and the
+claim above is therefore false as written** — publishing a mandate had no command, which is the
+operation every ceremony in this table depends on. ADR-0027 records how a sweep that asked the right
+question still stopped short: it swept the gated ceremonies, not the mandate lifecycle underneath
+them, and the test that would have contradicted it built the missing envelope by hand.
 
 | Found | What it was |
 |---|---|

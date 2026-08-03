@@ -16,6 +16,19 @@ govern_native_tools = true
 # Aggregation bounds. The elapsed bound comes from policy (aggregate-max-window, default PT5M).
 aggregate_max_events = 500
 aggregate_max_samples = 8
+# Run this when a call parks. Nothing is run when it is empty, which is the default and is why a
+# fresh install queues approvals where nobody is looking — an agent stalls, the console shows the
+# request, and the only thing that connects the two is an operator remembering to look.
+#
+# Argv, not a shell string: this command is handed a request hash, and a shell string invites
+# interpolating it into `sh -c`. It receives one JSON object on stdin — the request hash, subject,
+# action, target and classification. It never receives the call's argument values: those have a
+# retention ceiling and an authenticated route (/v1/payloads), and a notification has neither.
+#
+# It cannot fail the call. A non-zero exit or a timeout is logged and changes nothing the agent
+# sees — a notifier able to break the gate would make it less available than no notifier at all.
+# park_notify = ["/usr/local/bin/notify-approver"]
+# park_notify_timeout_seconds = 10.0
 
 [kernel]
 url = "http://127.0.0.1:8787"

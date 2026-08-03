@@ -10,12 +10,33 @@ chain fail.</p>
 
 {% if valid %}
 <p><b class="ok">VALID</b> — {{ count }} envelope(s), head <span class="hash">{{ head_hash }}</span>.</p>
-{% if anchored %}
-<p>Anchored to a signed checkpoint: <b class="ok">yes</b> — {{ checkpoint }}. A rebuilt store would
-contradict a published head, which is what makes the anchor worth having.</p>
+
+{# These two lines were one line, and the one line was wrong. The template branched on the chain
+   range's `anchored` — "this range begins at seq 0" — under the caption "Anchored to a signed
+   checkpoint", so a stream with no checkpoint whatsoever reported yes. A compliance evaluator read
+   it as attestation by something outside. They are separate facts and they disagree routinely: a
+   young deployment is rooted and unattested, and a verified sub-range is attested and unrooted. #}
+{% if rooted %}
+<p>Verified from the origin of the stream: <b class="ok">yes</b> — the range begins at seq 0, so
+nothing precedes it that this verdict has not read.</p>
 {% else %}
-<p>Anchored to a signed checkpoint: <b class="quiet">no</b> — the range verifies against itself, but
-no checkpoint yet attests its head.</p>
+<p>Verified from the origin of the stream: <b class="quiet">no</b> — this range is internally
+consistent, and what came before it was not examined.</p>
+{% endif %}
+
+{% if attested %}
+<p>Attested by a signed checkpoint: <b class="ok">yes</b> — {{ checkpoint }}.</p>
+<div class="note">A checkpoint held only here attests this head to no one. It is signed by this
+deployment, stored by this deployment, and would be rebuilt along with everything else by anyone
+able to rebuild the store — so against the question "was this record reconstructed after the
+fact?", it is the party under examination vouching for itself. What answers that question is a copy
+of the head in someone else's keeping, taken before the fact and beyond this system's reach:
+<code>bin/stozher-anchor</code> writes one, and <code>spec/04 §4.7</code> names the destinations —
+a git commit in a repository this deployment cannot write to, an email, a regulator's file.</div>
+{% else %}
+<p>Attested by a signed checkpoint: <b class="quiet">no</b> — no checkpoint yet attests its head.
+Checkpoints are emitted on the policy's interval; a stream younger than one interval has not
+reached its first.</p>
 {% endif %}
 {% else %}
 <p><b class="prohibited">INVALID</b> — {{ reason_code }}: {{ reason }}{% if failed_at_seq != "" %} (at seq {{ failed_at_seq }}){% endif %}.</p>

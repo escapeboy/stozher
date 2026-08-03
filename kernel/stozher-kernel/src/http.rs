@@ -68,6 +68,7 @@ pub fn router(kernel: Arc<Kernel>) -> Router {
         .route("/v1/rejections/verify", get(get_rejections_verify))
         .route("/v1/payloads/{payload_hash}", get(get_payload))
         .route("/v1/checkpoints", post(post_checkpoints))
+        .route("/v1/checkpoints/heads", get(get_checkpoint_heads))
         .route("/v1/maintenance/decay", post(post_decay))
         .with_state(Arc::clone(&kernel))
         // The console is `get`-only by construction (see [`crate::console`]), so merging it cannot
@@ -1024,6 +1025,35 @@ async fn get_payload(
                 "result": "decayed",
                 "payload-hash": payload_hash,
                 "reason": "the payload has decayed; the hash remains the commitment"
+            }),
+        ),
+        Err(e) => unavailable(&e),
+    }
+}
+
+/// The newest checkpoint of every stream, in the form meant to leave this machine.
+///
+/// `spec/04 §4.7`: *"Checkpoints SHOULD be exported off-box (the console's export, an operator's
+/// email, a git commit). A checkpoint that only ever exists inside the box it attests proves
+/// little."* Until this route the kernel computed checkpoints faithfully and offered no way to do
+/// that, so an auditor asking "how do I know this record was not rebuilt after the fact" could be
+/// answered only with an assurance from the party they were auditing.
+///
+/// It does not record that an anchor was taken, and that omission is the design. A row saying "we
+/// published on Tuesday", written by the same deployment, is exactly the self-attestation the
+/// clause exists to replace — the evidence that an anchor left is the copy in the operator's hands,
+/// held somewhere this system cannot reach.
+async fn get_checkpoint_heads(State(kernel): State<Arc<Kernel>>, headers: HeaderMap) -> Response {
+    if let Caller::Refused(response) = caller(&kernel, &headers) {
+        return response;
+    }
+    match kernel.ingest.store().checkpoint_heads().await {
+        Ok(heads) => json(
+            StatusCode::OK,
+            &serde_json::json!({
+                "stozher": stozher_core::VERSION,
+                "taken-at": kernel.ingest.clock().now(),
+                "heads": heads,
             }),
         ),
         Err(e) => unavailable(&e),

@@ -630,7 +630,17 @@ pub fn class_weight(class: &str) -> u8 {
 ///
 /// Used by tests and by the bootstrap path; the values are the specification's documented defaults.
 #[must_use]
-pub fn baseline_conservative(version: &str, issued_at: &str, approver: &str) -> Value {
+/// The profile the ceremony publishes as `seq` 1.
+///
+/// `approvers` is every root the deployment enrolled, not the founding one. §06 §5 forbids a
+/// subject answering its own request, so a policy naming only the founder means the founder can
+/// approve nothing they themselves ask for — and the ceremony *requires* a second root precisely
+/// because of that rule, then wrote a policy that gave the second root no standing. An ops lead
+/// evaluating this enrolled their release manager as the ceremony insisted, watched her approval
+/// come back `gate-approver-not-permitted`, and found the way out only by reading `ingest.rs`:
+/// `kernel.publish_policy` is root-approved whatever policy says, so a new policy can name her.
+/// Nothing said so. A fresh install now answers its own first consequential action.
+pub fn baseline_conservative(version: &str, issued_at: &str, approvers: &[&str]) -> Value {
     let mut by_action = BTreeMap::new();
     // The action classifications of §05 §1's worked document.
     by_action.insert("github.get_file", "read");
@@ -675,7 +685,7 @@ pub fn baseline_conservative(version: &str, issued_at: &str, approver: &str) -> 
         },
         "gate-rules": [
             { "classes": ["prohibited"], "decision": "deny" },
-            { "classes": ["consequential"], "decision": "gate", "approvers": [approver] },
+            { "classes": ["consequential"], "decision": "gate", "approvers": approvers },
             { "classes": ["read", "benign"], "decision": "allow" }
         ],
         "evidence-ttl": {
