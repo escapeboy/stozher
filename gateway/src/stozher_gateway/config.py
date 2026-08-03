@@ -21,6 +21,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
 
+from . import clock
 from .gate import Approver
 
 __all__ = [
@@ -175,6 +176,40 @@ class DevConfig(BaseModel):
     allow_unauthenticated: bool = False
 
 
+class ClockConfig(BaseModel):
+    """This deployment's declaration that its clock is not the host's (ADR-0023).
+
+    The same two members the kernel's `clock-advance` takes, and the acknowledgement is the point:
+    a deployment running this way emits records whose timestamps are not when anything happened,
+    and the sentence saying so belongs beside the number that made it true.
+
+    It exists here because an advance is a property of the *deployment*, not of one component. The
+    kernel had it and the gateway did not, so on an advanced deployment the gateway stamped every
+    action-request from the host clock and the kernel refused each one as already expired — the gate
+    could not queue anything at all.
+    """
+
+    model_config = _FORBID_EXTRA
+
+    advance: str | None = None
+    acknowledged: str | None = None
+
+    @model_validator(mode="after")
+    def _both_or_neither(self) -> ClockConfig:
+        if self.advance is None:
+            if self.acknowledged is not None:
+                raise ValueError("clock.acknowledged is set with no clock.advance")
+            return self
+        if self.acknowledged != clock.CLOCK_ADVANCE_ACKNOWLEDGEMENT:
+            raise ValueError(
+                "clock.acknowledged must read exactly "
+                f"{clock.CLOCK_ADVANCE_ACKNOWLEDGEMENT!r} — a deployment whose clock is not the "
+                "host's says so in its own configuration, or it does not get one"
+            )
+        clock.AdvancedClock(self.advance)  # rejects a malformed or non-positive duration here
+        return self
+
+
 class GatewaySection(BaseModel):
     """The gateway's own knobs."""
 
@@ -216,6 +251,7 @@ class GatewayConfig(BaseModel):
     model_config = _FORBID_EXTRA
 
     gateway: GatewaySection = Field(default_factory=GatewaySection)
+    clock: ClockConfig = Field(default_factory=ClockConfig)
     kernel: KernelConfig = Field(default_factory=KernelConfig)
     identity: IdentityConfig = Field(default_factory=IdentityConfig)
     org: OrgConfig = Field(default_factory=OrgConfig)

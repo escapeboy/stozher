@@ -160,6 +160,30 @@ written by one build being opened by another, with nothing pointing at the tag t
 message. `.env` was the wrong place when nothing preserved these two keys; `bin/stozher-bootstrap`
 now does.)
 
+### Running the clock ahead, if you are demonstrating expiry
+
+A deployment can declare that its clock is not the host's, so a reviewer can watch mandates expire
+and evidence decay without waiting a year (ADR-0023). **Declare it in both components or in
+neither.** The kernel takes it in `config/kernel-config.json` and the gateway in
+`stozher-gateway.toml`, with the same two members and the same acknowledgement sentence:
+
+```json
+"clock-advance": { "advance": "P7D",
+                   "acknowledged": "records emitted by this deployment are not evidence of when anything happened" }
+```
+
+```toml
+[clock]
+advance = "P7D"
+acknowledged = "records emitted by this deployment are not evidence of when anything happened"
+```
+
+Advance only the kernel and the gate stops working: the gateway stamps each request's `not-after`
+from its own clock, the kernel is already past it, and every gated call comes back
+`gate-request-expired` / `blocked` instead of parking — nothing queued, nothing approvable. The
+duration has no sign, so the clock cannot be asked to go backwards, and a deployment that has run
+ahead will not start behind where it left off.
+
 ### What the ceremony actually is
 
 Genesis is **two fully-validated envelopes**, not a bypass (ADR-0006 §2):
@@ -348,14 +372,38 @@ evaluating this product found nine requests waiting that way and wrote that the 
 stopped the incident was a page someone had to remember to look at. **A gate nobody is pinged about
 is a queue, not a control.**
 
-Set `park_notify` in the gateway's config to an argv — a script that posts to Slack, sends a push,
-writes to a pager, whatever your team already reads:
+There are two ways to be told, and this page used to document only the one you have to build
+yourself. An evaluation running an unattended nightly job found the other by grepping the kernel's
+Rust, which is the wrong place to find the load-bearing control for the case where nobody is awake.
+
+**The kernel's own channels**, and the shorter path: it ships Slack, SMTP and webhook, wired through
+`docker-compose.yml` and preserved across a re-bootstrap. A channel names the *environment variable*
+and never the value, so `config/kernel-config.json` stays safe to copy, diff and paste into a
+ticket:
+
+```json
+"notifications": [
+  { "channel": "webhook", "url-env": "STOZHER_WEBHOOK_URL", "token-env": "STOZHER_WEBHOOK_TOKEN" }
+]
+```
+
+Set the matching `STOZHER_WEBHOOK_URL` / `STOZHER_WEBHOOK_TOKEN` in `.env` (the commented block at
+the bottom of `.env.example` lists all four) and restart the kernel. One ping per park, carrying the
+request hash, subject, action, target, classification, `not-after` and the console URL — and no
+argument values, ever.
+
+**Or `park_notify` in the gateway's config**, an argv you supply — a script that posts to Slack,
+sends a push, writes to a pager, whatever your team already reads:
 
 ```toml
 [gateway]
 park_notify = ["/usr/local/bin/notify-approver"]
 park_notify_timeout_seconds = 10.0
 ```
+
+The gateway logs `no park notifier is configured` when this argv is unset. It is talking about
+itself only: if you configured a kernel channel, you are being pinged, and that line is not evidence
+that you are not.
 
 It receives one JSON object on stdin: the request hash, subject, action, target, classification and
 the time it parked. Three things it deliberately does not do, each of which could have gone the

@@ -113,6 +113,22 @@ ceremony — those documents outlive the demonstration — but it is a rough edg
 workflow, and the way through it is to pass explicit timestamps. Not fixed here because `main.rs` is
 outside this change's surface.
 
+**The gateway had no clock, and that turned the gate off.** Corrected 2026-08-03. This section
+reasoned about the kernel and about the offline CLI and never about the *enforcing* component. The
+gateway stamps an action-request's `not-after` from its own clock, so on an advanced deployment
+every gated call arrived already expired and came back `gate-request-expired`, `result: blocked`,
+`retryable: false` — not queued, not approvable, dead. Three independent evaluations reached that
+state from three different scenarios; one could not approve a single call for the rest of its run,
+and another reported the only mandate that would run its agent was one the console labels expired.
+The facility built so a reviewer could observe the product disabled the product's central control.
+
+An advance is now a property of the **deployment**: `[clock] advance` / `acknowledged` in
+`stozher-gateway.toml`, the same two members and the byte-identical acknowledgement sentence the
+kernel takes, pinned by `test_deployment_clock.py`. `bin/stozher-approve` and
+`bin/stozher-publish-policy` now pass `--config` too — they never did, so an approval was stamped on
+the host clock, refused `gate-approval-expired`, and *consumed the pending item on the way*, leaving
+`console-csrf-invalid` on every retry and no way to re-answer.
+
 **Early activation.** A mandate whose `not-before` is in the future becomes usable under an advance.
 Narrow: to hold such a mandate you need the issuer's signature, and anyone who can obtain a
 future-dated mandate can obtain a present-dated one. It bites only where an issuer deliberately
@@ -173,3 +189,10 @@ labelling and is documented as such.
 | A deployment that has run ahead cannot go back | `tests/clock_advance.rs::a_deployment_that_has_run_ahead_will_not_go_back` |
 | A deployment that does not ask for it pays nothing | `tests/clock_advance.rs::a_deployment_that_never_asks_for_an_advance_pays_nothing_for_it`, `config.rs::a_deployment_that_says_nothing_about_the_clock_gets_the_hosts` |
 | The acknowledgement is required verbatim | `config.rs::a_clock_advance_without_the_acknowledgement_is_refused` |
+| Both components read the same advance, spelled the same way | `gateway/tests/test_deployment_clock.py::test_the_gateways_advance_is_spelled_the_same_as_the_kernels` |
+| The gate can still queue a request on an advanced deployment | `gateway/tests/test_governed_functions.py::test_a_gated_call_still_parks_on_a_clock_advanced_deployment` |
+| The gateway's advance is forward-only and acknowledged | `gateway/tests/test_deployment_clock.py::test_the_clock_cannot_be_moved_backwards`, `::test_the_acknowledgement_is_required_and_exact` |
+
+Every row above was true of the kernel on the day this was written, and the table did not say so —
+which is how a facility with eight passing claims left the gate unable to queue anything. A claim
+about "the deployment" needs a test per component, or it is a claim about one of them.

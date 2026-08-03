@@ -35,7 +35,7 @@ POLICY_KEY = SigningKey(bytes.fromhex("23" * 32), "org:policy")
 
 
 @pytest.fixture
-def governor(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Any:
+def governor(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, request: Any) -> Any:
     """A Governor over a real store and a real enforcer, with no kernel behind it.
 
     The kernel is absent on purpose, exactly as in `test_enforcement.py`: the local chain is the
@@ -48,9 +48,22 @@ def governor(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Any:
     seed.chmod(0o600)
     mandate_file = tmp_path / "mandate.json"
 
+    # `indirect=True` parametrisation supplies a `clock-advance`; without it there is none, which is
+    # every deployment that has not asked for one.
+    advance = getattr(request, "param", None)
     config = GatewayConfig.model_validate(
         {
             "gateway": {"enabled": True, "device": "test", "state_db": str(tmp_path / "gw.db")},
+            **(
+                {
+                    "clock": {
+                        "advance": advance,
+                        "acknowledged": clock_module.CLOCK_ADVANCE_ACKNOWLEDGEMENT,
+                    }
+                }
+                if advance
+                else {}
+            ),
             "kernel": {"url": "http://127.0.0.1:9"},
             "identity": {"seed_file": str(seed)},
             "org": {"policy_key": POLICY_KEY.id, "roots": [{"subject": ROOT.subject, "key": ROOT.id}]},
@@ -103,7 +116,11 @@ def governor(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Any:
     policy = POLICY_KEY.sign(
         baseline_policy("2026.07.1", now, ROOT.subject, {"ops.tail_logs": "read"})
     )
-    governor._gateway.store.cache_policy("2026.07.1", policy, now)
+    # Verified on the deployment's clock, not the host's: `max-staleness-seconds` is 300, so a
+    # policy stamped with the host's `now` on an advanced deployment is stale the moment it is
+    # cached, and a `consequential` call takes the offline rule (`block`) instead of parking. A real
+    # gateway pulls it from the kernel, whose clock is the same advanced one.
+    governor._gateway.store.cache_policy("2026.07.1", policy, governor._gateway._clock.now())
     yield governor
     # Teardown must not mask the assertion that failed: a Governor the test never opened, or one a
     # refusal left half-open, has nothing to flush and its close is not what the test is about.
@@ -234,6 +251,35 @@ def test_an_async_function_is_refused_rather_than_recorded_as_applied(governor: 
         @governor.governed(server="ops")
         async def fetch(url: str) -> str:
             return "body"
+
+
+@pytest.mark.parametrize("governor", ["PT5H"], indirect=True)
+def test_a_gated_call_still_parks_on_a_clock_advanced_deployment(governor: Any) -> None:
+    """The defect three independent evaluations reached, and the one that turned the gate off.
+
+    The gateway stamped `not-after` from the host clock while the kernel ran ahead, so every gated
+    call arrived already expired: `gate-request-expired`, `result: blocked`, `retryable: false` —
+    not queued, not approvable, dead. The request's own window has to be on the deployment's clock.
+
+    Companion to `test_deployment_clock.py`; it lives here because this is where the fixture that
+    builds a whole gateway does.
+    """
+    with governor:
+
+        @governor.governed(server="ops")
+        def issue_refund(order_id: str) -> str:
+            return "refunded"
+
+        with pytest.raises(RefusalError) as refused:
+            issue_refund("ORD-1")
+
+        assert refused.value.document["result"] == "parked"
+        parked = governor._gateway.store.parked(refused.value.document["request-hash"])
+        # Ahead of the host by the advance, so a kernel running ahead accepts it rather than
+        # answering `gate-request-expired`. An advance longer than the session mandate's own window
+        # would refuse the session instead, which is ADR-0023 working: an advance expires a mandate,
+        # it never resurrects one.
+        assert parked.request["not-after"] > clock_module.shift(clock_module.now(), 4 * 3600)
 
 
 def test_a_configuration_path_that_does_not_exist_is_refused(tmp_path: Path) -> None:

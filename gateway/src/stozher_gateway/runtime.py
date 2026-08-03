@@ -145,7 +145,11 @@ class Gateway:
 
     def __init__(self, config: GatewayConfig, clock: clock_module.Clock | None = None) -> None:
         self.config = config
-        self._clock = clock or clock_module.Clock()
+        # The deployment's clock, not the host's, when the configuration says so (ADR-0023). One
+        # clock is built here and handed to everything below, so an advance cannot reach some of the
+        # gateway's timestamps and miss others — `not-after` on an action-request being the one that
+        # decided whether the gate could queue anything at all.
+        self._clock = clock or clock_module.from_config(config)
         self.store = GatewayStore(config.state_db_path())
         self.kernel = KernelClient(
             config.kernel.url, config.kernel.token(), config.kernel.timeout_seconds
