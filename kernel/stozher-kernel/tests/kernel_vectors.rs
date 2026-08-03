@@ -282,3 +282,149 @@ fn every_root_change_vector_matches_this_implementation() {
         failures.join("\n  ")
     );
 }
+
+fn gate_resubmission_corpus() -> Value {
+    let path =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../spec/vectors/gate-resubmission.json");
+    let text = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("reading the corpus: {e}"));
+    serde_json::from_str(&text).unwrap_or_else(|e| panic!("parsing the corpus: {e}"))
+}
+
+/// Whether this implementation reads `request` as describing `call`, having first agreed with the
+/// corpus about the request's hash. `None` means it would not parse at all, which is a failure of a
+/// different kind and is recorded as one.
+fn identity(
+    failures: &mut Vec<String>,
+    checked: &mut usize,
+    id: &str,
+    request: &Value,
+    expected_hash: &str,
+    call: &Value,
+    now: &str,
+) -> Option<bool> {
+    let at = request["requested-at"].as_str().unwrap_or(now);
+    match stozher_kernel::gatequeue::validate(request, at) {
+        Ok(parsed) => {
+            *checked += 1;
+            if parsed.request_hash != expected_hash {
+                failures.push(format!(
+                    "{id}: hashes to {}, the corpus says {expected_hash}",
+                    parsed.request_hash
+                ));
+            }
+            let field = |member: &str| call[member].as_str().unwrap_or_default();
+            Some(
+                parsed.subject == field("subject")
+                    && parsed.subject_key == field("key")
+                    && parsed.component == field("component")
+                    && parsed.mandate_ref == field("mandate-ref")
+                    && parsed.policy_version == field("policy-version")
+                    && parsed.classification == field("classification")
+                    && parsed.action == field("action")
+                    && parsed.target == field("target")
+                    && parsed.args_hash == field("args-hash"),
+            )
+        }
+        Err(e) => {
+            failures.push(format!("{id}: refused {}", e.code()));
+            None
+        }
+    }
+}
+
+/// §06 §4.2 — what makes two submissions one call, asked of the kernel's own request identity.
+///
+/// The rule itself is a component's: it MUST resolve to a request it already holds rather than
+/// build a second one, and this side cannot do it on the component's behalf. §4.3 rule 1 makes the
+/// queue idempotent by `request-hash`, and §1.1 puts a fresh `nonce` inside the hashed object, so
+/// two asks of one call arrive here as two genuinely different objects — collapsing them would be
+/// this implementation deciding that an approval of one *is* an approval of the other.
+///
+/// What this side is asked is therefore the half it owns and the component depends on: that
+/// `request-hash` is computed identically on both sides, that the columns the queue indexes are
+/// exactly the nine fields the match is made on (`same-call` per row is the corpus saying which
+/// rows describe the call, and this implementation has to reach the same verdict), and that a
+/// request past its `not-after` is refused rather than served. A component that reused an expired
+/// request would be handing its caller a `request-hash` this route no longer accepts.
+#[test]
+fn every_gate_resubmission_vector_matches_this_implementation() {
+    let corpus = gate_resubmission_corpus();
+    let vectors = corpus["vectors"].as_array().expect("vectors");
+    assert!(
+        vectors.len() >= 12,
+        "the corpus shrank to {} vectors",
+        vectors.len()
+    );
+
+    let mut failures: Vec<String> = Vec::new();
+    let mut checked = 0usize;
+    for vector in vectors {
+        let name = vector["name"].as_str().unwrap_or("?");
+        let now = vector["now"].as_str().expect("now");
+        let call = &vector["call"];
+
+        let minted_hash = vector["minted"]["request-hash"]
+            .as_str()
+            .expect("minted hash");
+        if identity(
+            &mut failures,
+            &mut checked,
+            &format!("{name}/minted"),
+            &vector["minted"]["request"],
+            minted_hash,
+            call,
+            now,
+        ) != Some(true)
+        {
+            failures.push(format!(
+                "{name}/minted: the request the component built is not the call it describes"
+            ));
+        }
+
+        for (index, row) in vector["held"].as_array().expect("held").iter().enumerate() {
+            let id = format!("{name}/held[{index}]");
+            let hash = row["request-hash"].as_str().expect("request-hash");
+            let same = identity(
+                &mut failures,
+                &mut checked,
+                &id,
+                &row["request"],
+                hash,
+                call,
+                now,
+            );
+            if same != Some(row["same-call"].as_bool().unwrap_or(false)) {
+                failures.push(format!(
+                    "{id}: this implementation reads same-call as {same:?}, the corpus says {}",
+                    row["same-call"]
+                ));
+            }
+            if hash == minted_hash {
+                failures.push(format!(
+                    "{id}: a re-ask shares its hash with a held request, which would leave `nonce` \
+                     (§06 §1.1) doing nothing"
+                ));
+            }
+            // The expiry half, taken from the route's own predicate rather than a string compare
+            // written here: `gate-request-expired` is what a re-submission of a dead request meets.
+            checked += 1;
+            let answerable = stozher_kernel::gatequeue::validate(&row["request"], now).is_ok();
+            if answerable != row["answerable-at-now"].as_bool().unwrap_or(false) {
+                failures.push(format!(
+                    "{id}: answerable at {now} is {answerable}, the corpus says {}",
+                    row["answerable-at-now"]
+                ));
+            }
+        }
+    }
+    assert!(
+        failures.is_empty(),
+        "{} gate-resubmission checks disagree with this implementation:\n  {}",
+        failures.len(),
+        failures.join("\n  ")
+    );
+    assert!(
+        checked >= 24,
+        "only {checked} requests were parsed; the corpus stopped asking"
+    );
+}

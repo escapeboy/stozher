@@ -127,6 +127,27 @@ One observed inconsistency, recorded rather than resolved: `codes.rs`'s module d
 sixteen. Two of the three agree; the doc comment is the outlier. Not a spec hole — a stale comment
 in one file — and out of scope for this run to change.
 
+### DEF-1's hole is paid: `spec/06 §4.2` now states re-submission idempotence
+
+The 2026-08-03 triage classified DEF-1 as a **spec hole** and did not open a row for it here, because
+the hole was found and closed in the same pass. Recorded so a later reader can tell it from the debt
+that is still outstanding:
+
+- **What was missing.** §06 §4.3 rule 1 put idempotency on the kernel and it was discharged; §06 §1.1
+  made the fresh `nonce` normative, which forecloses deriving it from the call's fields; §06 §4.2
+  said what an approval covers and **nothing about a component holding an unanswered request**. No
+  clause required reuse and none forbade it, so a gateway that parked a second request for a call a
+  human was already being asked about was conformant.
+- **What `spec/` now says.** §06 §4.2, *"Re-submission of an identical request MUST be idempotent"*,
+  in four numbered clauses: identity is **field-wise** over §1.1's nine members and expressly not
+  `request-hash`; the match happens *before* a row is classified as decided or new; a request past
+  its `not-after` MUST NOT be reused; decided and consumed rows belong to §3. The closing paragraph
+  states why the queue cannot discharge it for the component, and why this does not contradict the
+  section's existing sentence about what an approval binds.
+- **Bound by vectors, not only by prose.** `spec/vectors/gate-resubmission.json` (12 vectors,
+  `role: "primitive"`), run by the gateway against its real store and by the kernel against its real
+  `gatequeue::validate`. **Paid**, and `docs/open-defects.md` records DEF-1 as closed.
+
 ---
 
 ## 3. Two findings outside `spec/` and outside the table

@@ -104,6 +104,53 @@ CREATE TABLE IF NOT EXISTS marks (
 """
 
 
+def _insert_parked(
+    connection: sqlite3.Connection,
+    request_hash: str,
+    request: dict[str, Any],
+    server: str,
+    tool: str,
+    proposed_class: str,
+    arg_schema: Any,
+    first_call: bool,
+    created_at: str,
+) -> None:
+    connection.execute(
+        "INSERT OR REPLACE INTO parked (request_hash, request_json, server, tool, "
+        "proposed_class, arg_schema_json, first_call, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        (
+            request_hash,
+            json.dumps(request),
+            server,
+            tool,
+            proposed_class,
+            json.dumps(arg_schema),
+            int(first_call),
+            created_at,
+        ),
+    )
+
+
+def _outstanding_row(
+    rows: list[sqlite3.Row], request_fields: dict[str, Any], now: str
+) -> sqlite3.Row | None:
+    """The oldest undecided row describing this call and still answerable at `now`.
+
+    Oldest rather than newest: it is the request an approver has been looking at, and the one whose
+    `not-after` runs out first. Taking the newest would let a queue that already holds duplicates —
+    every deployment that ran before this rule existed — keep the copies alive by refreshing which
+    one is in use.
+    """
+    for row in rows:
+        request = json.loads(row["request_json"])
+        not_after = request.get("not-after")
+        if not isinstance(not_after, str) or not_after < now:
+            continue
+        if all(request.get(name) == value for name, value in request_fields.items()):
+            return row
+    return None
+
+
 class Parked:
     """A request waiting for a human's signature."""
 
@@ -312,21 +359,64 @@ class GatewayStore:
         created_at: str,
     ) -> None:
         with self._connect() as connection:
-            connection.execute(
-                "INSERT OR REPLACE INTO parked (request_hash, request_json, server, tool, "
-                "proposed_class, arg_schema_json, first_call, created_at) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-                (
-                    request_hash,
-                    json.dumps(request),
-                    server,
-                    tool,
-                    proposed_class,
-                    json.dumps(arg_schema),
-                    int(first_call),
-                    created_at,
-                ),
+            _insert_parked(
+                connection,
+                request_hash,
+                request,
+                server,
+                tool,
+                proposed_class,
+                arg_schema,
+                first_call,
+                created_at,
             )
+
+    def park_unique(
+        self,
+        request_hash: str,
+        request: dict[str, Any],
+        server: str,
+        tool: str,
+        proposed_class: str,
+        arg_schema: Any,
+        first_call: bool,
+        created_at: str,
+        request_fields: dict[str, Any],
+        now: str,
+    ) -> Parked | None:
+        """Park this request, unless an unanswered one for the same call is already held (§06 §4.2).
+
+        Returns the request the caller must resolve to instead of the one it minted, or `None` when
+        nothing matched and the minted one was parked.
+
+        The lookup and the insert are one `BEGIN IMMEDIATE` transaction because the duplicate this
+        exists to prevent is created by a *race*, not only by a re-run: a stdio gateway is one
+        process per client connection, so two connections of the same caller are two processes over
+        one database file, and a scheduled job that starts twice a second apart has both of them
+        reading "nothing is outstanding" before either writes. Checking outside the write would
+        close the 03:00/04:00 case and leave the same-second case open, which is the harder one to
+        reproduce and the one that survives.
+        """
+        with self._connect(immediate=True) as connection:
+            rows = connection.execute(
+                "SELECT * FROM parked WHERE decision_json IS NULL AND consumed_at IS NULL "
+                "ORDER BY created_at"
+            ).fetchall()
+            row = _outstanding_row(rows, request_fields, now)
+            if row is not None:
+                return Parked(row)
+            _insert_parked(
+                connection,
+                request_hash,
+                request,
+                server,
+                tool,
+                proposed_class,
+                arg_schema,
+                first_call,
+                created_at,
+            )
+        return None
 
     def decided_for(self, request_fields: dict[str, Any]) -> Parked | None:
         """A parked request that carries a decision and describes exactly this call.
@@ -335,6 +425,13 @@ class GatewayStore:
         policy version, class, action, target, args-hash. A decision found here still goes through
         §06 §2 in full before anything acts on it; matching rows is how the approval is *located*,
         never how it is trusted.
+
+        **Answered only.** `outstanding_for` below is the other half of the same question and the
+        two are disjoint by construction. They were one query, selecting `decision_json IS NOT
+        NULL`, which filtered an *unanswered* row out before its identity fields were ever compared
+        — so the gate could only ask "is there an answer already?" and never "is there an
+        outstanding question already?", and minted a second request for a call a human was already
+        being asked about.
         """
         with self._connect() as connection:
             rows = connection.execute(
@@ -346,6 +443,27 @@ class GatewayStore:
             if all(request.get(name) == value for name, value in request_fields.items()):
                 return Parked(row)
         return None
+
+    def outstanding_for(self, request_fields: dict[str, Any], now: str) -> Parked | None:
+        """An **unanswered** parked request describing exactly this call, still inside `not-after`.
+
+        Matched field-wise and never by `request-hash`: §06 §1.1 puts a fresh 128-bit `nonce` inside
+        the hashed object, so two submissions of one call necessarily have two different hashes.
+        That is the property that keeps an approval of one from approving the other, and it is also
+        why the hash cannot be the identity of the call.
+
+        A request past its `not-after` is skipped rather than reused. Nobody can answer it any more
+        (§06 §2 step 8 refuses a decision made after that instant, and §06 §4.4 rule 7 has the
+        kernel erase the arguments an approver would need), so resolving to it would hand the caller
+        a request-hash that can never become an approval.
+        """
+        with self._connect() as connection:
+            rows = connection.execute(
+                "SELECT * FROM parked WHERE decision_json IS NULL AND consumed_at IS NULL "
+                "ORDER BY created_at"
+            ).fetchall()
+        row = _outstanding_row(rows, request_fields, now)
+        return Parked(row) if row is not None else None
 
     def seeded_pending(self) -> list[Parked]:
         """Decided requests carrying an **answered** catalog seed. The seed is about *future* calls

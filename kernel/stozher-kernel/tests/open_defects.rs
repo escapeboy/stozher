@@ -1,8 +1,11 @@
-//! Kernel-side evidence for defects that are **open**. Ignored, not deleted.
+//! Kernel-side evidence for reported defects. A test here is `#[ignore]`d while its defect is
+//! open — the failure is the defect stating itself, with the observed numbers in the message — and
+//! is un-ignored, into the default run, on the day it is closed. Kept either way:
+//! `gateway/tests/test_defect_register.py` binds this file to `docs/open-defects.md` in both
+//! directions, and evidence that stops being executed is evidence nobody will notice rotting.
 //!
-//! Run them with `cargo test --manifest-path kernel/Cargo.toml --test open_defects -- --ignored`.
-//! Each asserts the behaviour the design requires, so while its defect is open it fails and the
-//! failure carries the observed numbers.
+//! The ignored ones run with
+//! `cargo test --manifest-path kernel/Cargo.toml --test open_defects -- --ignored`.
 //!
 //! Nothing here weakens the gate: a queued request grants nothing, and these tests only submit
 //! questions and count rows.
@@ -59,7 +62,9 @@ async fn call(world: &World, method: &str, uri: &str, body: Option<String>) -> A
 
 /// The action request a gateway builds for one specific `github.create_issue` call.
 async fn request_for(world: &World, action: &str) -> Value {
-    let draft = world.effect(action, "consequential", serde_json::json!({})).await;
+    let draft = world
+        .effect(action, "consequential", serde_json::json!({}))
+        .await;
     let args_hash = draft["execution"]["args-hash"]
         .as_str()
         .expect("args-hash")
@@ -90,29 +95,32 @@ async fn park(world: &World, request: &Value) -> Answer {
     .await
 }
 
-/// DEF-1, kernel side: the queue deduplicates by `request-hash` and by nothing else.
+/// DEF-1, kernel side, closed: the half the component's rule stands on, and the half it cannot.
 ///
-/// Observed: `POST /v1/gate/requests` is idempotent by `request-hash` exactly as §06 §4.3 rule 1
-/// requires (`http.rs:449-452`, `store.rs:942-1005`), and `nonce` is inside the hashed object
-/// (`gatequeue.rs:48-63`). So two submissions of one logical call that differ only in the 128 bits
-/// the gateway mints per park (`gateway/src/stozher_gateway/gate.py:87-105`) are two different
-/// objects and become two rows the same human has to read.
+/// **What this side guarantees.** `POST /v1/gate/requests` is idempotent by `request-hash` exactly
+/// as §06 §4.3 rule 1 requires (`http.rs`, `"the route recognised the request it already holds"`),
+/// so a component that resolves to a request it already holds may re-submit that same object on
+/// every retry — which the gateway now does, because a park held locally against an unreachable
+/// kernel is invisible to every human until some later attempt gets it queued.
 ///
-/// This test is why the defect survived a green suite: `stozher_testkit`'s `action_request`
-/// derives `nonce` deterministically from the call's own fields (`stozher-testkit/src/lib.rs:441`),
-/// so every kernel test re-parks the *same* object and observes the idempotency working. The
-/// gateway is the only caller that mints fresh entropy, and no kernel test ever had two.
+/// **What it does not, and must not.** `nonce` is inside the hashed object (§06 §1.1), so a second
+/// ask carrying fresh entropy is a genuinely different object and becomes a second row. Collapsing
+/// the two here would be this kernel deciding that an approval of one is an approval of the other,
+/// which is the one thing `nonce` exists to prevent. The duty therefore lands on the component and
+/// §06 §4.2 now states it: match field-wise, resolve to the request already held, never enqueue a
+/// duplicate. The gateway half is `gateway/tests/test_def1_replay_idempotence.py`.
 ///
-/// Expected: one undecided question per logical call in the queue an approver reads — whether by
-/// the route collapsing them, or by the component never submitting the second (see the gateway
-/// half in `gateway/tests/test_open_defects.py`). The queue-depth bound of §09 §7 is a flood
-/// control and is not this: refusing the duplicate as a flood also refuses the honest re-park.
+/// This test is also why the defect survived a green suite, and the reason it is kept rather than
+/// deleted: `stozher_testkit`'s `action_request` derives `nonce` deterministically from the call's
+/// own fields, so every kernel test re-parked the *same* object and watched idempotency work. Only
+/// the gateway mints entropy, and no kernel test ever had two. A fixture that imitates the producer
+/// does not bind to it.
 #[tokio::test]
-#[ignore = "DEF-1 open"]
-async fn def1_one_call_parked_twice_becomes_two_questions_for_one_human() {
+async fn def1_the_queue_is_idempotent_for_one_request_and_cannot_be_for_one_call() {
     let world = world().await;
 
-    // The same object twice: this is the idempotency the spec mandates, and it holds.
+    // The same object twice: this is the idempotency the spec mandates, and what a component's
+    // retry of a request it already holds costs.
     let request = request_for(&world, "github.create_issue").await;
     assert_eq!(park(&world, &request).await.status, StatusCode::CREATED);
     // `200 OK` rather than `201 Created`: the route recognised the request it already holds.
@@ -125,25 +133,25 @@ async fn def1_one_call_parked_twice_becomes_two_questions_for_one_human() {
         queued.body
     );
 
-    // The same *call*, asked a second time the way the gateway asks it — every field identical
-    // except the nonce, which it mints fresh on every park.
+    // The same *call*, asked the way a component asked it before §06 §4.2 said not to — every field
+    // identical except the nonce it minted fresh on every park.
     let mut re_asked = request.clone();
     re_asked["nonce"] = Value::from("9f".repeat(16));
     assert_eq!(park(&world, &re_asked).await.status, StatusCode::CREATED);
 
     let queued = call(&world, "GET", "/v1/gate/requests", None).await;
     let rows = queued.json();
-    let count = rows["count"].as_u64().unwrap_or_default();
-    let first = rows["requests"][0].clone();
-    let second = rows["requests"][1].clone();
     assert_eq!(
-        count, 1,
-        "one call is queued as {count} questions; the two rows differ only in their nonce \
-         ({} vs {}) and describe the same action {} on {} with args-hash {}",
-        first["request"]["nonce"],
-        second["request"]["nonce"],
-        first["action"],
-        first["target"],
-        first["args-hash"]
+        rows["count"].as_u64(),
+        Some(2),
+        "the two asks were collapsed into one row. They differ in `nonce`, which §06 §1.1 makes \
+         part of the hashed object precisely so that an approval of one is not an approval of the \
+         other; a kernel that merges them has decided otherwise on the approver's behalf: {}",
+        queued.body
+    );
+    assert_ne!(
+        rows["requests"][0]["request"]["nonce"], rows["requests"][1]["request"]["nonce"],
+        "two rows that are not two nonces would mean the queue rewrote a request, which §06 §4.3 \
+         rule 5 forbids"
     );
 }

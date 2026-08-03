@@ -277,6 +277,40 @@ one. A component MUST NOT block a request handler waiting for a decision.
 An implementation that held the call open would turn every gate into a request-handler leak and an
 approver's lunch break into an outage, and it would do so while looking like it worked.
 
+**Re-submission of an identical request MUST be idempotent.** Before building an action request, a
+component MUST look for one it already holds for the same call, and where one exists it MUST resolve
+to that request — returning the `parked` refusal of §4.1 carrying **that** request's `request-hash` —
+rather than enqueue a duplicate.
+
+1. Identity here is **field-wise**: `subject`, `key`, `component`, `mandate-ref`, `policy-version`,
+   `classification`, `action`, `target` and `args-hash`, all nine equal. It is deliberately **not**
+   `request-hash`. §1.1 puts a fresh `nonce` inside the hashed object, so two submissions of one call
+   always hash differently — the same property that keeps an approval of one from being an approval
+   of the other makes the hash unusable as the identity of the *call*.
+2. A pending request MUST be matched on those fields **before** it is classified as decided or new. A
+   lookup that filters on the presence of a decision first has already discarded the row it needed:
+   the only question it can answer is "has this been answered?", never "has this been asked?".
+3. A held request whose `not-after` has passed MUST NOT be reused. Nobody can answer it any more
+   (step 8 of §2 refuses a decision made after that instant, and §4.3 rule 7 has the kernel erase the
+   arguments an approver would read), so resolving to it would hand the caller a `request-hash` that
+   can never become an approval. That call MUST build a new request.
+4. A held request that already carries a decision is governed by §3 and by §2, not by this rule; one
+   whose decision has been consumed permits nothing and is not a request to resolve to.
+
+This is a duty of the **component**, and it cannot be delegated to the queue: §4.3 rule 1 makes the
+kernel's route idempotent by `request-hash`, which two submissions of one call do not share. Nor may
+the kernel collapse them on its own — to the kernel they are two distinct objects, which is precisely
+what §1.1 makes them.
+
+It is also not in tension with the paragraph above. That one is about what an *approval* binds —
+one signed `request-hash`, the same call and not a similar one. This one is about what a component
+may ask *before* anybody has signed anything: asking twice does not produce two permissions, it
+produces two questions for one human. Without the rule, every restart multiplies an approver's queue
+by the number of times the agent ran — a nightly job that re-runs at 04:00 over its own 03:00 queue
+asks for every signature a second time, with nothing in the queue to tell the copies apart — and §09
+§7 names approval fatigue as an availability attack. A component that cannot be run twice cannot be
+scheduled and cannot hold a standing mandate.
+
 ### 4.3 The pending queue
 
 A parked request is **not** an envelope. §02 §2's `kind` vocabulary is closed, and its admission rule
