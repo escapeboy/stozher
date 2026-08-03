@@ -38,6 +38,7 @@ from stozher_gateway.envelope import validate as validate_shape
 from stozher_gateway.gate import Approver, GateRefusedError, verify_authorization
 from stozher_gateway.policy import Policy
 from stozher_gateway.signing import object_id, signing_input, verify_signed_object
+from stozher_gateway.store import GatewayStore
 
 VECTORS = Path(__file__).resolve().parents[2] / "spec" / "vectors"
 
@@ -354,6 +355,63 @@ def handle_gate_arguments(doc: dict[str, Any], vector: dict[str, Any], label: st
     equal(len(canonical.encode("utf-8")), vector["canonical-bytes"], f"{label}/canonical-bytes")
 
 
+def handle_gate_resubmission(doc: dict[str, Any], vector: dict[str, Any], label: str) -> None:
+    """`spec/06 §4.2` — a call asked again before anybody has answered the first ask.
+
+    Run against a real :class:`GatewayStore`, not against a re-implementation of the predicate in
+    this file: the store is where the defect was — the lookup filtered on the presence of a decision
+    before it compared the identity fields, so an *outstanding* request was invisible to the only
+    question the gate asked — and a harness that matched the fields itself would have passed on the
+    day the shipped code did not.
+    """
+    store = GatewayStore(Path(":memory:"))
+    now = vector["now"]
+    for index, row in enumerate(vector["held"]):
+        request = row["request"]
+        equal(object_hash(request), row["request-hash"], f"{label}/held[{index}]/request-hash")
+        store.park(
+            row["request-hash"],
+            request,
+            "github",
+            "create_issue",
+            request["classification"],
+            None,
+            False,
+            request["requested-at"],
+        )
+        if row["state"] in ("decided", "consumed"):
+            # Transport, never authority: `_consume` runs all of §06 §2 over a decision before
+            # anything is forwarded, and the vector is about which row is *located*.
+            store.record_gate_decision(row["request-hash"], {"decision": "approve"})
+        if row["state"] == "consumed":
+            store.consume(row["request-hash"], now)
+
+    equal(
+        object_hash(vector["minted"]["request"]),
+        vector["minted"]["request-hash"],
+        f"{label}/minted/request-hash",
+    )
+    outstanding = store.outstanding_for(vector["call"], now)
+    equal(
+        outstanding.request_hash if outstanding is not None else None,
+        vector["expected"]["resubmit"],
+        f"{label}/resubmit",
+    )
+    decided = store.decided_for(vector["call"])
+    equal(
+        decided.request_hash if decided is not None else None,
+        vector["expected"]["decided"],
+        f"{label}/decided",
+    )
+    # The reason the identity cannot be the hash, asserted rather than left as prose: the request
+    # the component would have parked never shares a hash with the one it must resolve to.
+    check(
+        vector["minted"]["request-hash"] != vector["expected"]["resubmit"],
+        f"{label}/minted-is-a-different-object",
+        "a fresh nonce (§06 §1.1) makes the re-ask a different hashed object",
+    )
+
+
 HANDLERS: dict[str, Callable[[dict[str, Any], dict[str, Any], str], None]] = {
     "jcs": handle_jcs,
     "jcs-invalid": handle_jcs_invalid,
@@ -371,6 +429,7 @@ HANDLERS: dict[str, Callable[[dict[str, Any], dict[str, Any], str], None]] = {
     "parity": handle_parity,
     "policy-evaluation": handle_policy_evaluation,
     "gate-arguments": handle_gate_arguments,
+    "gate-resubmission": handle_gate_resubmission,
 }
 
 

@@ -3712,6 +3712,192 @@ def gen_gate_arguments() -> None:
     )
 
 
+def gen_gate_resubmission() -> None:
+    """spec 06 section 4.2 — a call asked a second time before anybody has answered the first.
+
+    The rule this file binds is field-wise identity, and the reason it cannot be `request-hash` is
+    visible in every vector: `minted.request-hash` is never equal to the hash the component must
+    resolve to, because section 1.1 puts a fresh `nonce` inside the hashed object. That is the same
+    property that keeps an approval of one request from approving another, so the two halves of it
+    are asked together here — an implementation that "deduplicates by request-hash" passes the
+    kernel's idempotency vectors and fails every reuse case below.
+
+    `held[].same-call` and `held[].answerable-at-now` are stated per row so an implementation can be
+    asked about the predicate itself and not only about its outcome: a harness that computed the
+    right answer for the wrong reason (matching eight fields, or reusing an expired request) shows up
+    as a disagreement on the row rather than as a silent pass.
+    """
+    now = "2026-07-26T09:15:00.000Z"
+    other_args_hash = object_hash({**ARGS, "title": "Fix the other flaky test"})
+
+    def request(nonce: str, **over: Any) -> dict:
+        body = dict(REQUEST)
+        body["nonce"] = nonce
+        body.update({name.replace("_", "-"): value for name, value in over.items()})
+        return body
+
+    call = {name: REQUEST[name] for name in (
+        "subject", "key", "component", "mandate-ref", "policy-version",
+        "classification", "action", "target", "args-hash",
+    )}
+
+    def held(req: dict, state: str, same_call: bool = True) -> dict:
+        not_after = req["not-after"]
+        return {
+            "request": req,
+            "request-hash": object_hash(req),
+            "state": state,
+            "same-call": same_call,
+            "answerable-at-now": not_after >= now,
+        }
+
+    # The request the component builds *before* it consults what it holds. Its nonce is fresh, so
+    # its hash is new even when the call is not.
+    minted = request("0a1b2c3d4e5f60718293a4b5c6d7e8f9")
+
+    outstanding = held(request("11" * 16), "pending")
+    older = held(request("22" * 16, requested_at="2026-07-26T09:10:00.000Z"), "pending")
+    newer = held(request("33" * 16, requested_at="2026-07-26T09:14:50.000Z"), "pending")
+    answered = held(request("44" * 16), "decided")
+    spent = held(request("55" * 16), "consumed")
+    dead = held(
+        request(
+            "66" * 16,
+            requested_at="2026-07-26T08:00:00.000Z",
+            not_after="2026-07-26T09:00:00.000Z",
+        ),
+        "pending",
+    )
+    other_target = held(request("77" * 16, target="repo:acme/secrets"), "pending", same_call=False)
+    other_args = held(request("88" * 16, args_hash=other_args_hash), "pending", same_call=False)
+    other_class = held(request("99" * 16, classification="benign"), "pending", same_call=False)
+    other_mandate = held(request("aa" * 16, mandate_ref="22" * 32), "pending", same_call=False)
+
+    def case(name: str, rows: list[dict], resubmit: str | None, decided: str | None, desc: str) -> dict:
+        return {
+            "name": name,
+            "description": desc,
+            "now": now,
+            "held": rows,
+            "call": call,
+            "minted": {"request": minted, "request-hash": object_hash(minted)},
+            "expected": {"resubmit": resubmit, "decided": decided},
+        }
+
+    vectors = [
+        case(
+            "nothing-is-held",
+            [],
+            None,
+            None,
+            "the first call of a run: there is nothing to resolve to, so the minted request is the "
+            "one that parks",
+        ),
+        case(
+            "the-same-call-is-already-outstanding",
+            [outstanding],
+            outstanding["request-hash"],
+            None,
+            "THE case. Every one of the nine identity fields is equal and only the nonce differs, "
+            "so this is one call asked twice and it must become one question for one human",
+        ),
+        case(
+            "the-oldest-outstanding-copy-wins",
+            [older, newer],
+            older["request-hash"],
+            None,
+            "a queue that already holds duplicates — every deployment that ran before this rule — "
+            "converges on the request an approver has been looking at, and not on the newest copy, "
+            "which would keep the older ones alive by never being the one in use",
+        ),
+        case(
+            "the-same-call-has-been-answered",
+            [answered],
+            None,
+            answered["request-hash"],
+            "a decision exists, so this is section 3's territory and not section 4.2's: the caller "
+            "consumes the approval rather than resolving to an unanswered question",
+        ),
+        case(
+            "the-approval-was-already-spent",
+            [spent],
+            None,
+            None,
+            "single use (section 3). A consumed row is neither an outstanding question nor a usable "
+            "approval, so the call builds a new request and asks again",
+        ),
+        case(
+            "the-outstanding-request-has-expired",
+            [dead],
+            None,
+            None,
+            "past `not-after` nobody can answer it (section 2 step 8) and the kernel has erased the "
+            "arguments an approver would read (section 4.4 rule 7); reusing it would hand the caller "
+            "a request-hash that can never become an approval",
+        ),
+        case(
+            "an-expired-copy-does-not-hide-a-live-one",
+            [dead, outstanding],
+            outstanding["request-hash"],
+            None,
+            "the expired row is skipped rather than terminating the search, which is the difference "
+            "between `find the first match` and `find the first answerable match`",
+        ),
+        case(
+            "a-different-target-is-a-different-call",
+            [other_target],
+            None,
+            None,
+            "the counterfactual the reuse cases need: eight fields equal is not this call, and a "
+            "component that resolved to it would forward an effect against a resource nobody "
+            "approved",
+        ),
+        case(
+            "different-arguments-are-a-different-call",
+            [other_args],
+            None,
+            None,
+            "`args-hash` is what section 2 step 10 compares; two calls of one tool with different "
+            "arguments are two questions and always park separately",
+        ),
+        case(
+            "a-different-classification-is-a-different-call",
+            [other_class],
+            None,
+            None,
+            "the weight the human is being asked to sign for is part of the question",
+        ),
+        case(
+            "a-different-mandate-is-a-different-call",
+            [other_mandate],
+            None,
+            None,
+            "same subject, same key, same arguments, different authority — an approval given under "
+            "one mandate is not an approval under another",
+        ),
+        case(
+            "one-live-request-among-calls-that-are-not-this-one",
+            [other_target, other_args, outstanding, other_class, other_mandate],
+            outstanding["request-hash"],
+            None,
+            "the whole predicate at once: a real queue holds many pending requests and exactly one "
+            "of them is this call",
+        ),
+    ]
+    emit(
+        "gate-resubmission.json",
+        "gate-resubmission",
+        "spec 06 section 4.2 — re-submitting a request nobody has answered. Given the requests a "
+        "component `held` and the `call` it is about to gate at `now`, `expected.resubmit` is the "
+        "`request-hash` it MUST resolve to and `expected.decided` the answered request it MUST "
+        "consume instead; `null` means it MUST park the request under `minted`. Identity is the "
+        "nine fields of `call`, never `request-hash` — `minted.request-hash` differs from every "
+        "held hash in every vector, which is what `nonce` (section 1.1) is for. A held request is "
+        "eligible only while `state` is `pending` and `now` has not passed its `not-after`.",
+        vectors,
+    )
+
+
 def gen_root_change() -> None:
     """spec 03 section 6 — a root change names a key, and an enrolment names the human it belongs to.
 
@@ -3899,6 +4085,7 @@ def main() -> int:
     gen_trigger()
     gen_manifest()
     gen_gate_arguments()
+    gen_gate_resubmission()
     gen_root_change()
     gen_index()
     return 0

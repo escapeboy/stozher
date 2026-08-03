@@ -238,6 +238,11 @@ fn replay_vectors(report: &mut Report) -> BTreeSet<String> {
                 // `gatequeue::check_arguments` by `tests/kernel_vectors.rs`, and its route
                 // behaviour by `tests/gate_queue_and_console_decisions.rs`.
                 | "gate-arguments"
+                // Action requests, not envelopes: there is nothing here to submit to ingest. The
+                // duty the file states is a component's (§06 §4.2), and the half this kernel owns —
+                // request identity and expiry — is run against the real `gatequeue::validate` by
+                // `tests/kernel_vectors.rs`.
+                | "gate-resubmission"
                 // The envelopes here cite a mandate that exists only in the vector file, so
                 // replaying them would refuse every one for `mandate-unresolved` rather than for
                 // the rule under test. `tests/kernel_vectors.rs` runs them against the real

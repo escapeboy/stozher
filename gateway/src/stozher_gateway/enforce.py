@@ -632,15 +632,23 @@ class Enforcer:
         if parked is not None and parked.decision is not None:
             return self._consume(session, call, classification, parked, approvers, policy)
 
+        now = self._clock.now()
         request = action_request(
             ask,
-            requested_at=self._clock.now(),
-            not_after=clock_module.shift(self._clock.now(), _REQUEST_LIFETIME_SECONDS),
+            requested_at=now,
+            not_after=clock_module.shift(now, _REQUEST_LIFETIME_SECONDS),
         )
         request_hash = object_hash(request)
         # Local first: §10 §7 forbids keeping the only copy of a record in memory, and a component
         # must go on enforcing while the kernel is unreachable (maxim 5).
-        self._store.park(
+        #
+        # §06 §4.2: a re-submission of a request nobody has answered resolves to the one already
+        # held. The minted request above is discarded when it does — the nonce cost nothing and
+        # building it outside the transaction keeps `park_unique`'s writer lock short. What must not
+        # happen is the second *park*: the kernel's queue is idempotent by `request-hash` and cannot
+        # help, because §06 §1.1 puts the fresh nonce inside the hashed object, so a duplicate
+        # reaches it as a genuinely different question and one human is asked twice for one call.
+        held = self._store.park_unique(
             request_hash,
             request,
             call.server,
@@ -648,8 +656,12 @@ class Enforcer:
             classification.classification,
             call.schema,
             first_call,
-            self._clock.now(),
+            now,
+            fields,
+            now,
         )
+        if held is not None:
+            request, request_hash, first_call = held.request, held.request_hash, held.first_call
         # §06 §4.4 rule 2. This component holds the values `args-hash` commits to and is the only
         # party that will: it is a stdio process that exits with the session, and an approver
         # reading the queue an hour later cannot ask it anything. So the values go with the request.
@@ -665,10 +677,21 @@ class Enforcer:
                 "the parked request will carry no arguments for a human to read: %s", e.code
             )
             arguments = None
+        # Re-submitted on a reuse as well, and deliberately: the route is idempotent by
+        # `request-hash` for this exact object (§06 §4.3 rule 1), so the retry costs one `200` when
+        # the request is already queued and *repairs* the case where the first submission never
+        # arrived because the kernel was down. A park held locally against an unreachable kernel
+        # otherwise stays invisible to every human for as long as the caller keeps retrying.
         not_queued = self._queue_with_kernel(request, arguments)
-        if first_call and classification.proposed:
-            self._park_catalog_seed(ask, call, classification, request_hash)
-        self._notify_parked(request_hash, ask)
+        if held is None:
+            if first_call and classification.proposed:
+                self._park_catalog_seed(ask, call, classification, request_hash)
+            # Only for a request that is new. The seed request carries a fresh nonce of its own, so
+            # re-parking it would duplicate the *second* question §10 §4.3 asks in exactly the way
+            # this change stops the first from duplicating. And a notification per retry is the
+            # approval fatigue §09 §7 names as an availability attack, delivered by the component
+            # that was supposed to be preventing it.
+            self._notify_parked(request_hash, ask)
         raise refusal(
             "parked",
             "gate-parked",

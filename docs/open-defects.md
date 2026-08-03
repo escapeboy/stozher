@@ -8,48 +8,70 @@ a defect nobody recorded is orphaned evidence — the meta-test forbids both.
 Evidence is *committed and excluded*, not deleted:
 
 ```sh
-./gateway/.venv/bin/python3 -m pytest gateway/tests -q                 # 178 passed, 7 deselected
-./gateway/.venv/bin/python3 -m pytest gateway/tests -q -m open_defect  # 6 failed, 1 passed
-cargo test --manifest-path kernel/Cargo.toml                           # 349 passed, 2 ignored
-cargo test --manifest-path kernel/Cargo.toml --test open_defects -- --ignored
+./gateway/.venv/bin/python3 -m pytest gateway/tests -q                 # 188 passed, 5 deselected
+./gateway/.venv/bin/python3 -m pytest gateway/tests -q -m open_defect  # 4 failed, 1 passed
+cargo test --manifest-path kernel/Cargo.toml                           # 351 passed, 1 ignored
 cargo test --manifest-path kernel/Cargo.toml --test def2_mandate_swap -- --ignored
 ```
 
 The quarantined run is **red by design**. Each failure is the defect stating itself; the one pass is
-a control (see DEF-4).
+a control (see DEF-4). DEF-1's evidence left the quarantine when it was closed, which is why
+`--test open_defects -- --ignored` no longer names anything: that file's one test is in the default
+run.
 
 | Id | Status | Classification | Severity | One line |
 |---|---|---|---|---|
-| DEF-1 | open | **spec hole** | high | Replaying a run duplicates the approval queue: the gateway re-parks instead of resolving to its own outstanding request. |
+| DEF-1 | closed | **spec hole**, now stated | high | Replaying a run duplicated the approval queue: the gateway re-parked instead of resolving to its own outstanding request. §06 §4.2 now requires the reuse; the gateway does it. |
 | DEF-2 | open | **spec hole** + one implementation defect alongside | high | A component whose envelopes the kernel refuses keeps serving and keeps returning success; to `spec/` a refused emitter is merely a late one. |
 | DEF-3 | closed | scope limit, stated | — | `Governor` does not support `async def`. It now refuses at decoration instead of recording `applied` before the body runs. |
 | DEF-4 | open | **spec hole** (tooling/documentation) | high for adoption, none for security | No way to obtain a verified policy without a live kernel, so a cold CI container cannot open a session at all. The offline profile itself works. |
 | DEF-5 | not a defect | — | — | Proposed: ambient-state authorization on the `Governor` path. Investigated and **not found**; four independent bindings recompute authority per call. |
 
-## DEF-1 — the queue duplicates on replay
+## DEF-1 — the queue duplicated on replay. Closed 2026-08-03.
 
-**The exact break:** `store.py:341` — `decided_for` selects `WHERE decision_json IS NOT NULL AND
-consumed_at IS NULL`, so a request that is *outstanding* is filtered out before its identity fields
-are compared. `enforce.py:630` therefore mints a fresh `nonce` (`gate.py:87`) and parks a second row.
-The kernel's own route is correct and idempotent by `request-hash` (`http.rs:449`), which cannot help
+**The exact break:** `GatewayStore.decided_for` selected `WHERE decision_json IS NOT NULL AND
+consumed_at IS NULL`, so a request that was *outstanding* was filtered out before its identity fields
+were compared. `Enforcer._gate` therefore minted a fresh `nonce` (`gate.action_request`, *"128 bits
+of fresh entropy"*) and parked a second row. The kernel's own route is correct and idempotent by
+`request-hash` (`http.rs`, `"the route recognised the request it already holds"`), which cannot help
 because `nonce` is inside the hashed object.
 
-**Why it is a spec hole rather than a bug:** §06 §4.3 rule 1 puts the idempotency duty on the kernel
+**Why it was a spec hole rather than a bug:** §06 §4.3 rule 1 puts the idempotency duty on the kernel
 and it is discharged. §06 §1.1 makes the fresh `nonce` normative — *"so an approval of one is not an
-approval of the other"* — which forecloses deriving it from the call's fields. §06 §4.2 says what an
-approval covers and nothing about a component holding an **unanswered** request. No clause requires
-reuse and none forbids it.
+approval of the other"* — which forecloses deriving it from the call's fields. §06 §4.2 said what an
+approval covers and nothing about a component holding an **unanswered** request. No clause required
+reuse and none forbade it.
+
+**The rule that closed it:** §06 §4.2, *"Re-submission of an identical request MUST be idempotent"* —
+four numbered clauses making identity **field-wise** over the nine members of §1.1 rather than by
+`request-hash`, requiring the match *before* a row is classified as decided or new, forbidding reuse
+past `not-after`, and leaving decided and consumed rows to §3. Bound by
+`spec/vectors/gate-resubmission.json` (12 vectors), which both implementations run.
+
+**The fix:** `store.py` splits the one query into `decided_for` (answered) and `outstanding_for`
+(unanswered, still inside `not-after`, oldest first), and `park_unique` does the lookup and the
+insert inside one `BEGIN IMMEDIATE` — the duplicate is created by a race between two stdio processes
+as readily as by a 04:00 re-run, and a check outside the write closes only the second.
+`Enforcer._gate` resolves to the held request, re-submits **that same object** to the kernel (whose
+route is idempotent for it, and which repairs a park that never reached the queue), and returns the
+same `parked` refusal with the original `request-hash`. It does not re-notify, and it does not
+re-park the §10 §4.3 catalog seed, which carries a fresh nonce of its own.
 
 **Why no test caught it:** `stozher-testkit` derives `nonce` deterministically from the call's fields
-(`stozher-testkit/src/lib.rs:441`), so every kernel test re-parks the same object and observes
-idempotency working. Only the gateway mints entropy. A fixture that imitates the producer does not
-bind to it — the same failure mode as the console parser in the 2026-07-28 entry.
+(`stozher-testkit/src/lib.rs`, `action_request`), so every kernel test re-parked the same object and
+observed idempotency working. Only the gateway mints entropy. A fixture that imitates the producer
+does not bind to it — the same failure mode as the console parser in the 2026-07-28 entry. The
+reproductions therefore drive the gateway's own minting path rather than a fixture's.
 
-**Consequence:** disqualifies scheduled and standing-mandate operation. Every restart multiplies one
-human's queue, and §09 §7 names approval fatigue as an availability attack.
+**Consequence, now removed:** it disqualified scheduled and standing-mandate operation. Every restart
+multiplied one human's queue, and §09 §7 names approval fatigue as an availability attack.
 
-**Evidence:** `gateway/tests/test_open_defects.py::test_def1_*`,
-`kernel/stozher-kernel/tests/open_defects.rs::def1_one_call_parked_twice_becomes_two_questions_for_one_human`.
+**Evidence, unquarantined and in the default run:**
+`gateway/tests/test_def1_replay_idempotence.py` (six, including the race, the expiry bound, the
+notify-once bound, and the counterfactual that two genuinely different calls still park separately),
+`gateway/tests/test_vectors.py` against `gate-resubmission.json`,
+`kernel/stozher-kernel/tests/open_defects.rs::def1_the_queue_is_idempotent_for_one_request_and_cannot_be_for_one_call`,
+`kernel/stozher-kernel/tests/kernel_vectors.rs::every_gate_resubmission_vector_matches_this_implementation`.
 
 ## DEF-2 — a refused component is indistinguishable from a healthy one
 
@@ -129,4 +151,4 @@ in ADR-0028.
 
 ## Last updated
 
-2026-08-03, triage run. `main` = `develop` = `cf64bf7` plus this run's uncommitted work.
+2026-08-03, DEF-1 closed. `main` = `develop` = `47fc577` plus this run's work.
