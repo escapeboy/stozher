@@ -270,9 +270,28 @@ class Emitter:
                 self._store.clear_wedge(stream)
                 accepted += 1
                 continue
+            detail = str(response.body.get("reason") or response.body)
+            if not response.refuses_the_object:
+                # The kernel answered without judging these bytes — `503 x-store-unavailable`, or a
+                # credential the connection could not present. That is §05 §7.1's `unreachable`, and
+                # it arrives over HTTP rather than as a dropped socket, which is the only reason it
+                # ever looked like a refusal. Retry; wedging here would turn a momentary blip into a
+                # hard stop no timer can lift, which is precisely the denial-of-service failure §7.1
+                # was written to avoid.
+                self._store.mark_push_error(
+                    envelope_id, f"{response.reason_code or response.status}: {detail}"
+                )
+                logger.warning(
+                    "the kernel could not answer for envelope %s (%s %s): %s; holding the stream "
+                    "and retrying",
+                    envelope_id,
+                    response.status,
+                    response.reason_code or "no reason code",
+                    detail,
+                )
+                break
             # A refusal is permanent for these bytes; retrying identical bytes forever would hide it.
             reason = response.reason_code or "x-kernel-refused"
-            detail = str(response.body.get("reason") or response.body)
             self._store.mark_pushed(envelope_id, self._clock.now(), f"{reason}: {detail}")
             self._store.record_wedge(stream, envelope_id, seq, reason, detail, self._clock.now())
             wedged.add(stream)

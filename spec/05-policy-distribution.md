@@ -287,6 +287,15 @@ them:
    kernel that cannot answer, never one that has answered "no": retrying identical bytes is futile
    (§04 §3 makes the outcome deterministic in the bytes), and the `allow` row would otherwise
    licence unbounded unaudited operation.
+
+   **And it MUST NOT treat an `unreachable` kernel as `refused`, however that kernel says so.** An
+   outcome is `refused` only when the kernel answered *about the bytes submitted*: a rejection under
+   §04 §7, with a reason code this specification names. A kernel that answers "I could not answer"
+   — a store it cannot reach, a credential the connection did not present, any condition named by a
+   non-normative `x-` code (§00 §1) — has judged nothing, and the submission is `unreachable` even
+   though a transport-level answer arrived. A component that wedged on one of those would convert a
+   momentary outage into a stop no timer can lift, which is the denial-of-service failure this
+   subsection is shaped to avoid; the direction is stated because only the other one is obvious.
 2. A component MUST record the rejection's reason code durably against the local envelope, and MUST
    NOT erase it on any later transition of that row. An operator asked to intervene (§03 §7) can act
    only from the reason, and the recovery act of §04 §7.2 cites it.

@@ -48,9 +48,13 @@ import pytest
 
 from stozher_gateway import clock as clock_module
 from stozher_gateway.config import load_config_file
+from stozher_gateway.emitter import Emitter
 from stozher_gateway.enforce import Call
+from stozher_gateway.kernel_client import KernelResponse
 from stozher_gateway.refusal import RefusalError
 from stozher_gateway.runtime import Gateway
+from stozher_gateway.signing import SigningKey
+from stozher_gateway.store import GatewayStore
 
 from .support import Kernel, gateway_config_file
 
@@ -157,6 +161,114 @@ def _serve_one_read(gateway: Gateway, session: Any) -> Any:
     gateway.emitter.flush_windows()
     gateway.emitter.push_pending()
     return result
+
+
+class _CannotAnswer:
+    """A kernel that answers the socket and says nothing about the bytes.
+
+    Byte-for-byte what `http.rs` returns for `ingest::Outcome::Unavailable`: HTTP 503, the
+    non-normative `x-store-unavailable`, and a `reason` that says *retry*.
+    """
+
+    def __init__(self, status: int = 503, code: str = "x-store-unavailable") -> None:
+        self.status = status
+        self.code = code
+        self.calls = 0
+
+    def ingest(self, envelope: Any, payloads: Any) -> KernelResponse:
+        self.calls += 1
+        return KernelResponse(
+            self.status,
+            {
+                "stozher": "stozher/0.1",
+                "reason-code": self.code,
+                "reason": "the kernel could not answer; retry",
+            },
+        )
+
+
+def _one_envelope(emitter: Emitter, key: SigningKey, stream: str) -> None:
+    emitter.append(
+        key,
+        stream,
+        {
+            "v": "stozher/0.1",
+            "kind": "effect",
+            "emitted-at": clock_module.now(),
+            "identity": {"subject": key.subject, "key": key.id, "component": "gateway"},
+            "mandate-ref": "11" * 32,
+            "policy-version": "2026.07.1",
+            "classification": "read",
+            "execution": {
+                "action": "github.get_file",
+                "target": "mcp:github",
+                "args-hash": "cc" * 32,
+                "outcome": "applied",
+                "started-at": clock_module.now(),
+                "finished-at": clock_module.now(),
+            },
+        },
+    )
+
+
+@pytest.mark.parametrize(
+    ("status", "code"),
+    [(503, "x-store-unavailable"), (401, "x-caller-unauthenticated")],
+)
+def test_a_kernel_that_could_not_answer_does_not_wedge_the_stream(status: int, code: str) -> None:
+    """§05 §7.1 clause 1, in the direction that is not obvious.
+
+    A refusal is the kernel answering **about the bytes submitted** — §04 §7, with a reason code
+    this specification names. `503 x-store-unavailable` is the kernel saying it judged nothing, and
+    `401 x-caller-unauthenticated` is there being no subject to judge it for; both arrive as HTTP
+    answers, and both are `unreachable`.
+
+    This is a regression test with a scar. The first implementation of the wedge keyed on
+    `KernelResponse.accepted`, which is false for every status outside `(200, 201)` — so one 503
+    from a busy store wedged the stream permanently, refused every `consequential` call outright
+    instead of parking it, and could never clear itself, because a wedged stream is one this
+    component stops submitting on. A momentary blip became a stop only a root-signed §04 §7.2
+    resume could lift: exactly the denial-of-service failure the bounded grace window exists to
+    avoid, reintroduced one layer down where the decision function could not see it.
+    """
+    store = GatewayStore(Path(":memory:"))
+    kernel = _CannotAnswer(status, code)
+    emitter = Emitter(store, kernel, "gateway")
+    key = SigningKey(bytes.fromhex("aa" * 32), "agent:probe")
+    stream = "gw:probe:0001"
+    _one_envelope(emitter, key, stream)
+    _one_envelope(emitter, key, stream)
+
+    emitter.push_pending()
+    assert store.wedge(stream) is None, (
+        f"a {status} {code} wedged the stream; the kernel said nothing about these bytes, so this "
+        "is §05 §7.1's `unreachable` and the component must retry rather than stop"
+    )
+    assert store.pending_push_count() == 2, "the envelopes were marked delivered to nobody"
+
+    # And the kernel recovering is enough: no operator act, no restart.
+    emitter.push_pending()
+    assert kernel.calls > 1, "the component stopped offering the envelope it never got an answer on"
+
+
+def test_a_kernel_that_refused_the_object_still_wedges_the_stream() -> None:
+    """The control for the test above, and the reason it is not simply "never wedge".
+
+    A `422` carrying a normative reason code *is* the kernel answering about these bytes. It must
+    still stop the stream — otherwise the two tests above this file exists for would pass with the
+    wedge removed entirely.
+    """
+    store = GatewayStore(Path(":memory:"))
+    kernel = _CannotAnswer(422, "mandate-unresolved")
+    emitter = Emitter(store, kernel, "gateway")
+    key = SigningKey(bytes.fromhex("aa" * 32), "agent:probe")
+    stream = "gw:probe:0002"
+    _one_envelope(emitter, key, stream)
+
+    emitter.push_pending()
+    wedge = store.wedge(stream)
+    assert wedge is not None
+    assert wedge.reason_code == "mandate-unresolved"
 
 
 def test_a_published_mandate_still_reaches_the_kernel(world: World, environment: None) -> None:
