@@ -65,8 +65,18 @@ FAILED test_a_flipped_byte_in_the_policy_is_refused_rather_than_started_on
 Two of the three would have *started* on the tampered file. The third still refused, but for the
 wrong reason — the policy's own signature caught it, which is defence in depth working and is exactly
 the kind of accident that makes a missing check look tested. Deleting the bootstrap call instead
-turns ten of the sixteen red, the first with `policy-not-published: no verified policy is available`,
-which is the defect stating itself. Both mutations were reverted and the suite re-run green.
+turns **thirteen of the sixteen** red, the first with `policy-not-published: no verified policy is
+available`, which is the defect stating itself. Both mutations were reverted and the suite re-run
+green.
+
+Both were run twice, and the second time is the one to trust. The worktree had no `gateway/.venv`, so
+the first pass used the main checkout's interpreter with `PYTHONPATH` shadowing its editable install
+— which did resolve to this worktree's sources (`stozher_gateway.bundle` does not exist in `main`, so
+it could not have imported otherwise), but it depends on `sys.path` ordering and is not a thing to
+rest a security claim on. The rerun used a venv copied into the worktree with its `.pth` re-pointed,
+verified by printing `stozher_gateway.__file__`. Every number in this entry is from that rerun. One
+changed: the bootstrap mutation is thirteen red, not ten — the first count was read off a `head`-
+truncated grep, which is its own small lesson about counting failures from a filtered pipe.
 
 **`[gateway] enabled = false` is ruled on rather than documented around.** It was read by
 `plugin.register` and by a `config check` finding and by nothing else, so a `Governor` built from a
@@ -99,4 +109,9 @@ between two files in one repository, not between two implementations.
 Measured: `pytest gateway/tests` **197 passed, 4 deselected** (from 181/7 — sixteen new, three moved
 out of quarantine); `-m open_defect` **4 failed**, all DEF-1 and DEF-2, red by design.
 `cargo test` **354 passed, 2 ignored** (from 349/2). `cargo clippy --all-targets -- -D warnings`,
-`ruff check`, `mypy --strict` clean; `#[allow]` still 0, `type: ignore` still 2.
+`ruff check`, `mypy --strict` clean; `type: ignore` still 2, and `#[allow]` unchanged at the one
+pre-existing `dead_code` in `tests/concurrency.rs` — none added.
+
+`cargo fmt --all --check` is **not** clean on this branch and was not clean at `47fc577` either:
+`kernel/stozher-kernel/tests/open_defects.rs` carries two pre-existing diffs, untouched here.
+`rustfmt --check` on the two files this entry changed exits 0.
