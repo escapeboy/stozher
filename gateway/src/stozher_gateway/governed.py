@@ -55,6 +55,26 @@ class Governor:
     """An open enforcement session, and a decorator that puts calls through it."""
 
     def __init__(self, config: GatewayConfig) -> None:
+        # `[gateway] enabled` governs this path too, and it governs it by **refusing**.
+        #
+        # It used to be read by `plugin.register` and by a `config check` finding, and by nothing
+        # else: a `Governor` built from a configuration with `enabled = false` opened a session and
+        # gated every call, which is a configuration key that silently means nothing on the path the
+        # caller is using — worse than an absent one, because it reads as an answer.
+        #
+        # The fix is not to make the flag skip the gate. For the MCP server, "off" has a safe
+        # meaning: register no proxied tools, and Harbormaster is exactly what it was. For a
+        # `Governor` there is no such meaning — the caller has already written `@governor.governed`
+        # around functions that apply effects, so "off" could only mean "call them ungoverned",
+        # which is a gate you disable by editing a config key. So the flag is honoured the only
+        # other way available: the object is not built at all, loudly, at construction rather than
+        # at the first call.
+        if not config.gateway.enabled:
+            raise StartupRefusedError(
+                "[gateway] enabled is false, so this configuration does not run enforcement — and a "
+                "Governor has no ungoverned mode to fall back to. Set `enabled = true` to govern "
+                "these functions, or do not build a Governor from this configuration."
+            )
         self._gateway = Gateway(config)
         self._session: Session | None = None
 
@@ -67,6 +87,10 @@ class Governor:
         with no Stozher configuration loses nothing — and wrong for a caller who typed a filename:
         they got a Governor built from defaults, with no kernel and no identity, and found out at
         the first call. A typo in a path is not a decision to run ungoverned.
+
+        The no-argument form searches the same paths the MCP server does, and a search that finds
+        nothing now ends in `StartupRefusedError` rather than in a Governor built from defaults —
+        `GatewaySection.enabled` is `False` in those defaults, and `__init__` refuses on it.
         """
         if path is not None:
             named = Path(path)

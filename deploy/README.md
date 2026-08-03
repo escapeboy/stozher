@@ -301,6 +301,50 @@ This is not a weaker boundary than the MCP one. The gateway holds no approver's 
 either topology, and in the MCP setup it is your own client that spawns it, on your host, as you.
 What it is not, in either shape, is protection against the operator of the process — see ADR-0026.
 
+### Running an agent's tests where there is no kernel
+
+A CI container, an air-gapped install, a laptop on a train. `spec/05 §7` says what a component does
+with a **cached** policy when the kernel is unreachable, and this build does it — but the cache used
+to have exactly one writer, a successful pull, so a machine that had never reached the kernel had
+nothing to enforce and refused to open a session at all. Export a bundle and it has one:
+
+```sh
+# The anchor needs the kernel; the export does not. `policy export-bundle` opens no socket and
+# reads no configuration, so it runs the same way `grant` and `policy-sign` do — under
+# `--network none`, on the laptop that holds the root seed.
+./bin/stozher-anchor --out anchors/now.json
+stozher-kernel policy export-bundle \
+    --policy genesis/policy-document.json \
+    --anchor anchors/now.json \
+    --key    secrets/operator/operator.seed --role 0 \
+    --max-age P7D \
+    --out    ci/policy-bundle.json
+```
+
+`genesis/policy-document.json` is the signed policy the ceremony wrote; after the first
+`policy-sign --out`, use that file instead — the point is to export the document actually in force,
+signature intact, not a draft. `--revocations <path>` takes a JSON array of what `revoke` printed and
+defaults to none; the empty set is written into the bundle explicitly, so "nothing is revoked" is
+something a root signed rather than something the file omitted.
+
+One signed object: the policy in force, the revocation set, and the checkpoint anchor they were
+exported against. It carries no secret — every document inside it is public and already signed — so
+it belongs in the repository the suite checks out. The component reads it from
+`[gateway] policy_bundle` or `STOZHER_GATEWAY_BUNDLE`, verifies the signature against the roots it
+enrolled, and only then seeds its caches.
+
+**`--max-age` is inside the signature and an expired bundle refuses to start.** Not a warning: a
+component enforcing a policy nobody can vouch for any more is the situation this product exists to
+prevent, and a warning in a CI log is a line nobody reads. Re-export on whatever schedule you re-run
+`policy-draft` — a week is the default because a forgotten file should stop working while somebody
+still remembers making it.
+
+**A `consequential` call cannot succeed offline, and no bundle changes that.** §05 §7 is explicit
+that an action requiring a human signature cannot acquire one without a human. A suite that needs one
+to pass needs a *fixture-signed approval* from a root enrolled in that deployment only —
+`gateway/README.md` §"Running an agent suite in CI" has the two-pass recipe and the reason it is two
+passes. Do not enrol a CI key in the production root set.
+
 ### Adding your own downstream servers
 
 The image ships one demo server (`notes`) so the first session has something to call. Yours are

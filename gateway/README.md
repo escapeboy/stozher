@@ -37,7 +37,16 @@ Environment variables are all `STOZHER_*`, never `HARBORMASTER_*`:
 | `STOZHER_GATEWAY_SEED` | the SLIP-0010 seed every subject key is derived from, mode 0600 |
 | `STOZHER_GATEWAY_CALLER` | which configured caller this connection is |
 | `STOZHER_GATEWAY_CALLER_TOKEN` | that caller's bearer credential |
+| `STOZHER_GATEWAY_BUNDLE` | a root-signed policy bundle to bootstrap from with no kernel reachable |
 | `STOZHER_KERNEL_TOKEN` | the kernel bearer token (name it in `[kernel] token_env`) |
+
+**`[gateway] enabled` is honoured by both entry points, and differently.** The MCP plugin registers
+nothing when it is false — a Harbormaster with the distribution installed but enforcement off is
+exactly vanilla Harbormaster. A `Governor` **refuses to be built**, because on that path "off" has no
+safe meaning: the caller has already wrapped functions that apply effects, so the only other reading
+is "call them ungoverned", which is a gate disabled by editing a config key. It used to be read by
+`plugin.register` alone, and a `Governor` built from `enabled = false` opened a session and gated
+every call anyway.
 
 ## Operator commands
 
@@ -54,6 +63,71 @@ stozher-gateway keygen  --out keys/gateway.seed
 the gateway then runs all eleven steps of `spec/06` §2 over it before forwarding anything. S4
 replaces the *transport* (a kernel-native pending queue and notification path), not the
 cryptography.
+
+## Running an agent suite in CI, with no kernel
+
+A fresh container has never reached a kernel, so it has no verified policy, and until v0.10 that
+meant it could not open a session at all — `policy-not-published`, raised inside `Governor.__enter__`
+before a single call was classified. The offline profile (`spec/05` §7) was implemented and worked;
+what was missing was a way *in* from cold. That is what a **policy bundle** is.
+
+**1. Export a bundle, once, wherever the kernel is.** Offline, on the operator's own machine, with
+the root key that machine already holds:
+
+```sh
+stozher-kernel anchor --url https://kernel.example --token-env STOZHER_KERNEL_TOKEN > anchor.json
+
+# --policy is genesis's `policy-document.json`, or whatever `policy-sign --out` last wrote: the
+# document actually in force, signature intact, never a stripped draft.
+# --revocations is optional and takes a JSON array of what `revoke` printed. Omitted, the bundle
+# carries an explicit empty set — "nothing is revoked" signed by a root, not a member left out.
+stozher-kernel policy export-bundle \
+    --policy  out/policy-document.json \
+    --anchor  anchor.json \
+    --key     keys/root.seed --role 0 \
+    --max-age P7D \
+    --out     ci/policy-bundle.json
+```
+
+The bundle is one signed object carrying the policy, the revocation set and the anchor. `--max-age`
+is **inside** the signature, so nobody downstream can extend it, and a component whose bundle has
+expired refuses to start rather than warning. Commit `ci/policy-bundle.json` — it holds no secret,
+only public documents and a root's signature over them — and re-export it before it expires.
+
+**2. Point the container at it.** Either `[gateway] policy_bundle = "ci/policy-bundle.json"` or:
+
+```sh
+export STOZHER_GATEWAY_BUNDLE=ci/policy-bundle.json
+```
+
+The gateway verifies it against `[org] roots` before a byte reaches the cache, then enforces the
+policy and the revocations offline. `read` and `benign` proceed and queue their envelopes locally;
+`consequential` is refused — parked while the seeded policy is inside `max-staleness-seconds`,
+`policy-stale-offline` after that. Either way the body does not run.
+
+**3. A `consequential` call under test needs a fixture-signed approval, not an offline mode.**
+`spec/05` §7 is explicit: an action requiring a human signature cannot acquire one offline. So no
+bundle, no flag and no mode will make such a call succeed in CI. What makes it succeed is a signature
+— from a **fixture root** enrolled in that deployment's `[org] roots` and existing nowhere else:
+
+```sh
+stozher-gateway keygen --out ci/fixture-root.seed   # enrol its key id under [[org.roots]]
+# the suite runs; the call parks
+stozher-gateway pending
+stozher-gateway approve --request <hash> --key ci/fixture-root.seed --subject human:ci-fixture
+# re-run the call: the gate finds the decision and forwards
+```
+
+Two passes, not one, and that is not an accident: the approval names the request's hash, which
+carries a fresh nonce per park (`spec/06` §1.1), so it cannot be signed before the call exists. The
+decision is **single-use** (`spec/06` §1.2), so each governed consequential call under test needs its
+own. A suite that wants many of them is better served by classifying those actions in the policy the
+bundle carries — which is the organization saying, in a document a human signed, that they do not
+need a gate.
+
+**What CI must not do** is enrol its fixture root in the production `[org] roots`. The fixture key
+signs approvals that are valid for any deployment that trusts it, and a key that lives in a CI runner
+is a key that lives wherever the runner's logs and images go.
 
 ## Classification, and the one thing to know about it
 

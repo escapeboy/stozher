@@ -8,22 +8,24 @@ a defect nobody recorded is orphaned evidence — the meta-test forbids both.
 Evidence is *committed and excluded*, not deleted:
 
 ```sh
-./gateway/.venv/bin/python3 -m pytest gateway/tests -q                 # 178 passed, 7 deselected
-./gateway/.venv/bin/python3 -m pytest gateway/tests -q -m open_defect  # 6 failed, 1 passed
-cargo test --manifest-path kernel/Cargo.toml                           # 349 passed, 2 ignored
+./gateway/.venv/bin/python3 -m pytest gateway/tests -q                 # 197 passed, 4 deselected
+./gateway/.venv/bin/python3 -m pytest gateway/tests -q -m open_defect  # 4 failed
+cargo test --manifest-path kernel/Cargo.toml                           # 354 passed, 2 ignored
 cargo test --manifest-path kernel/Cargo.toml --test open_defects -- --ignored
 cargo test --manifest-path kernel/Cargo.toml --test def2_mandate_swap -- --ignored
 ```
 
-The quarantined run is **red by design**. Each failure is the defect stating itself; the one pass is
-a control (see DEF-4).
+The quarantined run is **red by design**. Each failure is the defect stating itself. It used to carry
+one deliberate *pass* — DEF-4's control — which moved into the default suite when DEF-4 closed
+(`gateway/tests/test_policy_bundle.py`); it is still a control, and still the reason "there is no
+offline mode" cannot be said.
 
 | Id | Status | Classification | Severity | One line |
 |---|---|---|---|---|
 | DEF-1 | open | **spec hole** | high | Replaying a run duplicates the approval queue: the gateway re-parks instead of resolving to its own outstanding request. |
 | DEF-2 | open | **spec hole** + one implementation defect alongside | high | A component whose envelopes the kernel refuses keeps serving and keeps returning success; to `spec/` a refused emitter is merely a late one. |
 | DEF-3 | closed | scope limit, stated | — | `Governor` does not support `async def`. It now refuses at decoration instead of recording `applied` before the body runs. |
-| DEF-4 | open | **spec hole** (tooling/documentation) | high for adoption, none for security | No way to obtain a verified policy without a live kernel, so a cold CI container cannot open a session at all. The offline profile itself works. |
+| DEF-4 | closed | **spec hole** (tooling/documentation), closed in the implementation | high for adoption, none for security | There was no way to obtain a verified policy without a live kernel, so a cold CI container could not open a session at all. `policy export-bundle` is the way in; the offline profile itself always worked. |
 | DEF-5 | not a defect | — | — | Proposed: ambient-state authorization on the `Governor` path. Investigated and **not found**; four independent bindings recompute authority per call. |
 
 ## DEF-1 — the queue duplicates on replay
@@ -90,29 +92,45 @@ Closed as a **defect**; open as a **limitation**. Every governed tool needs a sy
 point, which is trivial for a script and awkward inside a running loop. Supporting it means an async
 chokepoint in `Enforcer`, not a change to `governed`.
 
-## DEF-4 — the offline profile works; there is no way in from cold
+## DEF-4 — the offline profile works; there was no way in from cold. Closed.
 
-Three claims, verified independently:
+Three claims, verified independently at triage, and what each of them turned into:
 
-- **Missing.** No path obtains a verified policy without a live kernel. `PolicyProvider.current`
-  raises `policy-not-published` when the pull fails and the cache is empty; `open_session` calls it,
-  so a cold CI container dies in `__enter__` before anything is classified. The only writer of that
-  cache is a successful pull, and no CLI subcommand seeds it — the sole offline seeding in the
-  repository is tests calling `store.cache_policy(...)` directly, which is why the in-process path
-  always *looked* testable.
-- **Implemented and working.** With one cached policy and the kernel on a dead port, a `read`
-  proceeds and folds and a `consequential` parks locally — `{read: allow, benign: allow,
-  consequential: block}` exactly as §05 §7 requires. This is the run's one **passing quarantined
-  test**, kept as a control: without it, "no offline mode" reads as true.
-- **Misdesigned, small.** `[gateway] enabled = false` is read only by `plugin.py:58` and a `config
-  check` finding. `Governor` builds a `Gateway` unconditionally, so the session opens and the call is
-  gated. Nothing documents the flag as MCP-only while the README presents it as *the* switch.
+- **Missing → built.** No path obtained a verified policy without a live kernel. `PolicyProvider`'s
+  `current` raises `policy-not-published` when the pull fails and the cache is empty; `open_session`
+  calls it, so a cold CI container died in `__enter__` before anything was classified. The only
+  writer of that cache was a successful pull, and no CLI subcommand seeded it. There is now a second
+  writer: **`stozher-kernel policy export-bundle`** signs the policy, the revocation set and a
+  checkpoint anchor into one root-signed document, and `Gateway._bootstrap_from_bundle` verifies it
+  against `org.roots` and seeds both caches before the policy provider ever reads them. `max-age`
+  lives **inside** the signature, so the file-holder cannot extend it, and an expired bundle refuses
+  to start rather than warning (`bundle.py::load_policy_bundle`, "an expired bundle makes the
+  component refuse to start").
+- **Implemented and working, and still is.** With one cached policy and the kernel on a dead port, a
+  `read` proceeds and folds and a `consequential` parks locally — `{read: allow, benign: allow,
+  consequential: block}` exactly as §05 §7 requires. This was the run's one **passing quarantined
+  test** and it is now
+  `test_policy_bundle.py::test_the_offline_profile_is_implemented_and_works_from_a_warm_cache`,
+  unquarantined and kept deliberately as a control: it uses no bundle, so if the bundle path ever
+  became the only way the offline profile works, this is the test that notices.
+- **Misdesigned → ruled.** `[gateway] enabled = false` was read only by `plugin.register` ("the
+  default. A Harbormaster with the distribution installed but enforcement off…") and a `config check`
+  finding. `Governor` now honours it too, by **refusing to be built**. The other reading — run the
+  decorated functions ungoverned — is a gate disabled by editing a config key, so on this path the
+  flag can only mean *refuse*. The two paths differ because "off" has a safe meaning for the MCP
+  server (register nothing; Harbormaster is what it was) and none for a `Governor`, whose caller has
+  already wrapped functions that apply effects.
 
-An agent suite that needs a *consequential* call to succeed cannot be satisfied by any offline mode —
-§05 §7 means it can never acquire a human signature offline. What it needs is a fixture-signed
-approval.
+An agent suite that needs a *consequential* call to succeed still cannot be satisfied by any offline
+mode — §05 §7 means it can never acquire a human signature offline. What it needs is a fixture-signed
+approval, and `gateway/README.md` §"Running an agent suite in CI" is the recipe.
 
-**Evidence:** `gateway/tests/test_open_defects.py::test_def4_*`.
+**What was not done:** no `spec/` text. The bundle is an implementation of §05 §7's bootstrap and
+needs no new normative clause to be correct, but the wire object deserves one before a second
+implementation reads it — the proposal is `docs/proposals/DEF-4-policy-bundle.md`.
+
+**Evidence:** `gateway/tests/test_policy_bundle.py` (16 tests, default suite),
+`kernel/stozher-kernel/tests/policy_bundle_cli.rs` (5 tests against the real binary).
 
 ## DEF-5 — proposed, investigated, not found
 
@@ -130,3 +148,6 @@ in ADR-0028.
 ## Last updated
 
 2026-08-03, triage run. `main` = `develop` = `cf64bf7` plus this run's uncommitted work.
+2026-08-03, DEF-4 closed: `policy export-bundle` on the kernel, bundle verification and bounded
+staleness on the gateway, and the `[gateway] enabled` ruling. Proposal for the normative text the
+bundle still lacks: `docs/proposals/DEF-4-policy-bundle.md`.
