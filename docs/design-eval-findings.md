@@ -45,11 +45,16 @@ The failure is that the same surface stays silent at the moments that matter *ag
 The dominant finding is not a defect list. **Three of the four "worst defects" reported do not
 exist as capabilities gaps — they are the product doing the considered thing and not saying so.**
 
+Citations below name the **function**, not only the line. Every line number in this table had rotted
+within a week of being written — `enforce.py:571` and `:1041` now point at unrelated code — and a
+record whose pointer no longer resolves is how the same fact gets re-derived by the next reader.
+Re-checked 2026-08-03 against `cf64bf7`.
+
 | Reported as worst defect | What the code does |
 |---|---|
-| "a pure read requires a human signature" (×2 evaluators) | `enforce.py:571` — first-call gating parks an *unknown* tool by §10 §4, and the approval seeds a signed catalog entry (`_seed_catalog`, §10 §4.3) so the next call resolves without parking. Once per tool, not once per call. Neither evaluator made the second call. |
-| "applied effects retain no arguments, only a hash" | `enforce.py:1041` — the payload is `{"server", "tool", "arguments"}`, retained under `retain-until` and served by `GET /v1/payloads/<hash>` (`http.rs:69`). The export just never mentions it. |
-| "no off-box anchor" | **Real.** `spec/04 §4.7` says checkpoints SHOULD be exported off-box; nothing in `deploy/bin/` does. |
+| "a pure read requires a human signature" (×2 evaluators) | `Enforcer.call`, the `first_call` computation (`enforce.py:229`, used at `:245`) — first-call gating parks an *unknown* tool by §10 §4, and the approval seeds a signed catalog entry (`_seed_catalog`, §10 §4.3) so the next call resolves without parking. Once per tool, not once per call. Neither evaluator made the second call. |
+| "applied effects retain no arguments, only a hash" | `Enforcer._effect_body` (`enforce.py:1224`) — the payload is `{"server", "tool", "arguments"}`, on every effect body unconditionally, retained per the policy's `evidence-ttl` (`P365D` for `consequential`) and served by `GET /v1/payloads/<payload-hash>` (`http.rs:69`, `spec/04 §5.2`). The export just never mentioned it; `console/templates/audit.html` names the route now. **This one has been got wrong in both directions**: the claim above is false for a call that *ran*, and its opposite — that the values are always there — is false for a request that only parked and expired, whose arguments the kernel MUST erase at `not-after` (§06 §4.4 rule 7). |
+| "no off-box anchor" | **Was real; closed 2026-08-02.** `spec/04 §4.7` says checkpoints SHOULD be exported off-box and nothing in `deploy/bin/` did. `bin/stozher-anchor` ships it now — and was itself broken on arrival, resolving `IMAGE` before `.env`, which an evaluation found only because the gap was handed to it by name. |
 
 That ratio is the design input. Silence at the point of refusal cost one outright rejection and two
 conditional ones, from evaluators who were **right about what they observed and wrong about what it

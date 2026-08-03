@@ -63,3 +63,18 @@ warn_unused_ignores = true
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"
+# A reproduction of an open defect is evidence, and evidence that is not executable rots. It stays
+# committed and runnable and out of the default run, because a suite that is red for a known reason
+# stops being read: the next real regression arrives into a failure everyone has learned to skip.
+# Quarantine is not a way of not fixing it — the defect is open either way; it is a way of keeping
+# the signal that would tell you it got fixed.
+#
+#   default run:      python3 -m pytest gateway/tests -q
+#   the quarantine:   python3 -m pytest gateway/tests -q -m open_defect
+#
+# `-m` takes one value and the command line's wins over `addopts`, so the second command runs
+# exactly the quarantined tests and nothing else.
+markers = [
+    "open_defect: a committed, executable reproduction of a defect that is open — expected to fail",
+]
+addopts = "-m 'not open_defect'"
