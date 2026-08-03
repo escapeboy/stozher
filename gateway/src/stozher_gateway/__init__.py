@@ -13,7 +13,7 @@ without a kernel loses nothing" before configuration is even read.
 
 from __future__ import annotations
 
-__all__ = ["Governor", "__version__"]
+__all__ = ["Governor", "RefusalError", "__version__"]
 
 __version__ = "0.1.0"
 
@@ -30,6 +30,14 @@ def __getattr__(name: str) -> object:
         from .governed import Governor
 
         return Governor
+    if name == "RefusalError":
+        # The exception every caller of a governed function has to catch, so it belongs beside the
+        # thing that raises it. It was documented by name and importable only from a private
+        # submodule, which sent the first integrator to read the source to find out where from.
+        # `refusal` imports nothing heavy, so this costs an integrator nothing either.
+        from .refusal import RefusalError
+
+        return RefusalError
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 #: The wire version this build speaks. There is no negotiation (spec §01 §1).

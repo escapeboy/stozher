@@ -51,6 +51,18 @@ fractional digits (<code>spec/01 §2.3</code>).</span>
 <button type="submit">filter</button>
 </form>
 
+{# Said before the count, not after it. The count asserts that the filters held; when one of them
+   named nothing, the assertion is false and the reader has to know that first. An incident
+   responder typed `?class=consequential` — the field is `classification` — and read all 87 records
+   as a finding. #}
+{% if ignored.len() > 0 %}
+<p class="warn"><b>Not a filter:</b>
+{% for name in ignored %}<code>{{ name }}</code>{% if !loop.last %}, {% endif %}{% endfor %}.
+That parameter names nothing this console filters on, so it was <b>ignored</b> — the count below is
+of the records matching the <em>remaining</em> filters, which may be all of them. Check the spelling
+against the form above. The regulator export refuses this outright rather than widening.</p>
+{% endif %}
+
 <p><b>{{ matched }}</b> record(s) match these filters; <b>{{ shown }}</b> shown below{% if paged %},
 continuing from an earlier page{% endif %}.
 <a href="/console/audit/export?{{ query }}">export all {{ matched }} for regulators (NDJSON)</a>

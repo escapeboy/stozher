@@ -74,8 +74,22 @@ verdict=(--approve)
 
 # The approver's own process. `--role 0 --index 0` is the human root key the ceremony enrolled;
 # `decide` defaults to role 1', which is an agent subject key and is not in any root set.
+#
+# `--config` because an approval is stamped with a fifteen-minute window and this deployment may be
+# running its clock ahead (ADR-0023). Without it the window is the host's, the kernel is past it on
+# arrival, and the approval is refused `gate-approval-expired` — after `answer` has already recorded
+# it, which consumes the pending item: `console-csrf-invalid` on any retry, and the request has to
+# be re-minted with a fresh nonce. One shipped command, and the gate request is dead. On a
+# deployment that declares no advance the flag changes nothing.
+#
+# Conditional because an approver may hold nothing but their seed: §2's ceremony has them run this
+# on their own machine, and a deployment configuration is not theirs to have. Absent, the host clock
+# is the right answer — it is only an advanced deployment that needs telling.
+deployment=()
+[ -f config/kernel-config.json ] && deployment=(--config config/kernel-config.json)
 signed="$(docker run --rm -i -u "$UID_GID" -v "$DEPLOY:/work" -w /work "$IMAGE" \
-  decide --request "$REQUEST" --key "$SEED" --role 0 --index 0 --minutes "$MINUTES" "${verdict[@]}")"
+  decide "${deployment[@]}" \
+         --request "$REQUEST" --key "$SEED" --role 0 --index 0 --minutes "$MINUTES" "${verdict[@]}")"
 
 # A different process, with no seed mounted, carrying an object it could not have produced.
 printf '%s' "$signed" | docker run --rm -i -u "$UID_GID" --network "$NETWORK" \

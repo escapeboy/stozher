@@ -455,6 +455,14 @@ struct AuditPage {
     shown: String,
     /// Rows the filters match, which is a different number and is stated as one.
     matched: String,
+    /// Parameters in the address that name no filter, so the page can say they were dropped.
+    ///
+    /// Not an error page: a typo while browsing should not be one, which is why `export` refuses
+    /// and this does not. But the count beside it reads "N record(s) match these filters", and an
+    /// incident responder who typed `?class=consequential` — the field is `classification` — was
+    /// handed every record under that sentence. Widening silently while asserting the filter held
+    /// is the defect; saying so costs a line.
+    ignored: Vec<String>,
     /// Whether the two differ, so the page can say so rather than leave it to be noticed.
     truncated: bool,
     /// Whether this is a later page, so "showing N" cannot be misread as "there are N".
@@ -660,6 +668,15 @@ async fn audit(
         return response;
     }
     let filters = Filters::from_params(&params);
+    // Named, not refused. `export` refuses because that artefact leaves the building; this page is
+    // browsed, and a typo in the address bar should not be an error. What it must not do is drop
+    // the parameter and still say "N record(s) match these filters".
+    let mut ignored: Vec<String> = params
+        .keys()
+        .filter(|name| !EXPORT_FILTERS.contains(&name.as_str()))
+        .cloned()
+        .collect();
+    ignored.sort_unstable();
     let Ok(resume) = filters.cursor() else {
         // A malformed cursor is refused rather than ignored. Silently starting over would answer a
         // request for a later page with the first one, and an auditor reading rows they had already
@@ -714,6 +731,7 @@ async fn audit(
         kinds: &stozher_core::envelope::KINDS,
         outcomes: &stozher_core::envelope::OUTCOMES,
         rows: records.iter().map(row).collect(),
+        ignored,
         f: filters,
     })
 }

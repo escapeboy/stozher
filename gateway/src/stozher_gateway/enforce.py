@@ -173,8 +173,13 @@ class Enforcer:
             # Same rule as the three feeds above: a gap that changes what the operator gets is
             # stated once at construction, never left to be discovered. An install with no notifier
             # still gates every call correctly — it just does so where nobody is looking.
+            # Scoped to this process on purpose. The kernel has notification channels of its own
+            # (Slack, SMTP, webhook), and an evaluation with a working webhook read this line as
+            # "nobody was told" while 69 pings were being delivered. The gateway cannot see the
+            # kernel's configuration, so it states what it knows and not what it does not.
             logger.info(
-                "no park notifier is configured: a parked request waits until someone opens the console"
+                "this gateway has no park_notify argv configured; if the kernel has no "
+                "notification channel either, a parked request waits until someone opens the console"
             )
 
     # -- the one entry point ------------------------------------------------------------------

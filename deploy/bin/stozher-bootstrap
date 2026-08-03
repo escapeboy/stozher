@@ -46,7 +46,10 @@ set -euo pipefail
 DEPLOY="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$DEPLOY"
 
-IMAGE="${STOZHER_KERNEL_IMAGE:-stozher-kernel:0.1.0}"
+# IMAGE is resolved further down, after `.env` has been read — see the comment there. Resolving it
+# here, before this script has looked at the file it is documented to write, is what made the
+# ceremony run one binary while compose ran another.
+IMAGE=""
 # Resolved from the running container once the kernel is up, never assumed: the compose project can
 # be renamed with COMPOSE_PROJECT_NAME so that two installs on one host do not collide, and a
 # hardcoded `stozher_default` would silently attach the throwaway containers below to the *other*
@@ -189,6 +192,23 @@ PROJECT="$(printf '%s\n' "$PRESERVED" | sed -n 's/^[[:space:]]*COMPOSE_PROJECT_N
 if [ -n "$PROJECT" ]; then
   echo "keeping COMPOSE_PROJECT_NAME=${PROJECT} from the existing .env — this install stays namespaced"
 fi
+
+# Resolved AFTER `.env` has been read, never before, and by the precedence `docker compose` itself
+# uses: the environment wins, otherwise the file, otherwise the shared default. Read at the top of
+# this script — where it used to be — the tag an operator put in `.env` is invisible, because this
+# script is the one thing that runs before `.env` can be in anyone's environment, and `.env` is
+# exactly where README's "two installs on one host" tells them to put it. Every `docker run` below
+# then executes `stozher-kernel:0.1.0` while `docker compose build` reads `.env` and correctly
+# builds and starts the other tag: the install ends up with a store written by one binary and
+# served by another, and on a host with a second install that binary is the *other* deployment's.
+#
+# It presented as a second root enrolled into the root set but absent from the policy's approvers —
+# a defect this repository had already fixed, silently reintroduced by the launcher — and the
+# transcript looked correct throughout, because step 1/8 prints the tag it built. Same hazard as
+# bin/stozher-approve:56, which documents it; this script was the one that did not get the fix.
+IMAGE="${STOZHER_KERNEL_IMAGE:-$(printf '%s\n' "$PRESERVED" | sed -n 's/^[[:space:]]*STOZHER_KERNEL_IMAGE=//p')}"
+IMAGE="${IMAGE:-stozher-kernel:0.1.0}"
+echo "ceremony image: ${IMAGE}"
 
 # `.env` first, and with the uid in it before anything else runs: compose interpolates the whole
 # file on every invocation, so `user:` has to resolve even for a plain `build`.

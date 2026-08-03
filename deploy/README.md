@@ -160,6 +160,30 @@ written by one build being opened by another, with nothing pointing at the tag t
 message. `.env` was the wrong place when nothing preserved these two keys; `bin/stozher-bootstrap`
 now does.)
 
+### Running the clock ahead, if you are demonstrating expiry
+
+A deployment can declare that its clock is not the host's, so a reviewer can watch mandates expire
+and evidence decay without waiting a year (ADR-0023). **Declare it in both components or in
+neither.** The kernel takes it in `config/kernel-config.json` and the gateway in
+`stozher-gateway.toml`, with the same two members and the same acknowledgement sentence:
+
+```json
+"clock-advance": { "advance": "P7D",
+                   "acknowledged": "records emitted by this deployment are not evidence of when anything happened" }
+```
+
+```toml
+[clock]
+advance = "P7D"
+acknowledged = "records emitted by this deployment are not evidence of when anything happened"
+```
+
+Advance only the kernel and the gate stops working: the gateway stamps each request's `not-after`
+from its own clock, the kernel is already past it, and every gated call comes back
+`gate-request-expired` / `blocked` instead of parking — nothing queued, nothing approvable. The
+duration has no sign, so the clock cannot be asked to go backwards, and a deployment that has run
+ahead will not start behind where it left off.
+
 ### What the ceremony actually is
 
 Genesis is **two fully-validated envelopes**, not a bypass (ADR-0006 §2):
@@ -241,7 +265,7 @@ product measured that path at 134 lines of adapter against a 123-line applicatio
 state had to move into a subprocess:
 
 ```python
-from stozher_gateway import Governor
+from stozher_gateway import Governor, RefusalError
 
 with Governor.from_config("config/stozher-gateway.toml") as governor:
 
@@ -249,14 +273,29 @@ with Governor.from_config("config/stozher-gateway.toml") as governor:
     def issue_refund(order_id: str, amount_cents: int) -> str:
         ...
 
-    issue_refund("ORD-88214", 4_999_00)
+    try:
+        issue_refund("ORD-88214", 4_999_00)
+    except RefusalError as refused:
+        print(refused.document["result"], refused.document["reason-code"])
 ```
 
 Same enforcement, one process: classified, mandated, gated and recorded through the same
 `Enforcer.call` a proxied tool transits. A refusal raises `RefusalError` and **the function body
-does not run**. The `with` block is not decoration — `read` calls fold into an aggregate that is
-emitted on a window boundary, and a process that exits without flushing loses the record of every
-read since the last one.
+does not run**; the session survives it, so the rest of your loop keeps working. The `with` block is
+not decoration — `read` calls fold into an aggregate that is emitted on a window boundary, and a
+process that exits without flushing loses the record of every read since the last one.
+
+The config the ceremony writes is the **container's**: `kernel.url` is `http://kernel:8787` and the
+seed and mandate paths are the ones inside the image. A program running on the host needs its own
+copy with those three values pointed at `http://127.0.0.1:${STOZHER_KERNEL_PORT}` and at
+`deploy/secrets/gateway/`, and `STOZHER_GATEWAY_CALLER_TOKEN` exported from `.env`.
+
+**`async def` is refused at decoration**, with a `TypeError` that says so. `Enforcer.call` is
+synchronous and chains an effect as `applied` the moment the call returns — for a coroutine function
+that is when the coroutine is *constructed*, so the record would say the work had been done before
+the body ran, and say it still if nobody awaited or if the await raised. Wrap the awaiting in a
+synchronous function and govern that one. Positional-only parameters, defaults and `**kwargs` are
+all bound and passed through exactly as written.
 
 This is not a weaker boundary than the MCP one. The gateway holds no approver's private key in
 either topology, and in the MCP setup it is your own client that spawns it, on your host, as you.
@@ -333,14 +372,38 @@ evaluating this product found nine requests waiting that way and wrote that the 
 stopped the incident was a page someone had to remember to look at. **A gate nobody is pinged about
 is a queue, not a control.**
 
-Set `park_notify` in the gateway's config to an argv — a script that posts to Slack, sends a push,
-writes to a pager, whatever your team already reads:
+There are two ways to be told, and this page used to document only the one you have to build
+yourself. An evaluation running an unattended nightly job found the other by grepping the kernel's
+Rust, which is the wrong place to find the load-bearing control for the case where nobody is awake.
+
+**The kernel's own channels**, and the shorter path: it ships Slack, SMTP and webhook, wired through
+`docker-compose.yml` and preserved across a re-bootstrap. A channel names the *environment variable*
+and never the value, so `config/kernel-config.json` stays safe to copy, diff and paste into a
+ticket:
+
+```json
+"notifications": [
+  { "channel": "webhook", "url-env": "STOZHER_WEBHOOK_URL", "token-env": "STOZHER_WEBHOOK_TOKEN" }
+]
+```
+
+Set the matching `STOZHER_WEBHOOK_URL` / `STOZHER_WEBHOOK_TOKEN` in `.env` (the commented block at
+the bottom of `.env.example` lists all four) and restart the kernel. One ping per park, carrying the
+request hash, subject, action, target, classification, `not-after` and the console URL — and no
+argument values, ever.
+
+**Or `park_notify` in the gateway's config**, an argv you supply — a script that posts to Slack,
+sends a push, writes to a pager, whatever your team already reads:
 
 ```toml
 [gateway]
 park_notify = ["/usr/local/bin/notify-approver"]
 park_notify_timeout_seconds = 10.0
 ```
+
+The gateway logs `no park notifier is configured` when this argv is unset. It is talking about
+itself only: if you configured a kernel channel, you are being pinged, and that line is not evidence
+that you are not.
 
 It receives one JSON object on stdin: the request hash, subject, action, target, classification and
 the time it parked. Three things it deliberately does not do, each of which could have gone the
@@ -402,9 +465,16 @@ docker run --rm -i -u "$(id -u):$(id -g)" --network none -v "$PWD:/work" -w /wor
   "${STOZHER_KERNEL_IMAGE:-stozher-kernel:0.1.0}" \
   grant --key secrets/operator/operator.seed --root human:ivan \
         --grantee agent:bootstrap --grantee-key "$(…identity --key … --role 1 --index 0)" \
+        --components kernel \
         --actions 'kernel.publish_policy' --classes consequential --days 1 \
         --out var/publish-mandate.json
 ```
+
+`--components kernel` is not optional here and it is the step this page cost people twice. `grant`
+defaults to `--components gateway`, and `kernel.publish_policy` is emitted by the **kernel**, so a
+mandate granted without it is refused at the last command of the ceremony —
+`mandate-scope-not-permitted: scope does not cover kernel/kernel.publish_policy` — after everything
+else has succeeded. The root-set ceremony below carries the same flag for the same reason.
 
 `grant` writes a signed mandate **object**, not an envelope: its signature covers the grant, and the
 chain position is not the grantor's to assert. Putting it on the chain is a second command, run by

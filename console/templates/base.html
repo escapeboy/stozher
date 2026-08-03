@@ -42,6 +42,8 @@ form.filters input, form.filters select { font: inherit; width: 14rem; }
 .ok { color: var(--ok); }
 .quiet { color: var(--warn); }
 .note { border-left: 3px solid var(--line); padding: .3rem .7rem; margin: .8rem 0; color: var(--dim); max-width: 62rem; }
+/* Not `.note`: this one contradicts the sentence under it, so it cannot be dimmed like an aside. */
+.warn { border-left: 3px solid var(--warn); padding: .3rem .7rem; margin: .8rem 0; max-width: 62rem; }
 pre { border: 1px solid var(--line); padding: .6rem; overflow-x: auto; white-space: pre-wrap; word-break: break-all; }
 .empty { color: var(--dim); font-style: italic; }
 /* `width: 100%` is inherited from the `table` rule, which stretches four count cells across the

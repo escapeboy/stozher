@@ -99,11 +99,25 @@ if [ -z "$RESUME" ]; then
   fi
 
   mkdir -p "$(dirname "$WORK")"
-  REQUEST_HASH="$(offline policy-request \
+  # `--config` for the same reason `bin/stozher-approve` passes it: the request carries its own
+  # `not-after`, and on a deployment running its clock ahead (ADR-0023) a window stamped from the
+  # host is already past when the kernel reads it. On a deployment that declares no advance the
+  # flag changes nothing.
+  deployment=()
+  [ -f config/kernel-config.json ] && deployment=(--config config/kernel-config.json)
+  REQUEST_HASH="$(offline policy-request "${deployment[@]}" \
     --document "$DOCUMENT" --subject "$SUBJECT" --key "$SEED" \
     --mandate "$MANDATE" --in-force "$IN_FORCE" --out "$WORK")"
 
-  onnet park --url http://kernel:8787 --file "$WORK" >/dev/null
+  # The kernel's answer is shown, not discarded. It used to go to /dev/null, so the entire
+  # operator-facing output of a failed publish was `the kernel refused it (422)` — while the answer
+  # on the other side of that pipe said `gate-request-expired: not-after ... has already passed at
+  # ...`, which names both the problem and the fix. An operator had to re-run `park` by hand to see
+  # the sentence the command already had.
+  if ! onnet park --url http://kernel:8787 --file "$WORK"; then
+    echo "the kernel refused the parked request — its answer is above" >&2
+    exit 1
+  fi
 
   cat >&2 <<EOF
 
