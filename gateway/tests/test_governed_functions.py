@@ -22,7 +22,7 @@ from typing import Any
 import pytest
 
 from stozher_gateway import clock as clock_module
-from stozher_gateway.canonical import sha256_hex
+from stozher_gateway.canonical import object_hash, sha256_hex
 from stozher_gateway.config import GatewayConfig
 from stozher_gateway.governed import Governor
 from stozher_gateway.refusal import RefusalError
@@ -314,6 +314,210 @@ def test_a_governor_that_was_never_opened_refuses_rather_than_running_ungoverned
     with pytest.raises(Exception, match="not open"):
         issue_refund("ORD-1")
     assert ran == []
+
+
+# -- what carries the authority, and what only carries a name ---------------------------------
+#
+# ADR-0002's anti-lesson: FleetQ re-executed an approved proposal by flipping an ambient container
+# binding, because the authority to act lived in process state rather than in the call. `Governor`
+# holds a session open for the life of a `with` block, which is exactly the shape that mistake had.
+# These four bind what that session is: an identity and a mandate reference, both re-verified on
+# every call, never a standing permission any later call can ride on.
+
+
+def _chain(governor: Any) -> list[dict[str, Any]]:
+    """Every envelope this gateway has chained. Nothing is pushed — the kernel is unreachable."""
+    return [envelope for _, envelope, _ in governor._gateway.store.unpushed(limit=1000)]
+
+
+def _approve(governor: Any, request_hash: str, approver: SigningKey = ROOT) -> dict[str, Any]:
+    """Sign a real gate decision over a parked request, the way the console's approver would."""
+    now = clock_module.now()
+    decision = approver.sign(
+        {
+            "v": "stozher/0.1",
+            "kind": "gate-decision",
+            "request-hash": request_hash,
+            "decision": "approve",
+            "decided-at": clock_module.shift(now, -1),
+            "not-after": clock_module.shift(now, 900),
+            "single-use": True,
+            "reason": None,
+        }
+    )
+    governor._gateway.store.record_decision(request_hash, decision, None)
+    return decision
+
+
+def test_the_approving_signature_travels_in_the_envelope_the_kernel_verifies(governor: Any) -> None:
+    """The approval is carried, not remembered.
+
+    Nothing in the emitted record says "a human said yes at some point in this session". It carries
+    the approver's signature and the request that signature commits to, and §06 §2 step (10) pins
+    that request to this envelope's own action, target and `args-hash` — so a verifier that never
+    saw the process can decide whether the effect was authorized.
+    """
+    applied: list[str] = []
+
+    with governor:
+
+        @governor.governed(server="ops")
+        def issue_refund(order_id: str, amount_cents: int) -> str:
+            applied.append(order_id)
+            return "refunded"
+
+        with pytest.raises(RefusalError) as refused:
+            issue_refund("ORD-1", 500)
+        _approve(governor, refused.value.document["request-hash"])
+
+        assert issue_refund("ORD-1", 500) == "refunded"
+
+    assert applied == ["ORD-1"]
+    effects = [
+        envelope
+        for envelope in _chain(governor)
+        if envelope["kind"] == "effect" and envelope["execution"]["action"] == "ops.issue_refund"
+    ]
+    assert [envelope["execution"]["outcome"] for envelope in effects] == ["applied"]
+    assert len(effects) == 1
+    authorization = effects[0]["authorization"]
+    assert authorization["decision"]["sig"]["key"] == ROOT.id
+    assert authorization["decision"]["request-hash"] == object_hash(authorization["request"])
+    # Step (10): the signature binds *these* arguments, not this session.
+    assert authorization["request"]["args-hash"] == effects[0]["execution"]["args-hash"]
+    assert authorization["request"]["action"] == effects[0]["execution"]["action"] == "ops.issue_refund"
+    assert authorization["request"]["mandate-ref"] == effects[0]["mandate-ref"]
+
+
+def test_a_second_call_cannot_ride_on_the_first_calls_approval(governor: Any) -> None:
+    """The one thing an open session must not become: a permission.
+
+    Same process, same `with` block, same function, same arguments, immediately after an approved
+    call — and it parks again. The decision was consumed and its request hash recorded as used, so
+    there is no cached verdict for the second call to reuse and its body does not run.
+    """
+    applied: list[str] = []
+
+    with governor:
+
+        @governor.governed(server="ops")
+        def issue_refund(order_id: str, amount_cents: int) -> str:
+            applied.append(order_id)
+            return "refunded"
+
+        with pytest.raises(RefusalError) as refused:
+            issue_refund("ORD-1", 500)
+        first_request = refused.value.document["request-hash"]
+        _approve(governor, first_request)
+        assert issue_refund("ORD-1", 500) == "refunded"
+
+        with pytest.raises(RefusalError) as second:
+            issue_refund("ORD-1", 500)
+
+    assert second.value.document["result"] == "parked"
+    assert second.value.document["request-hash"] != first_request
+    assert applied == ["ORD-1"], "the second call ran on the first call's authority"
+    consumed = governor._gateway.store.parked(first_request)
+    assert consumed.consumed_at is not None
+    assert governor._gateway.store.gate_seen(first_request) is True
+
+
+def test_a_decision_signed_for_another_request_authorizes_nothing(governor: Any) -> None:
+    """Transplanting a genuine signature onto a second identical call.
+
+    The approver's signature is over one request hash, so pairing it with the request the second
+    call parked is refused at §06 §2 step (2) — before the mandate walk, before anything forwards.
+    An attacker with the previous approval in hand and full control of the local store still cannot
+    make this call proceed, which is what "the authority is in the call" has to mean.
+    """
+    applied: list[str] = []
+
+    with governor:
+
+        @governor.governed(server="ops")
+        def issue_refund(order_id: str, amount_cents: int) -> str:
+            applied.append(order_id)
+            return "refunded"
+
+        with pytest.raises(RefusalError) as refused:
+            issue_refund("ORD-1", 500)
+        stolen = _approve(governor, refused.value.document["request-hash"])
+        assert issue_refund("ORD-1", 500) == "refunded"
+
+        with pytest.raises(RefusalError) as parked_again:
+            issue_refund("ORD-1", 500)
+        # The real signature, against the request the *second* park created.
+        governor._gateway.store.record_decision(
+            parked_again.value.document["request-hash"], stolen, None
+        )
+
+        with pytest.raises(RefusalError) as replayed:
+            issue_refund("ORD-1", 500)
+
+    assert replayed.value.document["result"] == "blocked"
+    assert replayed.value.document["reason-code"] == "gate-authorization-request-hash-mismatch"
+    assert applied == ["ORD-1"]
+
+
+def test_an_open_session_is_an_identity_and_not_a_standing_permission(governor: Any) -> None:
+    """The mandate is walked on every call, at the time of that call.
+
+    A session that authenticated an hour ago and whose mandate has since expired is refused mid-
+    block, with the function already decorated and the session still open. Nothing was cached at
+    `open()` beyond the subject, the derived key and the mandate document itself — the verdict is
+    recomputed, so the mandate is a credential presented per call rather than a door held open.
+    """
+    ran: list[str] = []
+
+    with governor:
+
+        @governor.governed(server="ops", tool="tail_logs")
+        def tail_logs(service: str) -> str:
+            ran.append(service)
+            return f"logs for {service}"
+
+        assert tail_logs("checkout") == "logs for checkout"
+        # The fixture's mandate runs for a day; the deployment's clock moves past it. ADR-0023: an
+        # advance expires a mandate, it never resurrects one.
+        governor._gateway.enforcer._clock = clock_module.AdvancedClock("P2D")
+
+        with pytest.raises(RefusalError) as refused:
+            tail_logs("checkout")
+
+    assert refused.value.document["result"] == "blocked"
+    assert refused.value.document["reason-code"].startswith("mandate")
+    assert ran == ["checkout"], "a call ran under an expired mandate because the session was open"
+
+
+def test_reads_fold_into_one_aggregate_that_only_the_flush_puts_in_the_chain(governor: Any) -> None:
+    """§10 §5 on this path too — and the exact record an unflushed process loses.
+
+    Three `read` calls produce no per-call envelope; they live in an in-memory window keyed by
+    (stream, subject-key, mandate-ref, policy-version). Only `close()` — which the context manager
+    makes unforgettable — seals them into one `aggregate`. A process that exits without it keeps
+    every effect envelope it wrote and loses every read since the last window boundary.
+    """
+    with governor:
+
+        @governor.governed(server="ops", tool="tail_logs")
+        def tail_logs(service: str) -> str:
+            return f"logs for {service}"
+
+        for service in ("checkout", "billing", "search"):
+            tail_logs(service)
+
+        in_flight = _chain(governor)
+        # `gateway.session_open` is an effect of its own (§10 §1.6); the reads are not in here.
+        assert [envelope["execution"]["action"] for envelope in in_flight if envelope["kind"] == "effect"] == [
+            "gateway.session_open"
+        ]
+        assert [envelope for envelope in in_flight if envelope["kind"] == "aggregate"] == []
+
+    aggregates = [envelope for envelope in _chain(governor) if envelope["kind"] == "aggregate"]
+    assert len(aggregates) == 1
+    assert aggregates[0]["classification"] == "read"
+    assert aggregates[0]["counts"] == {"total": 3, "by-action": {"ops.tail_logs": 3}}
+    assert {envelope["kind"] for envelope in _chain(governor)} == {"mandate", "effect", "aggregate"}
 
 
 def test_importing_the_package_does_not_import_the_runtime() -> None:
