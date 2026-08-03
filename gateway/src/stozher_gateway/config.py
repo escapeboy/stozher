@@ -215,10 +215,20 @@ class GatewaySection(BaseModel):
 
     model_config = _FORBID_EXTRA
 
+    #: Enforcement mode. **Both** entry points honour it, and they honour it differently on purpose:
+    #: the MCP plugin registers nothing (a Harbormaster with the distribution installed but
+    #: enforcement off is exactly vanilla Harbormaster), while `Governor` **refuses to be built**.
+    #: There is no third reading in which a `Governor` runs with the flag false, because the only
+    #: other thing it could mean is "call the decorated functions ungoverned" — a gate you turn off
+    #: by editing a config key, which is the one behaviour this product must not have.
     enabled: bool = False
     device: str = Field(default="local", pattern=r"^[A-Za-z0-9._-]{1,64}$")
     component: str = "gateway"
     state_db: Path | None = None
+    #: A root-signed policy bundle to seed the local caches from at startup, for a component that
+    #: has never reached a kernel (`bundle.py`). Verified against `org.roots` before it is trusted,
+    #: and an expired one refuses to start.
+    policy_bundle: Path | None = None
     #: stdio spawns one process per client connection, so long-lived downstream sessions would
     #: duplicate per session and leak threads. Opt in explicitly, the way `bridge_in_stdio` does.
     persist_downstream_in_stdio: bool = False
@@ -289,6 +299,17 @@ class GatewayConfig(BaseModel):
         if self.gateway.state_db is not None:
             return self.gateway.state_db
         return Path.home() / ".stozher" / "gateway.db"
+
+    def policy_bundle_path(self) -> Path | None:
+        """The bundle to bootstrap from. `STOZHER_GATEWAY_BUNDLE` overrides the file.
+
+        Same precedence as `state_db_path`, because a CI container sets an environment variable and
+        does not edit a checked-in configuration file.
+        """
+        override = os.environ.get("STOZHER_GATEWAY_BUNDLE")
+        if override:
+            return Path(override)
+        return self.gateway.policy_bundle
 
     def caller(self, name: str) -> CallerConfig | None:
         return next((caller for caller in self.callers if caller.name == name), None)

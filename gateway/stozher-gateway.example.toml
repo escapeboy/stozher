@@ -4,7 +4,17 @@
 # referenced by the *name* of the environment variable that holds them, never inlined.
 
 [gateway]
+# Honoured by both entry points, and differently on purpose. The MCP plugin registers nothing when
+# this is false, so a Harbormaster with the distribution installed is exactly vanilla Harbormaster.
+# A `Governor` refuses to be built: on that path the only other reading of "off" is "call the
+# decorated functions ungoverned", which is a gate you disable by editing a config key.
 enabled = true
+# A root-signed policy bundle to bootstrap from when this machine has never reached the kernel — a
+# CI container, an air-gapped install. Produced offline by `stozher-kernel policy export-bundle`;
+# verified against [[org.roots]] before a byte of it is cached. Its `max-age` is inside the
+# signature, and an expired bundle makes the gateway refuse to start rather than warn.
+# STOZHER_GATEWAY_BUNDLE overrides this. See gateway/README.md, "Running an agent suite in CI".
+# policy_bundle = "ci/policy-bundle.json"
 # Names this machine. It appears in the subject identifier and in the stream name, so one
 # (caller, device) pair owns exactly one append-only stream (spec 04 section 1).
 device = "ivan-mbp"

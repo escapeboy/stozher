@@ -128,7 +128,15 @@ def _config(config: GatewayConfig, action: str) -> int:
         return 0
     findings: list[str] = []
     if not config.gateway.enabled:
-        findings.append("gateway.enabled is false — enforcement mode will not start")
+        findings.append(
+            "gateway.enabled is false — the MCP plugin will register nothing, and a Governor built "
+            "from this file refuses to start rather than running its functions ungoverned"
+        )
+    bundle = config.policy_bundle_path()
+    if bundle is not None and not bundle.is_file():
+        # Naming a bundle is a declaration that this deployment may have to enforce with no kernel.
+        # The gateway refuses to start on a missing one; saying so here is the point of this command.
+        findings.append(f"gateway.policy_bundle {bundle} is missing — the gateway will not start")
     if not crypto.available():
         findings.append("the crypto extra is missing: pip install 'stozher-gateway[crypto]'")
     seed = config.identity.resolve()

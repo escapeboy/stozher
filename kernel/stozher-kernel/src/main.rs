@@ -5,8 +5,8 @@
 //! generator would be a dependency in a product whose pitch is a minimal auditable surface
 //! (ADR-0003), and there is nothing here it would make clearer.
 //!
-//! Nine subcommands — `keygen`, `identity`, `token`, `genesis`, `grant`, `decide`, `revoke`,
-//! `policy-request`, `policy-sign` — open no socket, read no configuration and touch no database. They are the
+//! Ten subcommands — `keygen`, `identity`, `token`, `genesis`, `grant`, `decide`, `revoke`,
+//! `policy-request`, `policy-sign`, `policy export-bundle` — open no socket, read no configuration and touch no database. They are the
 //! operator's half of the install and of every authority decision after it, and they run on the
 //! operator's own machine so that a private seed never has to exist on the server.
 
@@ -76,6 +76,13 @@ usage:
                           write the policy in force out as a draft of <new>, signature stripped
   stozher-kernel policy-sign --document <path> --key <path> --out <path>
                           sign an edited draft with the organization policy key (role 4')
+  stozher-kernel policy export-bundle --policy <path> --key <path> --out <path>
+                          [--revocations <path>] [--anchor <path>] [--max-age <P7D>]
+                          [--role <n>] [--index <n>] [--config <path>]
+                          sign the policy, the revocation set and a checkpoint anchor into one
+                          bundle a component verifies and enforces with no kernel reachable
+                          (spec 05 section 7); --max-age is inside the signature, and a component
+                          whose bundle has expired refuses to start
   stozher-kernel policy-publish --url <base> --request <path> --document <path> --key <path>
                           [--stream <name>] [--role <n>] [--index <n>] [--token-env <VAR>]
                           [--config <path>]
@@ -106,10 +113,18 @@ usage:
 
 The kernel refuses to start if its seed file is readable by anyone but its owner (spec 09 section 8).
 
-`keygen`, `identity`, `token`, `genesis`, `grant`, `decide`, `revoke`, `policy-request` and
-`policy-sign` open no socket and read no configuration: they run in the operator's own process, on the operator's own
+`keygen`, `identity`, `token`, `genesis`, `grant`, `decide`, `revoke`, `policy-request`,
+`policy-sign` and `policy export-bundle` open no socket and read no configuration: they run in the operator's own process, on the operator's own
 machine, so a private seed never has to exist on the server. `genesis` prints two ordinary
 POST /v1/ingest bodies; nothing about them is privileged and every ingest check runs over them.
+
+`policy export-bundle` is how a component enforces before it has ever reached a kernel — a CI
+container, an air-gapped install, a laptop on a train. It is offline for the same reason `decide` is:
+the bundle carries no authority its contents do not already have, but it does say *this set, now,
+for this long*, and a freshness statement a server could manufacture would let a superseded policy
+and an empty revocation set be pinned onto a component for the whole of `--max-age`. The three
+inputs are files the operator already holds: `genesis`'s `policy-document.json` (or the last
+`policy-sign --out`), the revocations `revoke` printed, and `anchor --url ... > anchor.json`.
 
 Publishing a policy version after the install is six commands, and the split is the same one:
 `policy-draft` fetches the document in force to edit, `policy-sign` signs the edit with the
@@ -212,6 +227,16 @@ fn main() -> ExitCode {
         "submit-mandate" => submit_mandate(&arguments),
         "policy-draft" => policy_draft(&arguments),
         "policy-sign" => policy_sign(&arguments),
+        // The one two-token command, because it names a family rather than a step: everything else
+        // under `policy` today is one stage of the publishing ceremony, and an export is not.
+        "policy" => match arguments.get(1).map(String::as_str) {
+            Some("export-bundle") => policy_export_bundle(&arguments),
+            other => {
+                eprintln!("unknown policy subcommand {other:?} — did you mean export-bundle?\n");
+                print!("{USAGE}");
+                ExitCode::FAILURE
+            }
+        },
         "policy-publish" => policy_publish(&arguments),
         "root-request" => root_request(&arguments),
         "root-publish" => root_publish(&arguments),
@@ -1084,6 +1109,196 @@ fn policy_sign(arguments: &[String]) -> ExitCode {
             ExitCode::FAILURE
         }
     }
+}
+
+/// The bundle format this binary writes. An unknown version is refused by the reader, not guessed.
+const BUNDLE_VERSION: i64 = 1;
+
+/// How long a bundle may be enforced when the operator does not say. A week is short enough that a
+/// forgotten file stops working while somebody still remembers exporting it.
+const DEFAULT_BUNDLE_MAX_AGE: &str = "P7D";
+
+/// Read one JSON document, reporting the path with any refusal.
+fn read_json(path: &str) -> std::result::Result<serde_json::Value, String> {
+    let bytes = std::fs::read(path).map_err(|e| format!("reading {path}: {e}"))?;
+    serde_json::from_slice(&bytes).map_err(|e| format!("{path} is not JSON: {e}"))
+}
+
+/// Assemble the root-signed bundle a component bootstraps from with no kernel reachable.
+///
+/// The gap this closes is not offline *enforcement* — `spec/05 §7` is implemented and works from a
+/// cached policy. It is the call before that one: the only writer of a component's policy cache was
+/// a successful pull, so a container that had never reached a kernel had no verified policy at all
+/// and could not open a session. Enforcement that cannot start in CI is enforcement an integrator
+/// comments out.
+///
+/// Offline, and it opens no socket, which is the same split `decide`, `revoke` and `policy-sign`
+/// keep — and here it is load-bearing rather than tidy. The bundle grants no authority the documents
+/// inside it do not already carry: the policy is signed by the organization's policy key and each
+/// revocation by its revoker. What the root's signature adds is that **this set, at this instant,
+/// for this long** is the one to enforce. A server able to manufacture that could pin a component to
+/// a genuine but superseded policy and an empty revocation set for the whole of `--max-age`, which
+/// is precisely the attack versioning exists to stop. So the freshness authority must not live where
+/// the network does.
+///
+/// The three inputs are files the operator already holds: the signed policy document
+/// (`genesis`'s `policy-document.json`, or whatever `policy-sign --out` last wrote), the revocations
+/// `revoke` printed, and the checkpoint heads `anchor` fetched. Nothing is invented here — the
+/// command refuses to sign a policy without a verifying signature or a revocation set it cannot
+/// check, so a bundle that fails on a component fails first on the machine that made it.
+fn policy_export_bundle(arguments: &[String]) -> ExitCode {
+    let value = |name: &str| value(arguments, name);
+    let (Some(policy_path), Some(key_path), Some(out)) =
+        (value("--policy"), value("--key"), value("--out"))
+    else {
+        eprintln!(
+            "policy export-bundle requires --policy <path>, --key <path> and --out <path>\n\
+             optional: --revocations <path> --anchor <path> --max-age <P7D> --role <n> --index <n>"
+        );
+        return ExitCode::FAILURE;
+    };
+    let policy = match read_json(policy_path) {
+        Ok(policy) => policy,
+        Err(e) => {
+            eprintln!("{e}");
+            return ExitCode::FAILURE;
+        }
+    };
+    if policy["kind"] != "policy" {
+        eprintln!(
+            "{policy_path} is not a policy document (kind {})",
+            policy["kind"]
+        );
+        return ExitCode::FAILURE;
+    }
+    // Verified here as well as at the component, because the operator can act on the answer and a
+    // container cannot: a stripped draft that was never signed is the likeliest mistake, and it is
+    // one this command can name while the person who made it is still at the terminal.
+    if let Err(e) = stozher_core::signed::verify_signed_object(&policy) {
+        eprintln!("{policy_path} does not verify as a signed policy: {e}");
+        return ExitCode::FAILURE;
+    }
+    let revocations = match value("--revocations") {
+        None => Vec::new(),
+        Some(path) => match read_json(path).and_then(|document| revocation_set(path, &document)) {
+            Ok(revocations) => revocations,
+            Err(e) => {
+                eprintln!("{e}");
+                return ExitCode::FAILURE;
+            }
+        },
+    };
+    // `anchor` is always a member and is `null` when none was exported. "We anchored nothing" and
+    // "this bundle predates anchors" must not read the same at the component (§04 §4.7).
+    let anchor = match value("--anchor") {
+        None => serde_json::Value::Null,
+        Some(path) => match read_json(path) {
+            Ok(anchor) => anchor,
+            Err(e) => {
+                eprintln!("{e}");
+                return ExitCode::FAILURE;
+            }
+        },
+    };
+    let max_age = value("--max-age").unwrap_or(DEFAULT_BUNDLE_MAX_AGE);
+    match stozher_kernel::clock::parse_duration_seconds(max_age) {
+        Ok(seconds) if seconds > 0 => {}
+        Ok(_) => {
+            eprintln!("--max-age must be a positive duration; {max_age} expires on export");
+            return ExitCode::FAILURE;
+        }
+        Err(e) => {
+            eprintln!("--max-age {max_age}: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
+    // The deployment's clock when it declares an advance (ADR-0023), because this stamps
+    // `exported-at` and the component computes the expiry from it. A bundle stamped with real time
+    // for a kernel running ahead would be born expired.
+    let now = match offline_clock(arguments) {
+        Ok(clock) => clock.now(),
+        Err(e) => {
+            eprintln!("{e}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let expires_at = match stozher_kernel::clock::add_duration(&now, max_age) {
+        Ok(expires_at) => expires_at,
+        Err(e) => {
+            eprintln!("max-age {max_age} from {now}: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
+    // Role 0' — a human root, the key set a component enrols and checks a bundle against. Not the
+    // policy key: that one already signed the document inside, and a bundle it also signed would be
+    // vouched for by nobody but itself.
+    let key = match seed_key(arguments, key_path, 0) {
+        Ok(key) => key,
+        Err(e) => {
+            eprintln!("{e}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let mut body = serde_json::Map::new();
+    body.insert("v".to_owned(), stozher_core::VERSION.into());
+    body.insert("kind".to_owned(), "policy-bundle".into());
+    body.insert("bundle-version".to_owned(), BUNDLE_VERSION.into());
+    body.insert("exported-at".to_owned(), now.clone().into());
+    // Inside the signature, and that is the whole point of the member: how long this may be enforced
+    // is the root's declaration, not an argument to whoever holds the file afterwards.
+    body.insert("max-age".to_owned(), max_age.into());
+    body.insert("policy".to_owned(), policy.clone());
+    body.insert("revocations".to_owned(), revocations.clone().into());
+    body.insert("anchor".to_owned(), anchor);
+    match key
+        .sign(&serde_json::Value::Object(body))
+        .and_then(|signed| stozher_core::jcs::canonicalize(&signed))
+    {
+        Ok(canonical) => {
+            if let Err(e) = std::fs::write(out, format!("{canonical}\n")) {
+                eprintln!("writing {out}: {e}");
+                return ExitCode::FAILURE;
+            }
+            eprintln!(
+                "wrote {out} — policy {}, {} revocation(s), signed by {}",
+                policy["policy-version"],
+                revocations.len(),
+                key.id()
+            );
+            eprintln!("exported {now}, enforceable until {expires_at} (max-age {max_age})");
+            ExitCode::SUCCESS
+        }
+        Err(e) => {
+            eprintln!("signing: {e}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
+/// The revocations in `--revocations`, each checked, or why the file cannot be exported.
+///
+/// A JSON array of the objects `revoke` prints. Every one is verified here because the component
+/// refuses the **whole bundle** over a single bad entry — unlike the live feed, which drops one and
+/// keeps going. That asymmetry is deliberate at the component and it is why the check belongs here:
+/// a set a root signs is a set the root is vouching for, and the cheap place to discover it is wrong
+/// is the terminal it was assembled at.
+fn revocation_set(
+    path: &str,
+    document: &serde_json::Value,
+) -> std::result::Result<Vec<serde_json::Value>, String> {
+    let listed = document
+        .as_array()
+        .ok_or_else(|| format!("{path} must be a JSON array of revocation objects"))?;
+    for revocation in listed {
+        stozher_core::signed::verify_signed_object(revocation)
+            .map_err(|e| format!("{path} carries a revocation that does not verify: {e}"))?;
+        if !revocation["revokes"].is_string() || !revocation["revoked-at"].is_string() {
+            return Err(format!(
+                "{path} carries a revocation missing revokes/revoked-at"
+            ));
+        }
+    }
+    Ok(listed.clone())
 }
 
 /// Print the policy version currently in force, and nothing else.

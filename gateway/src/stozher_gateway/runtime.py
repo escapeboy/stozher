@@ -21,6 +21,7 @@ from . import clock as clock_module
 from . import crypto
 from .background import BackgroundLoop
 from .budget import BudgetFeed
+from .bundle import BundleError, load_policy_bundle
 from .canonical import sha256_hex
 from .classify import Classifier
 from .config import CallerConfig, GatewayConfig
@@ -151,6 +152,11 @@ class Gateway:
         # decided whether the gate could queue anything at all.
         self._clock = clock or clock_module.from_config(config)
         self.store = GatewayStore(config.state_db_path())
+        # Before anything can ask for a policy. A component that has never reached a kernel has no
+        # cached document and `PolicyProvider.current` would raise `policy-not-published` while the
+        # session was still being opened — so the bootstrap has to happen here, ahead of the
+        # provider that reads the cache, and not on the first call that misses.
+        self._bootstrap_from_bundle()
         self.kernel = KernelClient(
             config.kernel.url, config.kernel.token(), config.kernel.timeout_seconds
         )
@@ -219,6 +225,39 @@ class Gateway:
         )
         self.session: Session | None = None
         self._downstream: dict[str, Downstream] = {}
+
+    # -- bootstrap ---------------------------------------------------------------------------
+
+    def _bootstrap_from_bundle(self) -> None:
+        """Seed the policy and revocation caches from a root-signed bundle, or refuse to start.
+
+        Configured or not at all: a deployment that pulls from a live kernel names no bundle and
+        nothing happens here. A deployment that names one has said it may have to enforce before it
+        has ever spoken to a kernel, and every way that can go wrong is a refusal rather than a
+        degraded start — an unreadable file, a signature that does not verify, a signer nobody
+        enrolled, an expired `max-age`. `StartupRefusedError` is the same failure the gateway
+        already uses for an unreadable identity seed, and it means the same thing: failing to start
+        is a way of failing closed.
+
+        The seeding is unconditional when a bundle is named, including over a cache a previous run
+        filled. That is deliberate and bounded: the bundle is a document a root signed with a
+        declared lifetime, and the very next `PolicyProvider.current()` overwrites it from the
+        kernel whenever the kernel is reachable at all.
+        """
+        path = self.config.policy_bundle_path()
+        if path is None:
+            return
+        try:
+            version = load_policy_bundle(
+                path,
+                roots={root.key for root in self.config.org.roots},
+                policy_key=self.config.org.policy_key,
+                store=self.store,
+                clock=self._clock,
+            )
+        except BundleError as e:
+            raise StartupRefusedError(f"the policy bundle was refused — {e}") from e
+        logger.info("bootstrapped from %s: policy %s is in force offline", path, version)
 
     # -- identity ----------------------------------------------------------------------------
 
