@@ -153,6 +153,27 @@
       "role": "kernel",
       "count": 7,
       "description": "Root set changes (spec 03 section 6). Read the change out of `envelope` with `payloads`. The result MUST match `expected.valid`; on failure the code MUST equal `expected.error`; on success `expected.change` says whether it enrols or retires, `expected.key` is the key affected, and for an enrolment `expected.subject` is the human it MUST be recorded under. Who may make the change is not asked here — that needs the deployment's current root set."
+    },
+    {
+      "path": "sync-outcome.json",
+      "kind": "sync-outcome",
+      "role": "primitive",
+      "count": 16,
+      "description": "spec 05 section 7.1 — what a component may do when its last submission was `accepted`, `unreachable` or `refused`. Run the predicate over `input`; `expected.action` is `serve` or `refuse`, `expected.reason-code` is the code a refusal carries verbatim, and `expected.finding` is whether serving it must also be recorded as a finding. A `refused` submission is NOT the offline case: the offline map governs a kernel that cannot answer, never one that has answered no."
+    },
+    {
+      "path": "stream-status.json",
+      "kind": "stream-status",
+      "role": "kernel",
+      "count": 9,
+      "description": "spec 09 section 4.2 — the predicate behind the row a console renders for one stream. `refused` when the most recent thing that happened was a refusal, whatever the quiet interval says; `quiet` when nothing has been accepted within `quiet-after-seconds`; `healthy` otherwise. Which row an implementation draws is its own business; the predicate is not."
+    },
+    {
+      "path": "stream-recovery.json",
+      "kind": "stream-recovery",
+      "role": "kernel",
+      "count": 7,
+      "description": "spec 04 section 7.2 — resuming a stream wedged by a refusal. Read the resume out of `envelope` with `payloads`: the result MUST match `expected.valid`, on failure the code MUST equal `expected.error`, and on success `expected.stream`, `expected.resume-seq` and `expected.bridge-prev-hash` are the position authorized and the `object-hash` of the refused bytes that bridges it. Where `chain` is present, verifying it against `expected-first-prev` MUST succeed and return `expected.chain-head-hash` — the emitter's own chain, unrenumbered, continuing past a position that stays refused."
     }
   ]
 }

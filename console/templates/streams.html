@@ -3,13 +3,16 @@
 <h1>Streams</h1>
 <p class="lede">Effect streams and signal streams never mix (<code>spec/07 §2.5</code>). A stream
 that has gone quiet is a finding, not a null result (<code>spec/09 §4.2</code>): quiet here means
-nothing appended for longer than the policy's checkpoint interval ({{ quiet_after }}).</p>
+nothing appended for longer than the policy's checkpoint interval ({{ quiet_after }}).
+<strong>Quiet is the absence of evidence; refused is evidence.</strong> A stream whose most recent
+submission this kernel rejected is reported <code>refused</code> at once, with the reason — it does
+not wait out the quiet interval first, and it is not the same finding.</p>
 {% if rows.is_empty() %}
 <p class="empty">No stream has been written to.</p>
 {% else %}
 <table>
 <thead>
-<tr><th scope="col">stream</th><th scope="col">kind</th><th scope="col">head seq</th><th scope="col">head hash</th><th scope="col">first seen</th><th scope="col">last appended</th><th scope="col">silent for</th><th scope="col"></th></tr>
+<tr><th scope="col">stream</th><th scope="col">kind</th><th scope="col">head seq</th><th scope="col">head hash</th><th scope="col">first seen</th><th scope="col">last appended</th><th scope="col">silent for</th><th scope="col">status</th><th scope="col"></th></tr>
 </thead>
 <tbody>
 {% for s in rows %}
@@ -21,6 +24,7 @@ nothing appended for longer than the policy's checkpoint interval ({{ quiet_afte
 <td class="num">{{ s.first_seen_at }}</td>
 <td class="num">{{ s.last_appended_at }}</td>
 <td class="{% if s.quiet %}quiet{% endif %}">{{ s.silent_for }}</td>
+<td class="{% if s.refused %}prohibited{% else if s.quiet %}quiet{% else %}ok{% endif %}">{{ s.status }}{% if s.refused %} — {{ s.refusal_reason }}{% endif %}</td>
 <td><a href="/console/streams/{{ s.stream }}/verify">verify chain</a></td>
 </tr>
 {% endfor %}

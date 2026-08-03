@@ -19,6 +19,7 @@ __all__ = [
     "from_config",
     "now",
     "parse_duration",
+    "seconds_between",
     "shift",
 ]
 
@@ -42,10 +43,16 @@ def now() -> str:
 
 def shift(timestamp: str, seconds: float) -> str:
     """`timestamp` moved by `seconds`, in the same spelling."""
-    moment = dt.datetime.strptime(timestamp, "%Y-%m-%dT%H:%M:%S.%fZ").replace(
-        tzinfo=dt.UTC
-    )
-    return _format(moment + dt.timedelta(seconds=seconds))
+    return _format(_parse(timestamp) + dt.timedelta(seconds=seconds))
+
+
+def _parse(timestamp: str) -> dt.datetime:
+    return dt.datetime.strptime(timestamp, "%Y-%m-%dT%H:%M:%S.%fZ").replace(tzinfo=dt.UTC)
+
+
+def seconds_between(earlier: str, later: str) -> float:
+    """Seconds from `earlier` to `later`, negative if they are the other way round."""
+    return (_parse(later) - _parse(earlier)).total_seconds()
 
 
 def parse_duration(duration: str) -> float:

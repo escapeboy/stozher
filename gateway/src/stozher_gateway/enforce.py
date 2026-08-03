@@ -30,6 +30,7 @@ from typing import Any, NamedTuple
 
 from . import budget as budget_module
 from . import clock as clock_module
+from . import sync as sync_module
 from .canonical import CanonicalizationError, canonicalize, object_hash, sha256_hex
 from .classify import TIER_MANIFEST, Classification, Classifier
 from .config import GatewayConfig
@@ -214,6 +215,10 @@ class Enforcer:
                 envelope_id=envelope_id,
             )
 
+        # §05 §7.1, and it comes before the mandate walk on purpose: what the kernel refused may be
+        # the very grant this walk would accept. The walk resolves against the roots in this
+        # component's own configuration, which is exactly the resolver §10 §1.4 did not name.
+        self._require_not_wedged(session, call, classification, target, args_hash, policy)
         self._require_mandate(
             session, call, classification, target, args_hash, policy, revocations
         )
@@ -501,6 +506,69 @@ class Enforcer:
                 classification_tier=classification.tier,
                 envelope_id=envelope_id,
             ) from e
+
+    def _require_not_wedged(
+        self,
+        session: Session,
+        call: Call,
+        classification: Classification,
+        target: str,
+        args_hash: str,
+        policy: Policy,
+    ) -> None:
+        """§05 §7.1 — the kernel has answered "no", and the caller is owed that answer.
+
+        This is the step that did not exist. A component whose envelopes the kernel was refusing
+        went on serving, went on returning upstream results, and told nobody: to `spec/` a refused
+        emitter was merely a late one, so every MUST that fired in the state landed on the kernel,
+        which discharged all of them. An evaluation served a week of tool calls into a kernel that
+        accepted none of them and was conformant.
+
+        The refusal carries the kernel's reason code **verbatim**. A gateway paraphrase would put
+        the component's opinion where the organization's answer belongs, and the operator resuming
+        the stream (§04 §7.2) has to cite that code.
+        """
+        wedge = self._store.wedge(session.stream)
+        if wedge is None:
+            return
+        decision = sync_module.decide(
+            outcome=sync_module.REFUSED,
+            reason_code=wedge.reason_code,
+            classification=classification.classification,
+            elapsed_seconds=clock_module.seconds_between(
+                wedge.first_refused_at, self._clock.now()
+            ),
+            offline=policy.offline_for(classification.classification),
+            wedge_grace_seconds=policy.wedge_grace_seconds(),
+        )
+        if decision.action == "serve":
+            # Loud, counted, and answerable from this component without reaching the kernel it
+            # cannot reach. Silence here is what the grace window would otherwise buy.
+            served = self._store.note_grace_use(session.stream)
+            logger.error(
+                "stream %s is wedged (%s since %s) and this %s call is being served under the "
+                "grace window: %d effect(s) so far whose records the kernel has not accepted",
+                session.stream,
+                wedge.reason_code,
+                wedge.first_refused_at,
+                classification.classification,
+                served,
+            )
+            return
+        envelope_id = self._emit_effect(
+            session, call, classification, target, args_hash, "blocked", policy
+        )
+        assert decision.reason_code is not None
+        raise refusal(
+            "blocked",
+            decision.reason_code,
+            f"the kernel refused this stream at seq {wedge.seq} ({wedge.detail}); nothing this "
+            "component emits is reaching the audit, so it is not acting",
+            action=classification.action,
+            classification=classification.classification,
+            classification_tier=classification.tier,
+            envelope_id=envelope_id,
+        )
 
     def _require_budget(
         self,

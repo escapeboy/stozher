@@ -201,9 +201,164 @@ fn every_gate_arguments_vector_matches_this_implementation() {
 }
 
 fn root_change_corpus() -> Value {
-    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../spec/vectors/root-change.json");
+    corpus_file("root-change.json")
+}
+
+fn corpus_file(name: &str) -> Value {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../spec/vectors")
+        .join(name);
     let text = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("reading the corpus: {e}"));
     serde_json::from_str(&text).unwrap_or_else(|e| panic!("parsing the corpus: {e}"))
+}
+
+/// §09 §4.2 — the predicate behind the row a console renders for one stream.
+///
+/// The row itself is this implementation's business; which of the three states it is in is not. The
+/// state that did not exist until this file did is `refused`: the kernel knew *at the moment of the
+/// refusals* that it was rejecting an emitter, and the surface that exists to answer "is anything
+/// wrong with this stream" reported the same row it had reported the day before, and would keep
+/// reporting until the quiet interval elapsed. Seven days, in the incident.
+#[test]
+fn every_stream_status_vector_matches_this_implementation() {
+    use stozher_core::sync::stream_status;
+
+    let corpus = corpus_file("stream-status.json");
+    let vectors = corpus["vectors"].as_array().expect("vectors");
+    assert!(
+        vectors.len() >= 8,
+        "the corpus shrank to {} vectors",
+        vectors.len()
+    );
+
+    let mut failures: Vec<String> = Vec::new();
+    for vector in vectors {
+        let name = vector["name"].as_str().unwrap_or("?");
+        let input = &vector["input"];
+        let accepted = input["last-accepted-at"].as_str();
+        let now = input["now"].as_str().expect("now");
+        // The console computes the silence from the same two timestamps, through the same helper it
+        // uses for every other age on the page; the corpus states the seconds so a harness whose
+        // arithmetic differs fails here rather than in a row nobody reads.
+        let silent = accepted.map(|at| seconds_between(at, now));
+        let status = stream_status(
+            accepted,
+            input["last-refused-at"].as_str(),
+            silent,
+            input["quiet-after-seconds"].as_i64().unwrap_or(3600),
+        );
+        let expected = &vector["expected"];
+        if expected["status"].as_str() != Some(status.as_str()) {
+            failures.push(format!(
+                "{name}: read as {}, the corpus says {}",
+                status.as_str(),
+                expected["status"]
+            ));
+        }
+    }
+    assert!(
+        failures.is_empty(),
+        "{} stream-status vectors disagree with this implementation:\n  {}",
+        failures.len(),
+        failures.join("\n  ")
+    );
+}
+
+/// Whole seconds between two RFC 3339 UTC timestamps of §01 §2.3.
+fn seconds_between(earlier: &str, later: &str) -> i64 {
+    let parse = |stamp: &str| {
+        let day: i64 = stamp[8..10].parse().unwrap_or(0);
+        let hour: i64 = stamp[11..13].parse().unwrap_or(0);
+        let minute: i64 = stamp[14..16].parse().unwrap_or(0);
+        let second: i64 = stamp[17..19].parse().unwrap_or(0);
+        ((day * 24 + hour) * 60 + minute) * 60 + second
+    };
+    parse(later) - parse(earlier)
+}
+
+/// §04 §7.2 — the operator act that un-wedges a refused stream, read out of its envelope.
+///
+/// Who may make it is not asked here: §05 §5.6 puts `kernel.resume_stream` among the actions no
+/// policy may permit without an enrolled human root's signature, and `tests/def2_mandate_swap.rs`
+/// drives that path end to end, including the negative. What this file binds is the half a third
+/// implementation could get wrong silently — which position is being bridged, and by which hash.
+#[test]
+fn every_stream_recovery_vector_matches_this_implementation() {
+    use stozher_core::chain::verify_chain;
+    use stozher_kernel::ingest::stream_resume;
+
+    let corpus = corpus_file("stream-recovery.json");
+    let vectors = corpus["vectors"].as_array().expect("vectors");
+    assert!(
+        vectors.len() >= 7,
+        "the corpus shrank to {} vectors",
+        vectors.len()
+    );
+
+    let mut failures: Vec<String> = Vec::new();
+    let mut chains_verified = 0usize;
+    for vector in vectors {
+        let name = vector["name"].as_str().unwrap_or("?");
+        let expected = &vector["expected"];
+        let payloads: Vec<Value> = vector["payloads"].as_array().cloned().unwrap_or_default();
+        match stream_resume(&vector["envelope"], &payloads) {
+            Ok(_) if expected["valid"].as_bool() != Some(true) => failures.push(format!(
+                "{name}: read as a resume, the corpus says {}",
+                expected["error"]
+            )),
+            Ok(resume) => {
+                if expected["stream"].as_str() != Some(resume.stream.as_str()) {
+                    failures.push(format!("{name}: resumes {}", resume.stream));
+                }
+                if expected["resume-seq"].as_u64() != Some(resume.resume_seq) {
+                    failures.push(format!("{name}: at seq {}", resume.resume_seq));
+                }
+                if expected["bridge-prev-hash"].as_str() != Some(resume.bridge_hash.as_str()) {
+                    failures.push(format!("{name}: bridges {}", resume.bridge_hash));
+                }
+                // The emitter's own chain, continuing past a position that stays refused: seq is
+                // not renumbered and the first `prev-hash` is the hash of the refused bytes.
+                if let Some(records) = vector["chain"].as_array() {
+                    let anchor = vector["expected-first-prev"].as_str();
+                    match verify_chain(records, records[0]["stream"].as_str().unwrap_or(""), anchor)
+                    {
+                        Ok(result) => {
+                            chains_verified += 1;
+                            if expected["chain-head-hash"].as_str()
+                                != Some(result.head_hash.as_str())
+                            {
+                                failures.push(format!("{name}: head {}", result.head_hash));
+                            }
+                            if expected["chain-anchored"].as_bool() != Some(result.anchored) {
+                                failures.push(format!("{name}: anchored {}", result.anchored));
+                            }
+                        }
+                        Err(e) => failures.push(format!(
+                            "{name}: the post-recovery chain does not verify: {}",
+                            e.code()
+                        )),
+                    }
+                }
+            }
+            Err(e) if expected["error"].as_str() == Some(e.code()) => {}
+            Err(e) => failures.push(format!(
+                "{name}: refused {}, the corpus says {}",
+                e.code(),
+                expected["error"]
+            )),
+        }
+    }
+    assert!(
+        chains_verified > 0,
+        "no stream-recovery vector carried a post-recovery chain; the corpus lost the assertion \
+         that a resumed stream still verifies"
+    );
+    assert!(
+        failures.is_empty(),
+        "{} stream-recovery vectors disagree with this implementation:\n  {}",
+        failures.len(),
+        failures.join("\n  ")
+    );
 }
 
 /// §03 §6 — what a root change says, separated from who may make it.

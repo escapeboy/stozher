@@ -42,7 +42,7 @@ const SCHEMA: &str = include_str!("sql/schema.sql");
 const APPEND_ONLY_SQLITE: &str = include_str!("sql/append_only.sqlite.sql");
 
 /// The schema version this build writes and expects.
-pub const SCHEMA_VERSION: u32 = 6;
+pub const SCHEMA_VERSION: u32 = 7;
 
 /// One forward-only step. There is no `down`: a downgrade would have to discard rows, and the rows
 /// in question are an audit trail.
@@ -235,6 +235,54 @@ pub const MIGRATIONS: &[Migration] = &[
                     SELECT RAISE(ABORT, 'the arguments an approver read are immutable: an edited argument list is not the one they were shown');
                 END;"],
     },
+    Migration {
+        to_version: 7,
+        name: "resuming a stream wedged by a refusal (§04 §7.2)",
+        // A fold, and therefore in `REBUILDABLE_TABLES`: every row here is derivable from the
+        // `kernel.resume_stream` envelope that authorized it and the payload that envelope's
+        // `args-hash` commits to. Nothing is decided here — the authority is the root's signature on
+        // the envelope, which `append` never sees and this table never stands in for. What it holds
+        // is the *lookup* the chain-position check needs, so that bridging a gap costs one indexed
+        // read rather than a scan of `kernel:core` on every append.
+        //
+        // The trigger of step 4 is re-created rather than added to, because SQLite has no way to
+        // amend one. The predicate it enforced — "an insert must name the row at seq - 1 as
+        // prev_hash" — gains exactly one alternative, and that alternative is a row this table holds
+        // only because a `kernel.resume_stream` envelope was appended, which `Ingest` puts through
+        // the root-approval path like a policy change. The guard below is the same one step 5 put on
+        // `manifests` and `gate_decisions`: a resume must name an envelope this store holds, so the
+        // exemption cannot be conjured by writing one row into a projection.
+        sql: &["CREATE TABLE IF NOT EXISTS stream_resumes (
+                    stream        TEXT    NOT NULL,
+                    resume_seq    INTEGER NOT NULL,
+                    bridge_hash   TEXT    NOT NULL,
+                    reason_code   TEXT    NOT NULL,
+                    envelope_id   TEXT    NOT NULL,
+                    authorized_at TEXT    NOT NULL,
+                    PRIMARY KEY (stream, resume_seq)
+                );
+                CREATE TRIGGER IF NOT EXISTS stream_resumes_insert_needs_its_envelope
+                BEFORE INSERT ON stream_resumes
+                BEGIN
+                    SELECT RAISE(ABORT, 'a stream resume must name an envelope this store holds')
+                    WHERE NOT EXISTS (SELECT 1 FROM envelopes WHERE id = NEW.envelope_id);
+                END;
+                DROP TRIGGER IF EXISTS envelopes_insert_must_extend_the_chain;
+                CREATE TRIGGER envelopes_insert_must_extend_the_chain
+                BEFORE INSERT ON envelopes
+                WHEN NEW.seq > 0
+                BEGIN
+                    SELECT RAISE(ABORT, 'envelopes are append-only: an insert must extend its stream, naming the row at seq - 1 as prev_hash')
+                    WHERE NOT EXISTS (
+                        SELECT 1 FROM envelopes
+                        WHERE stream = NEW.stream AND seq = NEW.seq - 1 AND id = NEW.prev_hash
+                    ) AND NOT EXISTS (
+                        SELECT 1 FROM stream_resumes
+                        WHERE stream = NEW.stream AND resume_seq = NEW.seq - 1
+                          AND bridge_hash = NEW.prev_hash
+                    );
+                END;"],
+    },
 ];
 
 /// Tables whose rows are chained, or are signed attestations about a chain, or record a human
@@ -254,8 +302,12 @@ pub const CHAIN_BEARING_TABLES: [&str; 9] = [
 
 /// Folds of the envelope stream (§02 §8). Nothing here is a source of truth, so a migration may
 /// drop and recompute any of them.
-pub const REBUILDABLE_TABLES: [&str; 7] = [
+pub const REBUILDABLE_TABLES: [&str; 8] = [
     "streams",
+    // The gap positions an operator authorized the kernel to bridge (§04 §7.2). Derivable from the
+    // `kernel.resume_stream` envelopes and their payloads; it decides nothing that the root's
+    // signature on those envelopes has not already decided.
+    "stream_resumes",
     "roots",
     "mandates",
     "revocations",

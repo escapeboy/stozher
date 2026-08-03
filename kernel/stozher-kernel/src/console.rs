@@ -186,6 +186,7 @@ pub struct Row {
 }
 
 /// One stream, with the quiet-stream finding already computed.
+#[derive(Clone)]
 pub struct StreamRow {
     /// Stream name.
     pub stream: String,
@@ -203,6 +204,13 @@ pub struct StreamRow {
     pub silent_for: String,
     /// Whether that silence is long enough to be a finding.
     pub quiet: bool,
+    /// `healthy` | `quiet` | `refused` (§09 §4.2).
+    pub status: String,
+    /// Whether the most recent submission on this stream was rejected. **Not** the same finding as
+    /// `quiet`, and it fires immediately rather than after the quiet interval.
+    pub refused: bool,
+    /// The reason code the kernel gave, when `refused`.
+    pub refusal_reason: String,
 }
 
 /// One mandate in the registry.
@@ -419,10 +427,12 @@ struct OverviewPage {
     pending: String,
     rejections: String,
     quiet_count: String,
+    refused_count: String,
     quiet_after: String,
     rows: Vec<Row>,
     expiring: Vec<MandateRow>,
     quiet: Vec<StreamRow>,
+    refused: Vec<StreamRow>,
 }
 
 /// The export as a document a person reads, rather than a file a verifier parses.
@@ -629,11 +639,20 @@ async fn overview(State(kernel): State<Arc<Kernel>>, headers: HeaderMap) -> Resp
         Ok(rows) => rows,
         Err(e) => return unavailable(&e),
     };
-    let quiet: Vec<StreamRow> = stream_rows
+    let rows_by_status: Vec<StreamRow> = stream_rows
         .iter()
         .map(|s| stream_row(s, &now, quiet_after))
-        .filter(|s| s.quiet)
         .collect();
+    // Refused first, and above the quiet list rather than inside it. They were the same list until
+    // §09 §4.2 gained its third requirement, which meant a stream the kernel was actively rejecting
+    // reached this page only once it had *also* been silent for the checkpoint interval — the weaker
+    // fact, an hour later, in a row that said nothing about a refusal.
+    let refused: Vec<StreamRow> = rows_by_status
+        .iter()
+        .filter(|s| s.refused)
+        .cloned()
+        .collect();
+    let quiet: Vec<StreamRow> = rows_by_status.into_iter().filter(|s| s.quiet).collect();
 
     render(&OverviewPage {
         title: "Overview",
@@ -648,6 +667,8 @@ async fn overview(State(kernel): State<Arc<Kernel>>, headers: HeaderMap) -> Resp
         pending: counts.pending.to_string(),
         rejections: counts.rejections.to_string(),
         quiet_count: quiet.len().to_string(),
+        refused_count: refused.len().to_string(),
+        refused,
         quiet_after: humanize(quiet_after),
         rows: attempt_rows.iter().map(row).collect(),
         expiring: registry
@@ -1689,6 +1710,15 @@ async fn human_root_of(store: &Store, mandate_ref: &str) -> String {
 fn stream_row(record: &Value, now: &str, quiet_after: i64) -> StreamRow {
     let last = text(&record["last-appended-at"]);
     let silent = age_seconds(&last, now);
+    // The predicate is `stozher_core::sync`'s, not this function's: the same one
+    // `spec/vectors/stream-status.json` asks of every implementation. What a console renders is its
+    // own business; what counts as refused is not.
+    let status = stozher_core::sync::stream_status(
+        record["last-appended-at"].as_str(),
+        record["last-refused-at"].as_str(),
+        silent,
+        quiet_after,
+    );
     StreamRow {
         stream: text(&record["stream"]),
         stream_kind: text(&record["stream-kind"]),
@@ -1697,7 +1727,10 @@ fn stream_row(record: &Value, now: &str, quiet_after: i64) -> StreamRow {
         first_seen_at: text(&record["first-seen-at"]),
         last_appended_at: last,
         silent_for: silent.map(humanize).unwrap_or_else(|| "—".to_owned()),
-        quiet: silent.is_some_and(|seconds| seconds > quiet_after),
+        quiet: status == stozher_core::sync::StreamStatus::Quiet,
+        status: status.as_str().to_owned(),
+        refused: status == stozher_core::sync::StreamStatus::Refused,
+        refusal_reason: text(&record["last-refusal-reason"]),
     }
 }
 

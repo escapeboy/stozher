@@ -11,8 +11,10 @@ from __future__ import annotations
 
 from typing import Any, NamedTuple
 
+from . import clock as clock_module
 from .envelope import CLASSES
 from .signing import verify_signed_object
+from .sync import WEDGE_GRACE_DEFAULT_SECONDS
 
 __all__ = ["Decision", "Policy", "PolicyError", "class_weight"]
 
@@ -196,6 +198,22 @@ class Policy:
     def offline_for(self, classification: str) -> str:
         """`allow` | `block` | `degrade` — never "proceed silently" (§05 §7)."""
         return str(self.document.get("offline", {}).get(classification, "block"))
+
+    def wedge_grace_seconds(self) -> float:
+        """`policy.wedge-grace` in seconds (§05 §7.1), the one OPTIONAL member of §05 §1.
+
+        Absent means the default, never means unbounded: a document that says nothing about the
+        window still gets one. A malformed value is treated as absent rather than as a refusal to
+        run — the enforcing decision that depends on it is already the strict one, and a component
+        that would not start could not tell anyone why.
+        """
+        declared = self.document.get("wedge-grace")
+        if not isinstance(declared, str):
+            return WEDGE_GRACE_DEFAULT_SECONDS
+        try:
+            return clock_module.parse_duration(declared)
+        except ValueError:
+            return WEDGE_GRACE_DEFAULT_SECONDS
 
     def max_delegation_depth(self) -> int:
         return int(self.document.get("delegation", {}).get("max-depth", 3))

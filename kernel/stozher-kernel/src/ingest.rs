@@ -45,7 +45,7 @@ use crate::manifest::Manifest;
 use crate::policy::{ClassifyInput, Decision, Policy, class_weight};
 use crate::store::{
     AppendPlan, Appended, CheckpointRow, GateDecisionRow, GateUse, PayloadRow, Projections,
-    RejectionInput, RejectionRecord, STREAM_KIND_EFFECT, STREAM_KIND_SIGNAL, Store,
+    RejectionInput, RejectionRecord, STREAM_KIND_EFFECT, STREAM_KIND_SIGNAL, Store, StreamResume,
 };
 
 /// Envelope kinds that carry authority and therefore a mandate (§02 §2).
@@ -61,12 +61,17 @@ const EFFECT_KINDS: [&str; 3] = ["effect", "policy-change", "aggregate"];
 /// applied envelope claiming one — so the root who approves the *registration* is approving on the
 /// strength of a claim whose only property was that it existed. Whoever could emit the run decided
 /// what the root was agreeing to. The claim now costs what the thing it unlocks costs.
-const ROOT_APPROVED_ACTIONS: [&str; 5] = [
+/// `kernel.resume_stream` is here because it is the exit from a wedge (§04 §7.2), and an exit
+/// without a signature is not a gate. It is also the only act in this system that changes what
+/// [`crate::store::Store::append`] will accept at a chain position, which puts it in the same class
+/// as publishing policy: an organization may classify it higher, never lower.
+const ROOT_APPROVED_ACTIONS: [&str; 6] = [
     "kernel.publish_policy",
     "kernel.register_component",
     "kernel.enroll_root",
     "kernel.retire_root",
     "kernel.conformance_run",
+    "kernel.resume_stream",
 ];
 
 /// The result of a submission.
@@ -780,6 +785,12 @@ impl Ingest {
             }
             Some("kernel.enroll_root" | "kernel.retire_root") => {
                 self.validate_root_change(env, payloads, roots, subject_key, plan)?;
+            }
+            Some("kernel.resume_stream") => {
+                // The position it names must be one this store actually refused; that check needs
+                // the transaction and lives in `write_projections`, so what is decided here is the
+                // document's shape and its binding to the signature.
+                plan.projections.stream_resume = Some(stream_resume(env, payloads)?);
             }
             _ => {}
         }
@@ -1711,6 +1722,105 @@ pub fn root_change(env: &Value, payloads: &[Value]) -> Result<RootChange> {
     } else {
         Ok(RootChange::Retire { key })
     }
+}
+
+/// Read a stream resume out of its envelope — `spec/04 §7.2`, everything except *who may make it*.
+///
+/// Split out for the same reason [`root_change`] is: who may resume a stream needs the deployment's
+/// root set, and §05 §5.6 answers it the same way it answers a policy change. What is left is a pure
+/// function of the envelope and the payload its `args-hash` commits to, which is what
+/// `spec/vectors/stream-recovery.json` can ask of any implementation.
+///
+/// Nothing here validates the refused bytes, and nothing here fills the refused position. A resume
+/// is an operator saying *"this stream may continue"*, never *"that envelope was fine after all"*
+/// (§04 §7.2 rule 4).
+///
+/// # Errors
+///
+/// [`codes::STREAM_RESUME_UNBOUND`], [`codes::STREAM_RESUME_MALFORMED`], or `schema-missing-member`.
+pub fn stream_resume(env: &Value, payloads: &[Value]) -> Result<StreamResume> {
+    let target = env["execution"]["target"].as_str().unwrap_or_default();
+    let named = target.strip_prefix("stream:").ok_or_else(|| {
+        Error::new(
+            codes::STREAM_RESUME_MALFORMED,
+            format!("execution.target {target:?} must be stream:<stream>"),
+        )
+    })?;
+    let args_hash = env["execution"]["args-hash"]
+        .as_str()
+        .ok_or_else(|| Error::new("schema-missing-member", "execution.args-hash"))?;
+    // The document is required, and an absent payload is ordinarily decay: the position being
+    // resumed exists nowhere else in the envelope, so there would be nothing to record and nothing
+    // to reconstruct. Located by `args-hash` because that is the value the root's signature covers —
+    // a resume whose document the approval does not commit to is a signature over nothing.
+    let document = payloads
+        .iter()
+        .find(|p| p["payload-hash"].as_str() == Some(args_hash))
+        .map(|p| &p["payload"])
+        .ok_or_else(|| {
+            Error::new(
+                codes::STREAM_RESUME_UNBOUND,
+                "a resume must submit the document its args-hash commits to",
+            )
+        })?;
+    let members = document.as_object().ok_or_else(|| {
+        Error::new(
+            codes::STREAM_RESUME_MALFORMED,
+            "the resume document must be a JSON object",
+        )
+    })?;
+    // Closed, for the reason a policy document's member set is closed: a resume an implementation
+    // does not fully understand is a resume it MUST NOT act on.
+    for key in members.keys() {
+        if !matches!(
+            key.as_str(),
+            "stream" | "resume-seq" | "refused-object-hash" | "reason-code"
+        ) {
+            return Err(Error::new(
+                codes::STREAM_RESUME_MALFORMED,
+                format!("unknown member {key:?} in the resume document"),
+            ));
+        }
+    }
+    let stream = members
+        .get("stream")
+        .and_then(Value::as_str)
+        .ok_or_else(|| Error::new(codes::STREAM_RESUME_MALFORMED, "stream"))?;
+    if stream != named {
+        return Err(Error::new(
+            codes::STREAM_RESUME_MALFORMED,
+            format!("the document resumes {stream}, execution.target names {named}"),
+        ));
+    }
+    let resume_seq = members
+        .get("resume-seq")
+        .and_then(Value::as_u64)
+        .ok_or_else(|| Error::new(codes::STREAM_RESUME_MALFORMED, "resume-seq"))?;
+    let bridge_hash = members
+        .get("refused-object-hash")
+        .and_then(Value::as_str)
+        .filter(|h| {
+            h.len() == 64
+                && h.chars()
+                    .all(|c| c.is_ascii_hexdigit() && !c.is_uppercase())
+        })
+        .ok_or_else(|| {
+            Error::new(
+                codes::STREAM_RESUME_MALFORMED,
+                "refused-object-hash must be 64 lowercase hex characters",
+            )
+        })?;
+    let reason_code = members
+        .get("reason-code")
+        .and_then(Value::as_str)
+        .filter(|r| !r.is_empty())
+        .ok_or_else(|| Error::new(codes::STREAM_RESUME_MALFORMED, "reason-code"))?;
+    Ok(StreamResume {
+        stream: stream.to_owned(),
+        resume_seq,
+        bridge_hash: bridge_hash.to_owned(),
+        reason_code: reason_code.to_owned(),
+    })
 }
 
 /// The human an enrolment names, read from the evidence the approval committed to (§03 §6).

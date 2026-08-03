@@ -1,0 +1,142 @@
+{
+  "v": "stozher/0.1",
+  "kind": "stream-status",
+  "description": "spec 09 section 4.2 — the predicate behind the row a console renders for one stream. `refused` when the most recent thing that happened was a refusal, whatever the quiet interval says; `quiet` when nothing has been accepted within `quiet-after-seconds`; `healthy` otherwise. Which row an implementation draws is its own business; the predicate is not.",
+  "vectors": [
+    {
+      "name": "recently-accepted-is-healthy",
+      "description": "the ordinary row",
+      "input": {
+        "last-accepted-at": "2026-07-26T11:59:00.000Z",
+        "last-refused-at": null,
+        "last-refusal-reason": null,
+        "now": "2026-07-26T12:00:00.000Z",
+        "quiet-after-seconds": 3600
+      },
+      "expected": {
+        "status": "healthy",
+        "reason-code": null
+      }
+    },
+    {
+      "name": "silent-past-the-interval-is-quiet",
+      "description": "an absent emitter is a finding, not a null result — but it is the weaker finding",
+      "input": {
+        "last-accepted-at": "2026-07-26T09:00:00.000Z",
+        "last-refused-at": null,
+        "last-refusal-reason": null,
+        "now": "2026-07-26T12:00:00.000Z",
+        "quiet-after-seconds": 3600
+      },
+      "expected": {
+        "status": "quiet",
+        "reason-code": null
+      }
+    },
+    {
+      "name": "at-the-interval-exactly-is-still-healthy",
+      "description": "the comparison is strict, so the row does not flicker on the boundary second",
+      "input": {
+        "last-accepted-at": "2026-07-26T11:00:00.000Z",
+        "last-refused-at": null,
+        "last-refusal-reason": null,
+        "now": "2026-07-26T12:00:00.000Z",
+        "quiet-after-seconds": 3600
+      },
+      "expected": {
+        "status": "healthy",
+        "reason-code": null
+      }
+    },
+    {
+      "name": "refused-after-the-last-acceptance-is-refused",
+      "description": "the DEF-2 row. The last acceptance is a minute old, so nothing about quiet has fired and would not for an hour; the kernel nonetheless knows *now* that it is refusing this emitter, and the surface that exists to answer the question must say so",
+      "input": {
+        "last-accepted-at": "2026-07-26T11:59:00.000Z",
+        "last-refused-at": "2026-07-26T11:59:30.000Z",
+        "last-refusal-reason": "mandate-unresolved",
+        "now": "2026-07-26T12:00:00.000Z",
+        "quiet-after-seconds": 3600
+      },
+      "expected": {
+        "status": "refused",
+        "reason-code": "mandate-unresolved"
+      }
+    },
+    {
+      "name": "refused-and-then-silent-is-still-refused",
+      "description": "the refusal is not superseded by the passage of time: quiet is the absence of evidence and this stream has evidence",
+      "input": {
+        "last-accepted-at": "2026-07-26T09:00:00.000Z",
+        "last-refused-at": "2026-07-26T09:00:30.000Z",
+        "last-refusal-reason": "mandate-standing-lifetime-exceeded",
+        "now": "2026-07-26T12:00:00.000Z",
+        "quiet-after-seconds": 3600
+      },
+      "expected": {
+        "status": "refused",
+        "reason-code": "mandate-standing-lifetime-exceeded"
+      }
+    },
+    {
+      "name": "refused-then-accepted-is-healthy-again",
+      "description": "recovery is observable in the same surface: an acceptance after the refusal ends the refused state, which is what makes the row a state and not a scar",
+      "input": {
+        "last-accepted-at": "2026-07-26T11:59:00.000Z",
+        "last-refused-at": "2026-07-26T11:00:00.000Z",
+        "last-refusal-reason": "mandate-unresolved",
+        "now": "2026-07-26T12:00:00.000Z",
+        "quiet-after-seconds": 3600
+      },
+      "expected": {
+        "status": "healthy",
+        "reason-code": null
+      }
+    },
+    {
+      "name": "refused-in-the-same-millisecond-as-the-last-acceptance-is-refused",
+      "description": "the tie breaks toward the finding. Three-decimal timestamps and a coarse deployment clock make this reachable, and the reading that hides a refusal is the one this state exists to stop",
+      "input": {
+        "last-accepted-at": "2026-07-26T11:59:00.000Z",
+        "last-refused-at": "2026-07-26T11:59:00.000Z",
+        "last-refusal-reason": "mandate-unresolved",
+        "now": "2026-07-26T12:00:00.000Z",
+        "quiet-after-seconds": 3600
+      },
+      "expected": {
+        "status": "refused",
+        "reason-code": "mandate-unresolved"
+      }
+    },
+    {
+      "name": "never-accepted-and-never-refused-is-quiet",
+      "description": "a stream the kernel has heard nothing from at all",
+      "input": {
+        "last-accepted-at": null,
+        "last-refused-at": null,
+        "last-refusal-reason": null,
+        "now": "2026-07-26T12:00:00.000Z",
+        "quiet-after-seconds": 3600
+      },
+      "expected": {
+        "status": "quiet",
+        "reason-code": null
+      }
+    },
+    {
+      "name": "never-accepted-but-refused-is-refused",
+      "description": "the emitter's very first submission was refused, so there is no acceptance to compare against — and this is precisely the mandate-swap-at-connect case",
+      "input": {
+        "last-accepted-at": null,
+        "last-refused-at": "2026-07-26T11:00:00.000Z",
+        "last-refusal-reason": "mandate-unresolved",
+        "now": "2026-07-26T12:00:00.000Z",
+        "quiet-after-seconds": 3600
+      },
+      "expected": {
+        "status": "refused",
+        "reason-code": "mandate-unresolved"
+      }
+    }
+  ]
+}

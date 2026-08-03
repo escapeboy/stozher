@@ -243,6 +243,16 @@ fn replay_vectors(report: &mut Report) -> BTreeSet<String> {
                 // the rule under test. `tests/kernel_vectors.rs` runs them against the real
                 // `ingest::root_change`, and `tests/root_enrollment.rs` drives the ingest path.
                 | "root-change"
+                // A predicate over a component's own state, with no envelope to submit: what an
+                // emitter may do while the kernel is refusing it (§05 §7.1). Run against the real
+                // `stozher_core::sync::decide` by `stozher-core/tests/vectors.rs`, and its ingest
+                // consequences are the rejections every other row here produces.
+                | "sync-outcome"
+                // A predicate over two timestamps, and a document read out of an envelope. Run
+                // against the real `sync::stream_status` and `ingest::stream_resume` by
+                // `tests/kernel_vectors.rs`; `tests/def2_mandate_swap.rs` drives both ingest paths.
+                | "stream-status"
+                | "stream-recovery"
         ) {
             continue;
         }

@@ -68,9 +68,15 @@ Verification of a range that does not start at `seq == 0` requires the caller to
 - Ordering within a stream is enforced: an envelope whose `seq` exceeds the current head + 1 MUST be
   rejected `chain-seq-gap` (an emitter must not be able to reserve future positions). Clients that
   batch MUST submit in order; the kernel MAY buffer out-of-order arrivals briefly but MUST NOT
-  append out of order.
+  append out of order. **The one exception is a position an operator has explicitly authorized the
+  kernel to bridge (§7.2); there is no other, and it is not reachable without a human root's
+  signature.**
 - Offline emitters chain locally with the same rule and sync later; the kernel's acceptance
   therefore never renumbers anything (§05 §6, §09 §4).
+- **A refused submission is a third state and not a slower second one.** An emitter whose envelope
+  the kernel rejected is neither synced nor merely behind: its stream is wedged at that position and
+  every later envelope it offers will be refused `chain-seq-gap` until §7.2 is performed. What the
+  component owes in that state is `spec/05 §7.1`; what the kernel owes is §7 and §09 §4.2.
 
 ## 4. Signed checkpoints
 
@@ -239,6 +245,77 @@ Two rules follow, and both are MUSTs:
 A consumer reading a stream from a deployment that carries such a declaration MUST treat every
 `emitted-at` at or after it as offset by `advance-seconds`, and MUST NOT read those timestamps as
 evidence of when anything happened.
+
+### 7.2 Resuming a wedged stream
+
+A refusal wedges its emitter's stream (§3, §03 §7, §05 §7.1). This is the exit, and it is the only
+one. A halted fleet with no way out is not a security posture; a way out with no signature is not a
+gate.
+
+The act is an envelope, not an administrative route:
+
+```json
+{
+  "v": "stozher/0.1", "kind": "effect",
+  "stream": "kernel:core", "seq": 91, "prev-hash": "…",
+  "identity": { "subject": "human:ivan", "key": "ed25519:<root>", "component": "kernel" },
+  "mandate-ref": "<64 hex>",
+  "policy-version": "2026.07.1",
+  "classification": "consequential",
+  "execution": {
+    "action": "kernel.resume_stream", "target": "stream:gw:ivan-mbp:0001",
+    "args-hash": "<object-hash of the resume document>",
+    "outcome": "applied", "started-at": "…", "finished-at": "…"
+  },
+  "evidence": { "schema": "kernel.resume_stream.v1", "media-type": "application/json",
+                "payload-hash": "<object-hash of the resume document>",
+                "retain-until": "2036-07-26T00:00:00.000Z" },
+  "authorization": { "request": { … }, "decision": { … } },
+  "sig": { … }
+}
+```
+
+whose evidence payload is the **resume document**, a closed member set:
+
+```json
+{ "stream": "gw:ivan-mbp:0001", "resume-seq": 0,
+  "refused-object-hash": "<64 hex>", "reason-code": "mandate-standing-lifetime-exceeded" }
+```
+
+Normative:
+
+1. `classification` MUST be `consequential`, and the `authorization` MUST be signed by an **enrolled
+   human root** whatever class the policy in force assigns the action (§05 §5.6). It is appended to
+   `kernel:core` — the stream that already carries every act which changes what the deployment will
+   permit — and is chained and checkpointed like anything else. There is no route, flag, environment
+   variable or CLI subcommand by which a stream resumes without this envelope.
+2. `execution.target` MUST be `stream:<stream>` and MUST name the same stream as the document
+   (`stream-resume-malformed`). `execution.args-hash` MUST equal `object-hash` of the resume
+   document (`stream-resume-unbound`), so the root's signature binds the exact position being
+   resumed rather than "a resumption" in the abstract — the identical rule §5.3 states for a policy
+   change, for the identical reason.
+3. `refused-object-hash` MUST be the `object-hash` **of the rejected bytes as received**, which is
+   the value §7 already requires the rejection record to carry. It is the *bridge*: after the resume
+   is appended, the kernel MUST accept exactly one envelope at `resume-seq + 1` on that stream whose
+   `prev-hash` equals it, and MUST reject a second one (`chain-seq-duplicate`, as at any other
+   occupied position). Every subsequent envelope chains from that one under §2 unchanged.
+
+   The emitter therefore renumbers nothing and rewrites nothing (§05 §7.1 clause 3): the chain it
+   built while wedged is submitted as it stands, and the hole at `resume-seq` is spanned by a hash
+   the kernel itself recorded.
+4. **A resume MUST NOT validate anything.** The refused envelope stays refused; its rejection record
+   stays, unaltered, in the rejection stream; and an implementation MUST NOT append the refused
+   bytes, re-evaluate them, or represent the position as filled. A resume is an operator saying
+   *"this stream may continue"*, never *"that envelope was fine after all"* — and the two must not
+   be expressible by one act, or every refusal becomes appealable by whoever can obtain one
+   signature.
+5. A resume naming a `(stream, resume-seq)` for which the store holds no rejection MUST be refused
+   (`stream-resume-position-unknown`): there is nothing to bridge, and a bridge to bytes the kernel
+   never saw is a gap with a signature on it.
+6. A verifier reading the kernel's copy of a resumed stream MUST report the range as **unanchored**
+   across the bridge unless it is given the bridge hash (§2.1): the position is genuinely absent
+   from the kernel's copy, and a verifier that papered over it would be asserting a continuity the
+   store does not have.
 
 ## 8. Storage schema notes (informative)
 

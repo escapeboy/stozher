@@ -17,7 +17,7 @@ use std::path::{Path, PathBuf};
 use serde_json::Value;
 use stozher_core::mandate::{MandateRequest, VerifyParams, verify_mandate_chain};
 use stozher_core::signed::KeyId;
-use stozher_core::{chain, crypto, envelope, gate, jcs, payload, signed, trigger};
+use stozher_core::{chain, crypto, envelope, gate, jcs, payload, signed, sync, trigger};
 
 fn vectors_dir() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../../spec/vectors")
@@ -140,7 +140,12 @@ fn every_vector_validates_against_the_reference_implementation() {
                 // runs these files and asserts it ran every vector in them. Named rather than
                 // defaulted, so a kind nobody implemented still fails below.
                 "trigger" => check_trigger(&mut report, &id, &doc, vector),
+                "sync-outcome" => check_sync_outcome(&mut report, &id, vector),
                 "policy-evaluation" | "manifest" | "gate-arguments" | "root-change" => {}
+                // The kernel's own surfaces: the stream-status predicate reads a row this crate
+                // does not build, and a resume is read by `stozher_kernel::ingest`. Run by
+                // `stozher-kernel/tests/kernel_vectors.rs`, which asserts it ran every vector.
+                "stream-status" | "stream-recovery" => {}
                 unknown => panic!(
                     "{path}: unsupported vector kind {unknown:?}. Vectors are never skipped: \
                      implement support or remove the file."
@@ -171,6 +176,52 @@ fn every_vector_validates_against_the_reference_implementation() {
 }
 
 // ---------------------------------------------------------------------------
+
+/// §05 §7.1 — what a component may do when the kernel has answered "no".
+///
+/// The kernel is not an emitter, and runs this file anyway: the rule is one both halves of a
+/// deployment have to agree about, and the Python gateway's `stozher_gateway.sync` is the other
+/// statement of it. The `unreachable` vectors are the ones that matter most here — an implementation
+/// that answered "refuse" to everything would satisfy every other vector in the file, and refusing
+/// everything is a denial-of-service weapon rather than a fix.
+fn check_sync_outcome(report: &mut Report, id: &str, vector: &Value) {
+    let input = &vector["input"];
+    let class = input["class"].as_str().unwrap_or_default();
+    let decision = sync::decide(&sync::SyncState {
+        outcome: input["submission-outcome"].as_str().unwrap_or_default(),
+        reason_code: input["reason-code"].as_str(),
+        classification: class,
+        elapsed_seconds: input["elapsed-since-first-refusal-seconds"]
+            .as_i64()
+            .unwrap_or_default(),
+        offline: input["policy"]["offline"][class]
+            .as_str()
+            .unwrap_or("block"),
+        wedge_grace_seconds: input["policy"]["wedge-grace-seconds"]
+            .as_i64()
+            .unwrap_or(sync::WEDGE_GRACE_DEFAULT_SECONDS),
+    });
+    let expected = &vector["expected"];
+    let action = if decision.serve { "serve" } else { "refuse" };
+    report.check(
+        id,
+        "action",
+        &action,
+        &expected["action"].as_str().unwrap_or_default(),
+    );
+    report.check(
+        id,
+        "reason code",
+        &decision.reason_code.as_deref(),
+        &expected["reason-code"].as_str(),
+    );
+    report.check(
+        id,
+        "finding",
+        &decision.finding,
+        &expected["finding"].as_bool().unwrap_or_default(),
+    );
+}
 
 fn check_jcs(report: &mut Report, id: &str, vector: &Value) {
     let input = vector["input-json"].as_str().expect("input-json");

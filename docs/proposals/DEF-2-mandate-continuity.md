@@ -1,6 +1,19 @@
 # DEF-2 — mandate continuity: the normative text permits the silence
 
-**Status:** proposal. Nothing under `spec/` was edited to produce this document.
+**Status: implemented, 2026-08-03, with one clause decided differently.** `spec/` now carries the
+three clauses of §3 below plus a fourth the proposal deferred — the recovery act, which §6 left open
+and which had to land with the rest (see `docs/build-log-entry-def2.md`). **§3.1 clause 4 was
+superseded by a product-owner decision** and is left here as written so the difference is legible:
+the shipped rule gates grace on the *reason* first (no grace at all under `mandate-*` or
+`policy-not-published`, for any class) and on the *class* second (`read`/`benign` only, each served
+effect a counted finding; `consequential` and `prohibited` refused immediately). The draft below
+applied the `offline` map underneath the grace window and gave `consequential` the same window as a
+`read`. Everything else — the three-outcome table, the durable reason, the wedge, the §06 §4.1
+refusal — shipped as drafted. Read `spec/05 §7.1` for the normative text; this document is the
+analysis it came from, not the rule.
+
+The original header follows. **Status:** proposal. Nothing under `spec/` was edited to produce this
+document.
 **Classification:** **SPEC HOLE**, with one implementation defect found alongside it (§5).
 **Evidence:** `gateway/tests/test_def2_mandate_swap.py`, `kernel/stozher-kernel/tests/def2_mandate_swap.rs`.
 

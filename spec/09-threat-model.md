@@ -77,7 +77,14 @@ components, least-privilege credentials at the boundary) and are explicitly not 
      not happen;
   2. the kernel MUST track the last accepted `seq` per stream and MUST surface streams that have gone
      quiet beyond a policy-configured interval — an absent emitter is a finding, not a null result;
-  3. the kernel MUST checkpoint per stream (§04 §4.6), so a later attempt to replace the tail with a
+  3. the kernel MUST surface a stream whose most recent submission was **refused** immediately, and
+     distinguishably from one that has merely gone quiet, carrying the reason code. **Quiet is the
+     absence of evidence; refused is evidence.** Waiting out the quiet interval before reporting a
+     stream the kernel is actively rejecting reports the weaker fact, later — and the two look
+     identical until it elapses, so an operator reading the surface at the moment of the refusals
+     learns nothing. The state ends when a submission on that stream is accepted (§04 §7.2), not
+     when a timer expires;
+  4. the kernel MUST checkpoint per stream (§04 §4.6), so a later attempt to replace the tail with a
      different tail contradicts a published head hash.
 - A stream that is deleted wholesale from a compromised emitter's disk before ever syncing leaves only
   the quiet-stream signal. Named, not solved.
@@ -147,7 +154,8 @@ is not immunity, and §07 says so in the same words.
   train an approver to click through. Requirements: the kernel MUST rate-limit gate requests per
   subject per interval (`gate-rate-limited`) and MUST surface a spike as a finding rather than as a
   longer queue. **The cap lives in the kernel's own configuration, not in policy.** §05 §1's member
-  set is closed and every member of it is REQUIRED, so a new policy member is a breaking wire change
+  set is closed and every member of it that grants or bounds *authority* is REQUIRED, so such a new
+  policy member is a breaking wire change
   that invalidates every existing document and every vector at once; and a queue-depth bound is the
   wrong thing to put there anyway, because it authorizes nothing and changes nobody's rights. It is
   a resource bound on kernel-side state that no component pulls or evaluates. Refusing a *request* is not refusing an *action*: the call is still gated and still

@@ -94,10 +94,11 @@ pub async fn emit_all(
     checkpoint_stream: &str,
 ) -> Result<Vec<(String, std::result::Result<Option<u64>, String>)>> {
     let mut results = Vec::new();
-    for stream in ingest.store().streams().await? {
-        let Some(name) = stream["stream"].as_str() else {
-            continue;
-        };
+    // Streams holding envelopes, not every stream the surface knows: since §09 §4.2 gained its
+    // refused-stream requirement, `streams()` also lists a stream known only from its rejections —
+    // an emitter whose very first submission was refused. There is nothing there to attest.
+    for name in ingest.store().streams_holding_envelopes().await? {
+        let name = name.as_str();
         // The checkpoint stream would attest itself one envelope behind, forever. Checkpointing it
         // is still meaningful — its history must be as tamper-evident as what it attests (§04 §4.5) —
         // but it is emitted last so the run does not chase its own tail.

@@ -15,7 +15,35 @@ approve anything — <code>Ingest::submit</code> is the only write path in the k
 <td><b>{{ pending }}</b><a href="/console/pending">awaiting a human</a></td>
 <td><b>{{ rejections }}</b><a href="/console/rejections">refused submissions</a></td>
 <td><b class="{% if quiet_count != "0" %}quiet{% endif %}">{{ quiet_count }}</b><a href="/console/streams">quiet streams</a></td>
+<td><b class="{% if refused_count != "0" %}prohibited{% endif %}">{{ refused_count }}</b><a href="/console/streams">refused streams</a></td>
 </tr></table>
+
+{# Above the attempts table, and above the quiet list, because it is the finding that fires *now*.
+   Quiet is the absence of evidence; refused is evidence — and a stream the kernel is rejecting used
+   to reach this page only once it had also been silent for the checkpoint interval. #}
+{% if !refused.is_empty() %}
+<h2>Streams this kernel is <span class="prohibited">refusing</span></h2>
+<p class="lede">Every submission on these streams is being rejected. The emitter is wedged at the
+position named in its rejection record and cannot advance until an operator resumes the stream
+(<code>spec/04 §7.2</code>). This is not the same finding as a quiet stream, and it does not wait for
+the quiet interval.</p>
+<table>
+<thead>
+<tr><th scope="col">stream</th><th scope="col">head seq</th><th scope="col">last appended</th><th scope="col">reason</th><th scope="col"></th></tr>
+</thead>
+<tbody>
+{% for s in refused %}
+<tr>
+<td><a href="/console/audit?stream={{ s.stream }}">{{ s.stream }}</a></td>
+<td class="num">{{ s.head_seq }}</td>
+<td class="num">{{ s.last_appended_at }}</td>
+<td class="prohibited">{{ s.refusal_reason }}</td>
+<td><a href="/console/rejections">rejections</a></td>
+</tr>
+{% endfor %}
+</tbody>
+</table>
+{% endif %}
 
 <h2>Attempted <span class="prohibited">prohibited</span> actions</h2>
 <p class="lede">The most audit-valuable records in the system: an action nothing could have
