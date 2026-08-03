@@ -450,20 +450,40 @@ point of an audit log rather than a concession.
 ### Changing the root set
 
 ```sh
-K="docker run --rm -i -u $(id -u):$(id -g) -v $PWD:/work -w /work ${STOZHER_KERNEL_IMAGE:-stozher-kernel:0.1.0}"
+# Two shapes, because half of this runs offline and half needs the kernel's network. `NET` is the
+# network the kernel container is actually on — `docker compose ps -q kernel` then `docker inspect`,
+# exactly as bin/stozher-approve does it, because a hardcoded default is wrong for any install that
+# set COMPOSE_PROJECT_NAME.
+OFF="docker run --rm -i -u $(id -u):$(id -g) --network none -v $PWD:/work -w /work ${STOZHER_KERNEL_IMAGE:-stozher-kernel:0.1.0}"
+ON="docker run --rm -i -u $(id -u):$(id -g) --network $NET -e STOZHER_KERNEL_TOKEN=$STOZHER_KERNEL_TOKEN -v $PWD:/work -w /work ${STOZHER_KERNEL_IMAGE:-stozher-kernel:0.1.0}"
 
-# ivan asks. --mandate is a mandate MIRA granted him: §03 §1 forbids self-grant, and an effect
-# needs one, which is the whole reason this takes two humans.
-$K root-request --requester human:ivan --key secrets/operator/operator.seed \
-                --mandate <64 hex> --in-force "$($K policy-current --url http://kernel:8787)" \
-                --enrol ed25519:<their root key> --subject human:third \
-                --out var/enrol.json
-$K park --url http://kernel:8787 --file var/enrol.json     # needs the kernel's network
+# 1. MIRA grants ivan the mandate. §03 §1 forbids self-grant and an effect needs one, which is the
+#    whole reason this takes two humans. `--components kernel` is not optional and is the step
+#    people lose an hour to: `grant` defaults to `gateway`, and a root-set change is emitted by the
+#    *kernel*, so the default produces `mandate-scope-not-permitted` at the very last command.
+$OFF grant --key secrets/operator/mira.seed --root human:mira \
+           --grantee human:ivan --grantee-key "$($OFF identity --key secrets/operator/operator.seed --role 0 --index 0)" \
+           --components kernel --actions 'kernel.enroll_root,kernel.retire_root' \
+           --classes consequential --days 1 --out var/mira-to-ivan.json
 
-./bin/stozher-approve <request-hash> --root human:mira      # MIRA answers, not ivan
+# 2. Put it on the chain. `grant` writes a signed mandate *object*; nothing can cite a mandate the
+#    kernel has never seen. Without this every command below ends in `mandate-unresolved`.
+$ON submit-mandate --url http://kernel:8787 --mandate var/mira-to-ivan.json \
+                   --key secrets/operator/operator.seed --subject human:ivan
 
-$K root-publish --url http://kernel:8787 --request var/enrol.json \
-                --key secrets/operator/operator.seed
+# 3. ivan asks. --mandate is the ref `grant` printed in step 1.
+$OFF root-request --requester human:ivan --key secrets/operator/operator.seed \
+                  --mandate <64 hex> --in-force "$($ON policy-current --url http://kernel:8787)" \
+                  --enrol ed25519:<their root key> --subject human:third \
+                  --out var/enrol.json --evidence-out var/enrol-evidence.json
+$ON park --url http://kernel:8787 --file var/enrol.json
+
+./bin/stozher-approve <request-hash> --root human:mira --key secrets/operator/mira.seed
+
+# 4. Publish it. `--evidence` is required: the enrolment's `args-hash` commits to the document that
+#    names the human, and the kernel refuses an enrolment whose evidence was not supplied.
+$ON root-publish --url http://kernel:8787 --request var/enrol.json \
+                 --key secrets/operator/operator.seed --evidence var/enrol-evidence.json
 ```
 
 **`--subject human:<name>` is not a label.** The root set is `(key, subject)` pairs and the subject
