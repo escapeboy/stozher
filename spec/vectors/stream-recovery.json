@@ -1,0 +1,525 @@
+{
+  "v": "stozher/0.1",
+  "kind": "stream-recovery",
+  "description": "spec 04 section 7.2 — resuming a stream wedged by a refusal. Read the resume out of `envelope` with `payloads`: the result MUST match `expected.valid`, on failure the code MUST equal `expected.error`, and on success `expected.stream`, `expected.resume-seq` and `expected.bridge-prev-hash` are the position authorized and the `object-hash` of the refused bytes that bridges it. Where `chain` is present, verifying it against `expected-first-prev` MUST succeed and return `expected.chain-head-hash` — the emitter's own chain, unrenumbered, continuing past a position that stays refused.",
+  "refused-envelope": {
+    "v": "stozher/0.1",
+    "kind": "mandate",
+    "emitted-at": "2026-07-26T09:00:00.000Z",
+    "stream": "gw:ivan-mbp:0001",
+    "seq": 0,
+    "prev-hash": null,
+    "identity": {
+      "subject": "agent:claude-code/ivan-mbp",
+      "key": "ed25519:4a0beffbc56f699c7fc1eb522d5298e2e4210d054a0a33dbeea70751f61e2bfc",
+      "component": "kernel"
+    },
+    "mandate": {
+      "v": "stozher/0.1",
+      "kind": "mandate",
+      "mandate-kind": "standing",
+      "grantor": {
+        "subject": "human:ivan",
+        "key": "ed25519:09b3c43478cc065aeeeba98ee919e6b007ff3ff122f86e0a4a3fbc5898092d3a",
+        "role": "human"
+      },
+      "grantee": {
+        "subject": "agent:claude-code/ivan-mbp",
+        "key": "ed25519:4a0beffbc56f699c7fc1eb522d5298e2e4210d054a0a33dbeea70751f61e2bfc"
+      },
+      "issued-at": "2026-07-26T08:00:00.000Z",
+      "not-before": "2026-07-26T08:00:00.000Z",
+      "not-after": "2026-07-26T18:00:00.000Z",
+      "parent": null,
+      "max-depth": 2,
+      "scope": {
+        "components": [
+          "gateway"
+        ],
+        "actions": [
+          "github.*"
+        ],
+        "classes": [
+          "read",
+          "benign",
+          "consequential"
+        ],
+        "resources": [
+          "repo:acme/backend"
+        ]
+      },
+      "budget": {
+        "requests": 5000,
+        "money-eur": "25.00"
+      },
+      "nonce": "9b46e00544b5331502f77c0b43b95d9b",
+      "sig": {
+        "alg": "ed25519",
+        "key": "ed25519:09b3c43478cc065aeeeba98ee919e6b007ff3ff122f86e0a4a3fbc5898092d3a",
+        "value": "c2e15e8598e1aa06cda5c683cd2a8f061c7737a9568e41ca506e4ffb9853dd9207c03f6f2620f00c12dd3db85aa69cb6bb15dbb424ae12eb9b8c85dfce66de03"
+      }
+    },
+    "sig": {
+      "alg": "ed25519",
+      "key": "ed25519:4a0beffbc56f699c7fc1eb522d5298e2e4210d054a0a33dbeea70751f61e2bfc",
+      "value": "49a8b4727c7772b93ab0336c386d50c37846f7e81b3721a4baee87a9a48565acd201136df92cb33c7b38bbd940b44efeaab2e4613732dae80cf3e73e4b717f0b"
+    }
+  },
+  "refused-object-hash": "93eb7f728e9f0178a6baa3ba04c5c65e8af51de3faf811d06f82b2523322989d",
+  "vectors": [
+    {
+      "name": "resumes-a-refused-position",
+      "description": "the exit from a wedge, and the whole of it: one position, one bridge hash, and a chain that verifies from the refused bytes onward without the refused envelope ever becoming valid",
+      "envelope": {
+        "v": "stozher/0.1",
+        "kind": "effect",
+        "emitted-at": "2026-07-26T10:30:00.000Z",
+        "stream": "kernel:core",
+        "seq": 12,
+        "prev-hash": "3333333333333333333333333333333333333333333333333333333333333333",
+        "identity": {
+          "subject": "human:ivan",
+          "key": "ed25519:09b3c43478cc065aeeeba98ee919e6b007ff3ff122f86e0a4a3fbc5898092d3a",
+          "component": "kernel"
+        },
+        "mandate-ref": "1111111111111111111111111111111111111111111111111111111111111111",
+        "policy-version": "2026.07.1",
+        "classification": "consequential",
+        "execution": {
+          "action": "kernel.resume_stream",
+          "target": "stream:gw:ivan-mbp:0001",
+          "args-hash": "d4c4daa21745a92700d477c87673bde805eaf63cdb0b34183d66120a3cb77f90",
+          "outcome": "applied",
+          "started-at": "2026-07-26T10:30:00.000Z",
+          "finished-at": "2026-07-26T10:30:00.000Z"
+        },
+        "evidence": {
+          "schema": "kernel.resume_stream.v1",
+          "media-type": "application/json",
+          "payload-hash": "d4c4daa21745a92700d477c87673bde805eaf63cdb0b34183d66120a3cb77f90",
+          "retain-until": "2036-07-26T00:00:00.000Z"
+        },
+        "sig": {
+          "alg": "ed25519",
+          "key": "ed25519:09b3c43478cc065aeeeba98ee919e6b007ff3ff122f86e0a4a3fbc5898092d3a",
+          "value": "79b01a7dd8c6556cf3257d9e0e5ffa8cdccf9a83743b1d8e52e581d17ef5e4bdf27efa1a2d27cef2372aee1774e67861406db98692630d832111072d7ef29a01"
+        }
+      },
+      "payloads": [
+        {
+          "payload-hash": "d4c4daa21745a92700d477c87673bde805eaf63cdb0b34183d66120a3cb77f90",
+          "media-type": "application/json",
+          "payload": {
+            "stream": "gw:ivan-mbp:0001",
+            "resume-seq": 0,
+            "refused-object-hash": "93eb7f728e9f0178a6baa3ba04c5c65e8af51de3faf811d06f82b2523322989d",
+            "reason-code": "mandate-standing-lifetime-exceeded"
+          }
+        }
+      ],
+      "expected": {
+        "valid": true,
+        "error": null,
+        "stream": "gw:ivan-mbp:0001",
+        "resume-seq": 0,
+        "bridge-prev-hash": "93eb7f728e9f0178a6baa3ba04c5c65e8af51de3faf811d06f82b2523322989d",
+        "chain-valid": true,
+        "chain-anchored": true,
+        "chain-head-hash": "8ccdca95042413b08439ef9f971e7ad426da228b8d50d43257f84e9422cbcfe4"
+      },
+      "chain": [
+        {
+          "v": "stozher/0.1",
+          "kind": "effect",
+          "emitted-at": "2026-07-26T09:15:01.300Z",
+          "stream": "gw:ivan-mbp:0001",
+          "seq": 1,
+          "prev-hash": "93eb7f728e9f0178a6baa3ba04c5c65e8af51de3faf811d06f82b2523322989d",
+          "identity": {
+            "subject": "agent:claude-code/ivan-mbp",
+            "key": "ed25519:4a0beffbc56f699c7fc1eb522d5298e2e4210d054a0a33dbeea70751f61e2bfc",
+            "component": "gateway"
+          },
+          "mandate-ref": "1111111111111111111111111111111111111111111111111111111111111111",
+          "policy-version": "2026.07.1",
+          "classification": "consequential",
+          "execution": {
+            "action": "github.create_issue",
+            "target": "repo:acme/backend",
+            "args-hash": "fe4edc2cdfcaee172af990012c944c32c884657dfb56dfce12e197597cb651f8",
+            "outcome": "applied",
+            "started-at": "2026-07-26T09:15:00.000Z",
+            "finished-at": "2026-07-26T09:15:01.250Z"
+          },
+          "evidence": {
+            "schema": "github.create_issue.v1",
+            "media-type": "application/json",
+            "payload-hash": "8ce5dc39ae3c21a22d1009d3ee3ec7e5c662d3d7e9c749f60f9264dcceb6d2d7",
+            "retain-until": "2027-07-26T00:00:00.000Z"
+          },
+          "sig": {
+            "alg": "ed25519",
+            "key": "ed25519:4a0beffbc56f699c7fc1eb522d5298e2e4210d054a0a33dbeea70751f61e2bfc",
+            "value": "012db0f7cd74761c329e2522e479fbe8dd22564dc4d737479fae3135ee709286c09be31c6bea794a96c6123c500e4846512e444bb1b1261db4621fbe068e5b0c"
+          }
+        },
+        {
+          "v": "stozher/0.1",
+          "kind": "effect",
+          "emitted-at": "2026-07-26T09:15:01.300Z",
+          "stream": "gw:ivan-mbp:0001",
+          "seq": 2,
+          "prev-hash": "0e93f4c8fd20f5a5f0af72468c4e881a36f4e0e14802b5f6bc3be83e014e98c6",
+          "identity": {
+            "subject": "agent:claude-code/ivan-mbp",
+            "key": "ed25519:4a0beffbc56f699c7fc1eb522d5298e2e4210d054a0a33dbeea70751f61e2bfc",
+            "component": "gateway"
+          },
+          "mandate-ref": "1111111111111111111111111111111111111111111111111111111111111111",
+          "policy-version": "2026.07.1",
+          "classification": "consequential",
+          "execution": {
+            "action": "github.create_issue",
+            "target": "repo:acme/backend",
+            "args-hash": "fe4edc2cdfcaee172af990012c944c32c884657dfb56dfce12e197597cb651f8",
+            "outcome": "applied",
+            "started-at": "2026-07-26T09:15:00.000Z",
+            "finished-at": "2026-07-26T09:15:01.250Z"
+          },
+          "evidence": {
+            "schema": "github.create_issue.v1",
+            "media-type": "application/json",
+            "payload-hash": "8ce5dc39ae3c21a22d1009d3ee3ec7e5c662d3d7e9c749f60f9264dcceb6d2d7",
+            "retain-until": "2027-07-26T00:00:00.000Z"
+          },
+          "sig": {
+            "alg": "ed25519",
+            "key": "ed25519:4a0beffbc56f699c7fc1eb522d5298e2e4210d054a0a33dbeea70751f61e2bfc",
+            "value": "3f35f48bb1b97734b53e6450f21ddaa4a84979b14066c7ed6a42741afb3ebf3348e7c617a0265adcb8f1a0c9714cef387884eea780824caeb616d32aa12d0f0a"
+          }
+        }
+      ],
+      "expected-first-prev": "93eb7f728e9f0178a6baa3ba04c5c65e8af51de3faf811d06f82b2523322989d"
+    },
+    {
+      "name": "document-is-not-supplied",
+      "description": "an absent payload is ordinarily decay and here it is not: the position being resumed exists nowhere else in the envelope",
+      "envelope": {
+        "v": "stozher/0.1",
+        "kind": "effect",
+        "emitted-at": "2026-07-26T10:30:00.000Z",
+        "stream": "kernel:core",
+        "seq": 12,
+        "prev-hash": "3333333333333333333333333333333333333333333333333333333333333333",
+        "identity": {
+          "subject": "human:ivan",
+          "key": "ed25519:09b3c43478cc065aeeeba98ee919e6b007ff3ff122f86e0a4a3fbc5898092d3a",
+          "component": "kernel"
+        },
+        "mandate-ref": "1111111111111111111111111111111111111111111111111111111111111111",
+        "policy-version": "2026.07.1",
+        "classification": "consequential",
+        "execution": {
+          "action": "kernel.resume_stream",
+          "target": "stream:gw:ivan-mbp:0001",
+          "args-hash": "d4c4daa21745a92700d477c87673bde805eaf63cdb0b34183d66120a3cb77f90",
+          "outcome": "applied",
+          "started-at": "2026-07-26T10:30:00.000Z",
+          "finished-at": "2026-07-26T10:30:00.000Z"
+        },
+        "evidence": {
+          "schema": "kernel.resume_stream.v1",
+          "media-type": "application/json",
+          "payload-hash": "d4c4daa21745a92700d477c87673bde805eaf63cdb0b34183d66120a3cb77f90",
+          "retain-until": "2036-07-26T00:00:00.000Z"
+        },
+        "sig": {
+          "alg": "ed25519",
+          "key": "ed25519:09b3c43478cc065aeeeba98ee919e6b007ff3ff122f86e0a4a3fbc5898092d3a",
+          "value": "79b01a7dd8c6556cf3257d9e0e5ffa8cdccf9a83743b1d8e52e581d17ef5e4bdf27efa1a2d27cef2372aee1774e67861406db98692630d832111072d7ef29a01"
+        }
+      },
+      "payloads": [],
+      "expected": {
+        "valid": false,
+        "error": "stream-resume-unbound"
+      }
+    },
+    {
+      "name": "args-hash-does-not-commit-to-the-document",
+      "description": "the approval signature binds `args-hash`; a resume whose document it does not cover is a signature over nothing",
+      "envelope": {
+        "v": "stozher/0.1",
+        "kind": "effect",
+        "emitted-at": "2026-07-26T10:30:00.000Z",
+        "stream": "kernel:core",
+        "seq": 12,
+        "prev-hash": "3333333333333333333333333333333333333333333333333333333333333333",
+        "identity": {
+          "subject": "human:ivan",
+          "key": "ed25519:09b3c43478cc065aeeeba98ee919e6b007ff3ff122f86e0a4a3fbc5898092d3a",
+          "component": "kernel"
+        },
+        "mandate-ref": "1111111111111111111111111111111111111111111111111111111111111111",
+        "policy-version": "2026.07.1",
+        "classification": "consequential",
+        "execution": {
+          "action": "kernel.resume_stream",
+          "target": "stream:gw:ivan-mbp:0001",
+          "args-hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "outcome": "applied",
+          "started-at": "2026-07-26T10:30:00.000Z",
+          "finished-at": "2026-07-26T10:30:00.000Z"
+        },
+        "evidence": {
+          "schema": "kernel.resume_stream.v1",
+          "media-type": "application/json",
+          "payload-hash": "d4c4daa21745a92700d477c87673bde805eaf63cdb0b34183d66120a3cb77f90",
+          "retain-until": "2036-07-26T00:00:00.000Z"
+        },
+        "sig": {
+          "alg": "ed25519",
+          "key": "ed25519:09b3c43478cc065aeeeba98ee919e6b007ff3ff122f86e0a4a3fbc5898092d3a",
+          "value": "cafe882e41eaf5d6a0521d15d378dbdbaed94251772c285af576cb3c0e8d36f711178036b4d1d300f9f1a2973d051e4a0dc97053c26ec4c6c593d711ee01d10e"
+        }
+      },
+      "payloads": [
+        {
+          "payload-hash": "d4c4daa21745a92700d477c87673bde805eaf63cdb0b34183d66120a3cb77f90",
+          "media-type": "application/json",
+          "payload": {
+            "stream": "gw:ivan-mbp:0001",
+            "resume-seq": 0,
+            "refused-object-hash": "93eb7f728e9f0178a6baa3ba04c5c65e8af51de3faf811d06f82b2523322989d",
+            "reason-code": "mandate-standing-lifetime-exceeded"
+          }
+        }
+      ],
+      "expected": {
+        "valid": false,
+        "error": "stream-resume-unbound"
+      }
+    },
+    {
+      "name": "target-does-not-name-a-stream",
+      "description": "execution.target MUST be stream:<stream>",
+      "envelope": {
+        "v": "stozher/0.1",
+        "kind": "effect",
+        "emitted-at": "2026-07-26T10:30:00.000Z",
+        "stream": "kernel:core",
+        "seq": 12,
+        "prev-hash": "3333333333333333333333333333333333333333333333333333333333333333",
+        "identity": {
+          "subject": "human:ivan",
+          "key": "ed25519:09b3c43478cc065aeeeba98ee919e6b007ff3ff122f86e0a4a3fbc5898092d3a",
+          "component": "kernel"
+        },
+        "mandate-ref": "1111111111111111111111111111111111111111111111111111111111111111",
+        "policy-version": "2026.07.1",
+        "classification": "consequential",
+        "execution": {
+          "action": "kernel.resume_stream",
+          "target": "policy:2026.07.1",
+          "args-hash": "d4c4daa21745a92700d477c87673bde805eaf63cdb0b34183d66120a3cb77f90",
+          "outcome": "applied",
+          "started-at": "2026-07-26T10:30:00.000Z",
+          "finished-at": "2026-07-26T10:30:00.000Z"
+        },
+        "evidence": {
+          "schema": "kernel.resume_stream.v1",
+          "media-type": "application/json",
+          "payload-hash": "d4c4daa21745a92700d477c87673bde805eaf63cdb0b34183d66120a3cb77f90",
+          "retain-until": "2036-07-26T00:00:00.000Z"
+        },
+        "sig": {
+          "alg": "ed25519",
+          "key": "ed25519:09b3c43478cc065aeeeba98ee919e6b007ff3ff122f86e0a4a3fbc5898092d3a",
+          "value": "e4b7b8e0e40ab57240cad9698f8d2a2c0b388158905180be82f4090e0450496cda88b320379e7143381657ea2b16e7b89c0c6c84132ea5beb062ae2e6ef7200e"
+        }
+      },
+      "payloads": [
+        {
+          "payload-hash": "d4c4daa21745a92700d477c87673bde805eaf63cdb0b34183d66120a3cb77f90",
+          "media-type": "application/json",
+          "payload": {
+            "stream": "gw:ivan-mbp:0001",
+            "resume-seq": 0,
+            "refused-object-hash": "93eb7f728e9f0178a6baa3ba04c5c65e8af51de3faf811d06f82b2523322989d",
+            "reason-code": "mandate-standing-lifetime-exceeded"
+          }
+        }
+      ],
+      "expected": {
+        "valid": false,
+        "error": "stream-resume-malformed"
+      }
+    },
+    {
+      "name": "document-names-a-different-stream",
+      "description": "two spellings of one fact: approve the resumption of one stream, resume another",
+      "envelope": {
+        "v": "stozher/0.1",
+        "kind": "effect",
+        "emitted-at": "2026-07-26T10:30:00.000Z",
+        "stream": "kernel:core",
+        "seq": 12,
+        "prev-hash": "3333333333333333333333333333333333333333333333333333333333333333",
+        "identity": {
+          "subject": "human:ivan",
+          "key": "ed25519:09b3c43478cc065aeeeba98ee919e6b007ff3ff122f86e0a4a3fbc5898092d3a",
+          "component": "kernel"
+        },
+        "mandate-ref": "1111111111111111111111111111111111111111111111111111111111111111",
+        "policy-version": "2026.07.1",
+        "classification": "consequential",
+        "execution": {
+          "action": "kernel.resume_stream",
+          "target": "stream:gw:ivan-mbp:0001",
+          "args-hash": "380c14c143b0864693a1c178a9e704d5b4897a9dfa904446bdf7bdc9b2c8efc1",
+          "outcome": "applied",
+          "started-at": "2026-07-26T10:30:00.000Z",
+          "finished-at": "2026-07-26T10:30:00.000Z"
+        },
+        "evidence": {
+          "schema": "kernel.resume_stream.v1",
+          "media-type": "application/json",
+          "payload-hash": "380c14c143b0864693a1c178a9e704d5b4897a9dfa904446bdf7bdc9b2c8efc1",
+          "retain-until": "2036-07-26T00:00:00.000Z"
+        },
+        "sig": {
+          "alg": "ed25519",
+          "key": "ed25519:09b3c43478cc065aeeeba98ee919e6b007ff3ff122f86e0a4a3fbc5898092d3a",
+          "value": "1168f5a37fcd25398155859b14c20033d104c485337a201d4a0d114123fa2248984bfe0f47d5598e7a8a0232fa36e8907329665cf058504087afb02eab45de09"
+        }
+      },
+      "payloads": [
+        {
+          "payload-hash": "380c14c143b0864693a1c178a9e704d5b4897a9dfa904446bdf7bdc9b2c8efc1",
+          "media-type": "application/json",
+          "payload": {
+            "stream": "gw:ivan-mbp:0002",
+            "resume-seq": 0,
+            "refused-object-hash": "93eb7f728e9f0178a6baa3ba04c5c65e8af51de3faf811d06f82b2523322989d",
+            "reason-code": "mandate-standing-lifetime-exceeded"
+          }
+        }
+      ],
+      "expected": {
+        "valid": false,
+        "error": "stream-resume-malformed"
+      }
+    },
+    {
+      "name": "refused-object-hash-is-not-a-digest",
+      "description": "the bridge is a hash of bytes the kernel holds; anything else cannot be checked against the rejection record",
+      "envelope": {
+        "v": "stozher/0.1",
+        "kind": "effect",
+        "emitted-at": "2026-07-26T10:30:00.000Z",
+        "stream": "kernel:core",
+        "seq": 12,
+        "prev-hash": "3333333333333333333333333333333333333333333333333333333333333333",
+        "identity": {
+          "subject": "human:ivan",
+          "key": "ed25519:09b3c43478cc065aeeeba98ee919e6b007ff3ff122f86e0a4a3fbc5898092d3a",
+          "component": "kernel"
+        },
+        "mandate-ref": "1111111111111111111111111111111111111111111111111111111111111111",
+        "policy-version": "2026.07.1",
+        "classification": "consequential",
+        "execution": {
+          "action": "kernel.resume_stream",
+          "target": "stream:gw:ivan-mbp:0001",
+          "args-hash": "b88cfa66eda7587cb7d985ec0afb5e18f93761c81191984f2a5bcf73d977f8e7",
+          "outcome": "applied",
+          "started-at": "2026-07-26T10:30:00.000Z",
+          "finished-at": "2026-07-26T10:30:00.000Z"
+        },
+        "evidence": {
+          "schema": "kernel.resume_stream.v1",
+          "media-type": "application/json",
+          "payload-hash": "b88cfa66eda7587cb7d985ec0afb5e18f93761c81191984f2a5bcf73d977f8e7",
+          "retain-until": "2036-07-26T00:00:00.000Z"
+        },
+        "sig": {
+          "alg": "ed25519",
+          "key": "ed25519:09b3c43478cc065aeeeba98ee919e6b007ff3ff122f86e0a4a3fbc5898092d3a",
+          "value": "c25f01577e128409e10bc348fa9bf1a73f27c6b8aaf17928cca318f49138a4fd25ee965119a62df0792277377886cbd6e6a84cd2c44ab9fd40e65cd6fe3f3d03"
+        }
+      },
+      "payloads": [
+        {
+          "payload-hash": "b88cfa66eda7587cb7d985ec0afb5e18f93761c81191984f2a5bcf73d977f8e7",
+          "media-type": "application/json",
+          "payload": {
+            "stream": "gw:ivan-mbp:0001",
+            "resume-seq": 0,
+            "refused-object-hash": "not-a-hash",
+            "reason-code": "mandate-standing-lifetime-exceeded"
+          }
+        }
+      ],
+      "expected": {
+        "valid": false,
+        "error": "stream-resume-malformed"
+      }
+    },
+    {
+      "name": "document-carries-an-unknown-member",
+      "description": "a closed member set, for the same reason policy has one: a resume an implementation does not fully understand is a resume it MUST NOT act on",
+      "envelope": {
+        "v": "stozher/0.1",
+        "kind": "effect",
+        "emitted-at": "2026-07-26T10:30:00.000Z",
+        "stream": "kernel:core",
+        "seq": 12,
+        "prev-hash": "3333333333333333333333333333333333333333333333333333333333333333",
+        "identity": {
+          "subject": "human:ivan",
+          "key": "ed25519:09b3c43478cc065aeeeba98ee919e6b007ff3ff122f86e0a4a3fbc5898092d3a",
+          "component": "kernel"
+        },
+        "mandate-ref": "1111111111111111111111111111111111111111111111111111111111111111",
+        "policy-version": "2026.07.1",
+        "classification": "consequential",
+        "execution": {
+          "action": "kernel.resume_stream",
+          "target": "stream:gw:ivan-mbp:0001",
+          "args-hash": "d33b252ef61e793b989b1b48c9284ba0c4d1a84f9c684f74fa6e5f9bb2b38869",
+          "outcome": "applied",
+          "started-at": "2026-07-26T10:30:00.000Z",
+          "finished-at": "2026-07-26T10:30:00.000Z"
+        },
+        "evidence": {
+          "schema": "kernel.resume_stream.v1",
+          "media-type": "application/json",
+          "payload-hash": "d33b252ef61e793b989b1b48c9284ba0c4d1a84f9c684f74fa6e5f9bb2b38869",
+          "retain-until": "2036-07-26T00:00:00.000Z"
+        },
+        "sig": {
+          "alg": "ed25519",
+          "key": "ed25519:09b3c43478cc065aeeeba98ee919e6b007ff3ff122f86e0a4a3fbc5898092d3a",
+          "value": "d9094b5b86f91f2b9656aeb37319bc709cf6c211206e64d6bbfbee473fb1203bb6f340a2e4ca4f7faf62c696aec1a32c4c038db62e1cfb828925a04a9767ed04"
+        }
+      },
+      "payloads": [
+        {
+          "payload-hash": "d33b252ef61e793b989b1b48c9284ba0c4d1a84f9c684f74fa6e5f9bb2b38869",
+          "media-type": "application/json",
+          "payload": {
+            "stream": "gw:ivan-mbp:0001",
+            "resume-seq": 0,
+            "refused-object-hash": "93eb7f728e9f0178a6baa3ba04c5c65e8af51de3faf811d06f82b2523322989d",
+            "reason-code": "mandate-standing-lifetime-exceeded",
+            "skip-to": 99
+          }
+        }
+      ],
+      "expected": {
+        "valid": false,
+        "error": "stream-resume-malformed"
+      }
+    }
+  ]
+}

@@ -27,9 +27,21 @@ structured refusal, O(ms) hot path) remains binding.
    - **standing** for headless or scheduled callers (CI, cron, a service) — a human signed a rule with
      mandatory expiry.
 4. A session without a resolvable, unexpired mandate MUST be refused at connect time with
-   `mandate-unresolved` or `mandate-expired`. The gateway MUST NOT accept calls and defer the mandate
+   `mandate-unresolved` or `mandate-expired`. **"Resolvable" means resolvable by the kernel.** The
+   gateway MUST publish the session mandate and observe its acceptance before serving any call under
+   it. If the kernel is `unreachable` (§05 §7.1) at connect time the gateway MAY serve under §7's
+   `offline` map with the mandate chained locally, and MUST re-attempt on every reconnect; if the
+   publication is `refused`, §05 §7.1 clause 4 governs and the gateway MUST NOT serve. The gateway
+   MUST NOT accept calls and defer the mandate
    question until the first consequential one: a `read` performed without authority is still an
    effect (exfiltration is a read).
+
+   Stated because it was not, and the difference cost seven days. A mandate that resolves only
+   inside the process that benefits from it is not a mandate the organization can be held to: a
+   component read a file, checked the grantee key, the kind and the expiry, satisfied §03 §5 against
+   its own configured roots, and served a week of calls under authority its kernel had already
+   refused. Every one of those envelopes was rejected and nothing anywhere said so. The resolver was
+   never named, so the only reading available was the one that made the component its own authority.
 5. The gateway MUST NOT allow a caller to choose its own subject, key, mandate, or classification
    through any request field. Everything identity-bearing is derived from the authenticated
    credential (`gateway-caller-asserted-identity`).

@@ -321,6 +321,24 @@ class Gateway:
         self.emitter.register_key(key)
         self._publish_mandate(session)
         self._record_session_open(session)
+        # §10 §1.4: **"resolvable" means resolvable by the kernel.** The mandate is offered before
+        # this session serves anything, so a grant the organization's kernel will not accept is
+        # known here rather than a week later. A kernel that cannot answer is not a refusal — the
+        # session opens and §05 §7's offline map governs (§05 §7.1 clause 1). A kernel that *has*
+        # answered no wedges the stream, and every call is then refused by §05 §7.1 through the
+        # ordinary chokepoint, with the §06 §4.1 object and the kernel's own reason code — rather
+        # than by an opaque failure to start, which is not something a calling agent can report.
+        self.emitter.push_pending()
+        wedge = self.store.wedge(session.stream)
+        if wedge is not None:
+            logger.error(
+                "the kernel refused this session's stream %s at seq %s (%s: %s); no call will be "
+                "served under it until an operator resumes the stream (spec/04 §7.2)",
+                session.stream,
+                wedge.seq,
+                wedge.reason_code,
+                wedge.detail,
+            )
         self.session = session
         # An effect this stream applied without getting its record into the chain — the process was
         # killed between the two, or the chain write failed — is chained now, before anything else

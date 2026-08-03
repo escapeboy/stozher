@@ -110,6 +110,23 @@ pub struct Projections {
     pub checkpoint: Option<CheckpointRow>,
     /// A gate decision recorded by this envelope (§06 §5).
     pub gate_decision: Option<GateDecisionRow>,
+    /// A wedged position this envelope authorizes the kernel to bridge (§04 §7.2).
+    pub stream_resume: Option<StreamResume>,
+}
+
+/// The position a `kernel.resume_stream` envelope un-wedges (§04 §7.2).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StreamResume {
+    /// The stream being resumed.
+    pub stream: String,
+    /// The refused position, which stays empty and stays refused.
+    pub resume_seq: u64,
+    /// `object-hash` of the refused bytes as received — the only thing that may stand in for the
+    /// missing predecessor, and a value the kernel recorded itself (§04 §7).
+    pub bridge_hash: String,
+    /// The reason the kernel gave when it refused, carried so the resume record says what it is
+    /// resuming *from* rather than merely that someone resumed something.
+    pub reason_code: String,
 }
 
 /// What one envelope adds to the running totals.
@@ -544,12 +561,33 @@ impl Store {
         // for `first-seen-at` and `last-appended-at` alone — timestamps about *observation*, which
         // the chain does not record and which carry no authority. SQLite's documented bare-column
         // rule makes `id` the value from the same row as `MAX(seq)`.
+        // The rejection join is §09 §4.2's third requirement, and it is a join rather than a second
+        // endpoint on purpose. Both facts were already in this store — the last accepted `seq` here,
+        // the refusals one table away — and nothing correlated them, so the row of a stream the
+        // kernel was actively refusing was byte-identical to the row of a stream with nothing to
+        // say, and stayed that way until the quiet interval elapsed. The incident that produced this
+        // clause lost seven days to it. Quiet is the absence of evidence; refused is evidence.
+        //
+        // The stream set is the union of both sides, because an emitter whose *first* submission was
+        // refused has no accepted envelope at all and would otherwise not appear in the surface —
+        // which is precisely the mandate-swapped-at-connect case.
         let rows = sqlx::query(
-            "SELECT e.stream AS stream, MAX(e.seq) AS head_seq, e.id AS head_hash, e.kind AS kind, \
-                    s.stream_kind AS stream_kind, s.first_seen_at AS first_seen_at, \
-                    s.last_appended_at AS last_appended_at \
-             FROM envelopes e LEFT JOIN streams s ON s.stream = e.stream \
-             GROUP BY e.stream ORDER BY e.stream",
+            "WITH accepted AS ( \
+                 SELECT stream AS stream, MAX(seq) AS head_seq, id AS head_hash, kind AS kind \
+                 FROM envelopes GROUP BY stream), \
+              refused AS ( \
+                 SELECT claimed_stream AS stream, MAX(seq) AS rejection_seq, reason AS reason, \
+                        received_at AS received_at \
+                 FROM rejections WHERE claimed_stream IS NOT NULL GROUP BY claimed_stream) \
+             SELECT n.stream AS stream, a.head_seq AS head_seq, a.head_hash AS head_hash, \
+                    a.kind AS kind, s.stream_kind AS stream_kind, s.first_seen_at AS first_seen_at, \
+                    s.last_appended_at AS last_appended_at, r.reason AS last_refusal_reason, \
+                    r.received_at AS last_refused_at \
+             FROM (SELECT stream FROM accepted UNION SELECT stream FROM refused) n \
+             LEFT JOIN accepted a ON a.stream = n.stream \
+             LEFT JOIN refused r ON r.stream = n.stream \
+             LEFT JOIN streams s ON s.stream = n.stream \
+             ORDER BY n.stream",
         )
         .fetch_all(&self.pool)
         .await
@@ -558,20 +596,92 @@ impl Store {
             .iter()
             .map(|r| {
                 let emitted: Option<String> = r.get("last_appended_at");
+                let refused_at: Option<String> = r.get("last_refused_at");
+                let head_seq = r.get::<Option<i64>, _>("head_seq");
                 serde_json::json!({
                     "stream": r.get::<String, _>("stream"),
                     // A projection row can be missing entirely; the kind is then whatever the head
                     // envelope says, which is where the projection got it from in the first place.
+                    // Both are absent for a stream known only from its refusals — the kernel has
+                    // never seen an envelope of it, so it has no honest answer here.
                     "stream-kind": r
                         .get::<Option<String>, _>("stream_kind")
-                        .unwrap_or_else(|| r.get::<String, _>("kind")),
-                    "head-seq": as_u64(r, "head_seq"),
-                    "head-hash": r.get::<String, _>("head_hash"),
+                        .or_else(|| r.get::<Option<String>, _>("kind")),
+                    "head-seq": head_seq.map(|s| u64::try_from(s).unwrap_or(0)),
+                    "head-hash": r.get::<Option<String>, _>("head_hash"),
                     "first-seen-at": r.get::<Option<String>, _>("first_seen_at"),
                     "last-appended-at": emitted,
+                    "last-refused-at": refused_at,
+                    "last-refusal-reason": r.get::<Option<String>, _>("last_refusal_reason"),
                 })
             })
             .collect())
+    }
+
+    /// The gap position an operator authorized the kernel to bridge on this stream (§04 §7.2).
+    ///
+    /// Returns the `object-hash` of the refused bytes that may stand in for the missing
+    /// predecessor, for exactly one envelope at `resume_seq + 1`.
+    ///
+    /// # Errors
+    ///
+    /// [`codes::STORE_UNAVAILABLE`].
+    pub async fn stream_resume(&self, stream: &str, resume_seq: u64) -> Result<Option<String>> {
+        let row = sqlx::query(
+            "SELECT bridge_hash FROM stream_resumes WHERE stream = ?1 AND resume_seq = ?2",
+        )
+        .bind(stream)
+        .bind(i64::try_from(resume_seq).unwrap_or(i64::MAX))
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(db)?;
+        Ok(row.map(|r| r.get::<String, _>("bridge_hash")))
+    }
+
+    /// Every authorized resume, newest first — the operator-facing account of who un-wedged what.
+    ///
+    /// # Errors
+    ///
+    /// [`codes::STORE_UNAVAILABLE`].
+    pub async fn stream_resumes(&self) -> Result<Vec<Value>> {
+        let rows = sqlx::query(
+            "SELECT stream, resume_seq, bridge_hash, reason_code, envelope_id, authorized_at \
+             FROM stream_resumes ORDER BY authorized_at DESC, stream",
+        )
+        .fetch_all(&self.pool)
+        .await
+        .map_err(db)?;
+        Ok(rows
+            .iter()
+            .map(|r| {
+                serde_json::json!({
+                    "stream": r.get::<String, _>("stream"),
+                    "resume-seq": as_u64(r, "resume_seq"),
+                    "bridge-prev-hash": r.get::<String, _>("bridge_hash"),
+                    "reason-code": r.get::<String, _>("reason_code"),
+                    "envelope-id": r.get::<String, _>("envelope_id"),
+                    "authorized-at": r.get::<String, _>("authorized_at"),
+                })
+            })
+            .collect())
+    }
+
+    /// Whether a rejection was recorded for exactly this claimed position (§04 §7.2 rule 5).
+    ///
+    /// # Errors
+    ///
+    /// [`codes::STORE_UNAVAILABLE`].
+    pub async fn rejection_at(&self, stream: &str, seq: u64) -> Result<Option<String>> {
+        let row = sqlx::query(
+            "SELECT object_hash FROM rejections WHERE claimed_stream = ?1 AND claimed_seq = ?2 \
+             ORDER BY seq DESC LIMIT 1",
+        )
+        .bind(stream)
+        .bind(i64::try_from(seq).unwrap_or(i64::MAX))
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(db)?;
+        Ok(row.map(|r| r.get::<String, _>("object_hash")))
     }
 
     /// A contiguous range of one stream, in chain order, as parsed envelopes.
@@ -1769,9 +1879,38 @@ impl Store {
         .map(|r| (as_u64(&r, "seq"), r.get::<String, _>("id")));
 
         let claimed_prev = plan.envelope["prev-hash"].as_str();
+        // §04 §7.2 — the one authorized exception to the no-gap rule, and it is not reachable
+        // without a human root's signature: the row it reads is written only by appending a
+        // `kernel.resume_stream` envelope, which `ingest` puts through the root-approval path like a
+        // policy change. What it permits is exactly one envelope at `resume_seq + 1` whose
+        // `prev-hash` is the `object-hash` of the bytes the kernel refused at `resume_seq` — the
+        // value §7's rejection record already holds. Nothing here validates those bytes, and nothing
+        // here fills the position: it stays empty and it stays refused.
+        //
+        // One position, and only the one immediately after the head: a resume authorizing seq 5
+        // does not authorize an emitter to arrive at seq 9. Two refused positions are two refusals
+        // and two operator acts, which is the cost of the exception being an exception.
+        let bridgeable_at = match &head {
+            None => 1,
+            Some((head_seq, _)) => head_seq + 2,
+        };
+        let bridge = if seq == bridgeable_at {
+            sqlx::query(
+                "SELECT bridge_hash FROM stream_resumes WHERE stream = ?1 AND resume_seq = ?2",
+            )
+            .bind(&stream)
+            .bind(i64::try_from(seq - 1).unwrap_or(i64::MAX))
+            .fetch_optional(&mut *tx)
+            .await
+            .map_err(db)?
+            .map(|r| r.get::<String, _>("bridge_hash"))
+        } else {
+            None
+        };
+        let bridged = bridge.is_some() && bridge.as_deref() == claimed_prev;
         let position = match &head {
             None => {
-                if seq != 0 {
+                if seq != 0 && !bridged {
                     tx.rollback().await.map_err(db)?;
                     return Err(Error::new(
                         "chain-seq-gap",
@@ -1779,7 +1918,9 @@ impl Store {
                     )
                     .at_seq(seq));
                 }
-                if claimed_prev.is_some() {
+                // Past a bridge the predecessor is the refused position, and `prev-hash` has already
+                // been compared against the hash the operator's signature named.
+                if seq == 0 && claimed_prev.is_some() {
                     tx.rollback().await.map_err(db)?;
                     return Err(Error::new(
                         "chain-genesis-prev-not-null",
@@ -1798,13 +1939,15 @@ impl Store {
                         ),
                     )
                     .at_seq(seq))
-                } else if seq > head_seq + 1 {
+                } else if seq > head_seq + 1 && !bridged {
                     // An emitter must not be able to reserve future positions (§04 §3).
                     Err(Error::new(
                         "chain-seq-gap",
                         format!("stream {stream} is at seq {head_seq}; {seq} would leave a gap"),
                     )
                     .at_seq(seq))
+                } else if seq > head_seq + 1 {
+                    Ok(())
                 } else if claimed_prev != Some(head_id.as_str()) {
                     Err(Error::new(
                         "chain-prev-hash-mismatch",
@@ -2135,6 +2278,55 @@ impl Store {
                     db(e)
                 });
             }
+        }
+        if let Some(resume) = &projections.stream_resume {
+            // The position must be one the kernel actually refused (§04 §7.2 rule 5): a bridge to
+            // bytes it never saw is a gap with a signature on it. Read here rather than at
+            // validation because this is the transaction that makes the resume real.
+            let refused = sqlx::query(
+                "SELECT object_hash FROM rejections WHERE claimed_stream = ?1 AND claimed_seq = ?2 \
+                 ORDER BY seq DESC LIMIT 1",
+            )
+            .bind(&resume.stream)
+            .bind(i64::try_from(resume.resume_seq).unwrap_or(i64::MAX))
+            .fetch_optional(&mut **tx)
+            .await
+            .map_err(db)?
+            .map(|r| r.get::<String, _>("object_hash"));
+            match refused {
+                Some(hash) if hash == resume.bridge_hash => {}
+                Some(hash) => {
+                    return Err(Error::new(
+                        codes::STREAM_RESUME_POSITION_UNKNOWN,
+                        format!(
+                            "the rejection recorded at {} seq {} is of {hash}, not {}",
+                            resume.stream, resume.resume_seq, resume.bridge_hash
+                        ),
+                    ));
+                }
+                None => {
+                    return Err(Error::new(
+                        codes::STREAM_RESUME_POSITION_UNKNOWN,
+                        format!(
+                            "no rejection is recorded at {} seq {}",
+                            resume.stream, resume.resume_seq
+                        ),
+                    ));
+                }
+            }
+            sqlx::query(
+                "INSERT OR IGNORE INTO stream_resumes (stream, resume_seq, bridge_hash, \
+                 reason_code, envelope_id, authorized_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            )
+            .bind(&resume.stream)
+            .bind(i64::try_from(resume.resume_seq).unwrap_or(i64::MAX))
+            .bind(&resume.bridge_hash)
+            .bind(&resume.reason_code)
+            .bind(&plan.id)
+            .bind(&plan.received_at)
+            .execute(&mut **tx)
+            .await
+            .map_err(db)?;
         }
         if let Some(checkpoint) = &projections.checkpoint {
             let previous = sqlx::query(

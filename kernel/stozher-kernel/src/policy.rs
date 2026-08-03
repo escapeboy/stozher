@@ -23,7 +23,7 @@ use crate::clock;
 use crate::codes;
 
 /// Top-level members of a policy document (§05 §1). Closed: anything else is a rejection.
-const MEMBERS: [&str; 16] = [
+const MEMBERS: [&str; 17] = [
     "v",
     "kind",
     "policy-version",
@@ -39,8 +39,17 @@ const MEMBERS: [&str; 16] = [
     "budgets",
     "delegation",
     "offline",
+    "wedge-grace",
     "sig",
 ];
+
+/// The members of [`MEMBERS`] a document MAY omit (§05 §1).
+///
+/// Exactly one, and it will stay that way unless the specification says otherwise: `wedge-grace`
+/// bounds how long a component may keep serving `read` traffic after the kernel started refusing it
+/// (§05 §7.1). It grants nothing and it changes nobody's rights, so a deployment that says nothing
+/// can be given the default instead of having every document it has already signed invalidated.
+const OPTIONAL_MEMBERS: [&str; 1] = ["wedge-grace"];
 
 /// The `decision` vocabulary of a `gate-rules` entry (§05 §1). Closed.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -101,7 +110,7 @@ impl Policy {
             }
         }
         for required in MEMBERS {
-            if !map.contains_key(required) {
+            if !map.contains_key(required) && !OPTIONAL_MEMBERS.contains(&required) {
                 return Err(Error::new("schema-missing-member", required));
             }
         }
@@ -150,6 +159,11 @@ impl Policy {
         }
         for duration in ["checkpoint-interval", "aggregate-max-window"] {
             clock::parse_duration_seconds(string_member(map, duration)?)?;
+        }
+        if map.contains_key("wedge-grace") {
+            // Optional to *omit*, never optional to get wrong: a document that states the window
+            // and states it unparseably is a document whose author meant something by it.
+            clock::parse_duration_seconds(string_member(map, "wedge-grace")?)?;
         }
 
         let policy = Self {
@@ -209,6 +223,18 @@ impl Policy {
             .as_str()
             .and_then(|d| clock::parse_duration_seconds(d).ok())
             .unwrap_or(3_600)
+    }
+
+    /// `wedge-grace` in seconds (§05 §7.1), the one OPTIONAL member of §05 §1.
+    ///
+    /// Absent means the default, never means unbounded: a document that says nothing about the
+    /// window still gets one.
+    #[must_use]
+    pub fn wedge_grace_seconds(&self) -> i64 {
+        self.document["wedge-grace"]
+            .as_str()
+            .and_then(|d| clock::parse_duration_seconds(d).ok())
+            .unwrap_or(stozher_core::sync::WEDGE_GRACE_DEFAULT_SECONDS)
     }
 
     /// `delegation.max-depth`, the deployment's cap on chain length (§03 §5).

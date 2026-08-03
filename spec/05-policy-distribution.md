@@ -55,6 +55,16 @@ A policy document is a signed object (§01 §5), signed by the organization's po
 - Unknown members MUST be rejected (`schema-unknown-member`). A policy document an implementation
   does not fully understand is a policy document it MUST NOT enforce; failing closed here means
   failing to start, not failing open.
+- **Every member above is REQUIRED. There is exactly one OPTIONAL member**, `wedge-grace` (§7.1),
+  a duration of §01 §2.4 whose default when absent is `PT5M`. An implementation MUST accept a
+  document that omits it, MUST accept one that carries it, and MUST NOT treat it as unknown.
+
+  The asymmetry is deliberate and is the smallest one available. Making it REQUIRED would
+  invalidate every document and every vector already signed, for a member that bounds how long a
+  component may keep serving `read` traffic after the kernel started refusing it — a *bound on a
+  degraded state*, not a grant of authority. A deployment that says nothing gets the bound anyway;
+  that is what a default is for, and it is why this member may be absent while none of the others
+  may.
 
 ## 2. Distribution — versioned pull
 
@@ -213,7 +223,8 @@ Normative:
    spec provides the second one.
 6. **Policy cannot lower the bar on the mechanism that enforces policy.** The actions that change
    what the system will permit — `kernel.publish_policy`, `kernel.register_component`,
-   `kernel.enroll_root`, `kernel.retire_root`, `kernel.conformance_run` — MUST be approved by an
+   `kernel.enroll_root`, `kernel.retire_root`, `kernel.conformance_run`, `kernel.resume_stream`
+   (§04 §7.2) — MUST be approved by an
    enrolled human root, whatever class the policy in force assigns them. An organization may
    classify them *higher*; it MUST NOT classify them lower, and a `gate-rules` entry that would
    allow one of them without a root's signature has no effect on them.
@@ -256,6 +267,80 @@ Normative:
   cannot acquire one offline.
 - **Silently proceeding is never permitted** for any class. Every path terminates in either an
   applied effect with an envelope, or a refusal with an envelope (§06 §6).
+
+### 7.1 Refused is not offline
+
+This subsection is here because §7 above is where a component's behaviour when it cannot reach the
+kernel is specified, and *refused* is the state §7 currently mis-files as `offline`. Everything §7
+says about `offline` continues to apply to `unreachable` and to nothing else.
+
+A component's submission has exactly **three** outcomes, and an implementation MUST distinguish
+them:
+
+| Outcome | What happened | What governs the component |
+|---|---|---|
+| `accepted` | the kernel appended it | continue |
+| `unreachable` | no answer: transport failure, timeout, no route | retry; §7's `offline` map |
+| `refused` | the kernel answered with a rejection (§04 §7) | this subsection |
+
+1. A component MUST NOT treat a `refused` submission as `unreachable`. The `offline` map governs a
+   kernel that cannot answer, never one that has answered "no": retrying identical bytes is futile
+   (§04 §3 makes the outcome deterministic in the bytes), and the `allow` row would otherwise
+   licence unbounded unaudited operation.
+2. A component MUST record the rejection's reason code durably against the local envelope, and MUST
+   NOT erase it on any later transition of that row. An operator asked to intervene (§03 §7) can act
+   only from the reason, and the recovery act of §04 §7.2 cites it.
+3. The component's stream is **wedged** at that position (§03 §7, §04 §3). A component MUST NOT
+   submit past a wedge, and MUST NOT renumber, skip or rewrite the refused position. It MUST go on
+   chaining locally: the local chain is the record of truth until the kernel has it, and a component
+   that stopped writing would lose the evidence of what it did while wedged.
+4. **While wedged, the reason decides whether a grace window exists at all, and the class decides
+   who may use it.** For every call, in this order:
+   - if the reason code is one of the `mandate-*` family, or `policy-not-published`, the component
+     MUST refuse **every** class immediately, `read` and `benign` included, and MUST NOT serve again
+     until a submission is accepted. Authority the organization cannot resolve is not authority
+     (ADR-0001), and a `read` performed without authority is still an effect (§10 §1.4). There is no
+     grace here for any class;
+   - otherwise, `consequential` and `prohibited` MUST be refused immediately, with no grace. Grace
+     over `consequential` is exactly the window an auditor asks *"what else was still permitted"*
+     about;
+   - otherwise, for `read` and `benign`, a bounded grace window applies: the component MAY serve
+     until `policy.wedge-grace` (default `PT5M`, §1) has elapsed since the **first** refusal on that
+     stream. Each effect served under grace MUST be recorded as a finding — counted against the
+     wedged stream and answerable from the component itself, without reference to the kernel it
+     cannot reach. Serving under grace is loud or it is not permitted;
+   - once `policy.wedge-grace` has elapsed, every class MUST be refused. The window is measured from
+     the first refusal and MUST NOT be restarted by a later one: a wedge that could be re-graced by
+     re-offering the same bytes is not bounded.
+5. **Silent degradation MUST NOT exist.** A refusal issued under this subsection MUST be the §06
+   §4.1 refusal object with `result: "blocked"` and `reason-code` set to the kernel's reason code
+   **verbatim** — not a paraphrase, not a gateway code of the component's own. The calling agent is
+   told that its effects are not being recorded, in the same shape as every other refusal, and stops
+   (§10 §6).
+6. Recovery is §04 §7.2 and §7.2 below. A wedge ends when a submission on that stream is accepted,
+   and by no other event: neither the passage of time, nor a restart of the component, nor a new
+   session under a new mandate clears it.
+
+**Why the shape is this shape, and not either of the two obvious ones.** Stopping unilaterally on
+any refusal is a denial-of-service weapon: one malformed envelope, emitted by one component, halts
+an organization's tooling faster than a human can read the reason, and an adversary who can provoke
+a rejection can therefore provoke an outage. Unbounded grace is the opposite failure and the one
+this specification was written against: a component that serves indefinitely while nothing it does
+reaches the audit. The class-bound, reason-gated window is the narrow bridge between them — long
+enough to read a reason code, short enough that no `consequential` effect ever crosses it, and
+closed entirely when what the kernel refused was the authority itself.
+
+### 7.2 Resuming, from the component's side
+
+1. A component MUST NOT resume submitting past a wedge on its own initiative, on any timer, or on
+   any signal from the caller. The exit is the operator act of §04 §7.2 and nothing else.
+2. Once the kernel accepts a submission on that stream again, the component MUST clear the wedge and
+   MUST resume serving under the ordinary rules. It MUST NOT re-submit the refused bytes: they were
+   refused, they stay refused (§04 §7.2 rule 4), and the position they occupy is bridged rather than
+   filled.
+3. A component MUST NOT report, to a caller or in its own surfaces, that the effects served under
+   grace were recorded at the kernel. They were not, and a recovery that quietly relabels them
+   converts a bounded gap in the audit into a false statement about it.
 
 ## 8. Tier 3 — drift learning (deferred, constrained here)
 

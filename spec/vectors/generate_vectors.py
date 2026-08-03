@@ -4036,6 +4036,559 @@ def gen_root_change() -> None:
     )
 
 
+# --------------------------------------------------------------------------
+# 21. Sync outcome -- spec 05 section 7.1
+# --------------------------------------------------------------------------
+
+#: The default `policy.wedge-grace`, in seconds (`PT5M`).
+WEDGE_GRACE_SECONDS = 300
+
+#: The baseline profile's `offline` map (spec 05 section 1).
+OFFLINE_MAP = {"read": "allow", "benign": "allow", "consequential": "block", "prohibited": "block"}
+
+
+def sync_outcome(
+    outcome: str,
+    reason_code: str | None,
+    classification: str,
+    elapsed: int,
+    offline: dict,
+    grace: int,
+) -> dict:
+    """An independent statement of spec 05 section 7.1 clauses 1, 4 and 5.
+
+    Three submission outcomes, not two: `accepted`, `unreachable` and `refused`. The `offline` map
+    governs only the second. For the third, the *reason* decides whether a grace window exists at
+    all and the *class* decides who may use it.
+    """
+    if outcome == "accepted":
+        return {"action": "serve", "reason-code": None, "finding": False}
+    if outcome == "unreachable":
+        if offline.get(classification) == "allow":
+            return {"action": "serve", "reason-code": None, "finding": False}
+        return {"action": "refuse", "reason-code": "policy-stale-offline", "finding": False}
+    assert outcome == "refused", outcome
+    assert reason_code is not None
+    if reason_code.startswith("mandate-") or reason_code == "policy-not-published":
+        # Authority the organization cannot resolve is not authority: no class has grace here.
+        return {"action": "refuse", "reason-code": reason_code, "finding": False}
+    if classification in ("consequential", "prohibited"):
+        return {"action": "refuse", "reason-code": reason_code, "finding": False}
+    if elapsed < grace:
+        return {"action": "serve", "reason-code": None, "finding": True}
+    return {"action": "refuse", "reason-code": reason_code, "finding": False}
+
+
+def gen_sync_outcome() -> None:
+    cases: list[tuple[str, str, str | None, str, int, str]] = [
+        (
+            "accepted-serves",
+            "accepted",
+            None,
+            "consequential",
+            0,
+            "the ordinary state: the kernel took the record and the component carries on",
+        ),
+        (
+            "unreachable-read-under-offline-allow-serves",
+            "unreachable",
+            None,
+            "read",
+            0,
+            "the counterfactual. A kernel that cannot answer is section 7's offline case and nothing "
+            "here changes it — an implementation that refuses everything fails this vector",
+        ),
+        (
+            "unreachable-benign-under-offline-allow-serves",
+            "unreachable",
+            None,
+            "benign",
+            0,
+            "the same, one class up: the offline map is what decides, not the fact of not reaching "
+            "the kernel",
+        ),
+        (
+            "unreachable-consequential-under-offline-block-refuses",
+            "unreachable",
+            None,
+            "consequential",
+            0,
+            "an action requiring a human signature cannot acquire one while the kernel is unreachable",
+        ),
+        (
+            "refused-mandate-unresolved-read-refuses-immediately",
+            "refused",
+            "mandate-unresolved",
+            "read",
+            0,
+            "the DEF-2 case, and the state the specification did not name: the kernel has answered "
+            "no. A read performed without authority is still an effect, so it stops with everything "
+            "else and it stops at once",
+        ),
+        (
+            "refused-mandate-unresolved-benign-refuses-immediately",
+            "refused",
+            "mandate-unresolved",
+            "benign",
+            0,
+            "no class has grace under a mandate-family reason",
+        ),
+        (
+            "refused-mandate-unresolved-consequential-refuses",
+            "refused",
+            "mandate-unresolved",
+            "consequential",
+            0,
+            "the class that would be refused under every reading",
+        ),
+        (
+            "refused-mandate-unresolved-prohibited-refuses",
+            "refused",
+            "mandate-unresolved",
+            "prohibited",
+            0,
+            "nothing permits a prohibited action, wedged or not",
+        ),
+        (
+            "refused-mandate-standing-lifetime-exceeded-read-refuses",
+            "refused",
+            "mandate-standing-lifetime-exceeded",
+            "read",
+            0,
+            "the whole `mandate-*` family, not one code: what the kernel refused was the authority",
+        ),
+        (
+            "refused-policy-not-published-read-refuses",
+            "refused",
+            "policy-not-published",
+            "read",
+            0,
+            "a component enforcing a policy the organization never published is enforcing nothing "
+            "the organization can be held to",
+        ),
+        (
+            "refused-other-reason-read-inside-grace-serves",
+            "refused",
+            "aggregate-window-too-long",
+            "read",
+            0,
+            "one malformed envelope must not be able to stop a fleet faster than a human can read "
+            "the reason — bounded, and loud",
+        ),
+        (
+            "refused-other-reason-benign-inside-grace-serves",
+            "refused",
+            "aggregate-window-too-long",
+            "benign",
+            299,
+            "the last second of the window still serves, and is still a finding",
+        ),
+        (
+            "refused-other-reason-consequential-inside-grace-refuses",
+            "refused",
+            "aggregate-window-too-long",
+            "consequential",
+            0,
+            "grace over `consequential` is exactly the window an auditor asks 'what else was still "
+            "permitted' about",
+        ),
+        (
+            "refused-other-reason-prohibited-inside-grace-refuses",
+            "refused",
+            "aggregate-window-too-long",
+            "prohibited",
+            0,
+            "the same, at the class no authority reaches",
+        ),
+        (
+            "refused-other-reason-read-at-grace-expiry-refuses",
+            "refused",
+            "aggregate-window-too-long",
+            "read",
+            300,
+            "the boundary is closed: at `wedge-grace` exactly, the window has elapsed",
+        ),
+        (
+            "refused-other-reason-benign-past-grace-refuses",
+            "refused",
+            "aggregate-window-too-long",
+            "benign",
+            3600,
+            "an unbounded grace is an accountability hole; the stopped state cannot be waited out",
+        ),
+    ]
+
+    vectors = []
+    for name, outcome, reason, klass, elapsed, desc in cases:
+        expected = sync_outcome(outcome, reason, klass, elapsed, OFFLINE_MAP, WEDGE_GRACE_SECONDS)
+        vectors.append(
+            {
+                "name": name,
+                "description": desc,
+                "input": {
+                    "submission-outcome": outcome,
+                    "reason-code": reason,
+                    "class": klass,
+                    "elapsed-since-first-refusal-seconds": elapsed,
+                    "policy": {"offline": OFFLINE_MAP, "wedge-grace-seconds": WEDGE_GRACE_SECONDS},
+                },
+                "expected": expected,
+            }
+        )
+
+    emit(
+        "sync-outcome.json",
+        "sync-outcome",
+        "spec 05 section 7.1 — what a component may do when its last submission was `accepted`, "
+        "`unreachable` or `refused`. Run the predicate over `input`; `expected.action` is `serve` or "
+        "`refuse`, `expected.reason-code` is the code a refusal carries verbatim, and "
+        "`expected.finding` is whether serving it must also be recorded as a finding. A `refused` "
+        "submission is NOT the offline case: the offline map governs a kernel that cannot answer, "
+        "never one that has answered no.",
+        vectors,
+    )
+
+
+# --------------------------------------------------------------------------
+# 22. Stream status -- spec 09 section 4.2
+# --------------------------------------------------------------------------
+
+
+def _seconds_between(earlier: str, later: str) -> int:
+    """Whole seconds between two RFC 3339 UTC timestamps, computed without a calendar library.
+
+    Both are `YYYY-MM-DDTHH:MM:SS.mmmZ` and every vector here sits inside one month, so the day of
+    the month is enough; a generator that reached for `datetime` would be borrowing a parser the
+    implementations under test do not share.
+    """
+
+    def parts(stamp: str) -> int:
+        day = int(stamp[8:10])
+        hour = int(stamp[11:13])
+        minute = int(stamp[14:16])
+        second = int(stamp[17:19])
+        return ((day * 24 + hour) * 60 + minute) * 60 + second
+
+    return parts(later) - parts(earlier)
+
+
+def stream_status(
+    last_accepted_at: str | None,
+    last_refused_at: str | None,
+    reason: str | None,
+    now: str,
+    quiet_after: int,
+) -> dict:
+    """An independent statement of spec 09 section 4.2 — quiet is absence, refused is evidence.
+
+    The comparison against the last acceptance is `>=`, so a refusal recorded in the same
+    millisecond as the last append reads as refused. Timestamps here are three-decimal (section 01
+    section 2.3) and a deployment may run a coarse clock, so the tie is reachable; a tie broken the
+    other way would hide the finding, which is the failure this whole state exists to stop.
+    """
+    if last_refused_at is not None and (
+        last_accepted_at is None or last_refused_at >= last_accepted_at
+    ):
+        return {"status": "refused", "reason-code": reason}
+    if last_accepted_at is None:
+        return {"status": "quiet", "reason-code": None}
+    if _seconds_between(last_accepted_at, now) > quiet_after:
+        return {"status": "quiet", "reason-code": None}
+    return {"status": "healthy", "reason-code": None}
+
+
+def gen_stream_status() -> None:
+    now = "2026-07-26T12:00:00.000Z"
+    quiet_after = 3600
+    cases: list[tuple[str, str | None, str | None, str | None, str]] = [
+        (
+            "recently-accepted-is-healthy",
+            "2026-07-26T11:59:00.000Z",
+            None,
+            None,
+            "the ordinary row",
+        ),
+        (
+            "silent-past-the-interval-is-quiet",
+            "2026-07-26T09:00:00.000Z",
+            None,
+            None,
+            "an absent emitter is a finding, not a null result — but it is the weaker finding",
+        ),
+        (
+            "at-the-interval-exactly-is-still-healthy",
+            "2026-07-26T11:00:00.000Z",
+            None,
+            None,
+            "the comparison is strict, so the row does not flicker on the boundary second",
+        ),
+        (
+            "refused-after-the-last-acceptance-is-refused",
+            "2026-07-26T11:59:00.000Z",
+            "2026-07-26T11:59:30.000Z",
+            "mandate-unresolved",
+            "the DEF-2 row. The last acceptance is a minute old, so nothing about quiet has fired "
+            "and would not for an hour; the kernel nonetheless knows *now* that it is refusing this "
+            "emitter, and the surface that exists to answer the question must say so",
+        ),
+        (
+            "refused-and-then-silent-is-still-refused",
+            "2026-07-26T09:00:00.000Z",
+            "2026-07-26T09:00:30.000Z",
+            "mandate-standing-lifetime-exceeded",
+            "the refusal is not superseded by the passage of time: quiet is the absence of evidence "
+            "and this stream has evidence",
+        ),
+        (
+            "refused-then-accepted-is-healthy-again",
+            "2026-07-26T11:59:00.000Z",
+            "2026-07-26T11:00:00.000Z",
+            "mandate-unresolved",
+            "recovery is observable in the same surface: an acceptance after the refusal ends the "
+            "refused state, which is what makes the row a state and not a scar",
+        ),
+        (
+            "refused-in-the-same-millisecond-as-the-last-acceptance-is-refused",
+            "2026-07-26T11:59:00.000Z",
+            "2026-07-26T11:59:00.000Z",
+            "mandate-unresolved",
+            "the tie breaks toward the finding. Three-decimal timestamps and a coarse deployment "
+            "clock make this reachable, and the reading that hides a refusal is the one this state "
+            "exists to stop",
+        ),
+        (
+            "never-accepted-and-never-refused-is-quiet",
+            None,
+            None,
+            None,
+            "a stream the kernel has heard nothing from at all",
+        ),
+        (
+            "never-accepted-but-refused-is-refused",
+            None,
+            "2026-07-26T11:00:00.000Z",
+            "mandate-unresolved",
+            "the emitter's very first submission was refused, so there is no acceptance to compare "
+            "against — and this is precisely the mandate-swap-at-connect case",
+        ),
+    ]
+
+    vectors = []
+    for name, accepted, refused, reason, desc in cases:
+        vectors.append(
+            {
+                "name": name,
+                "description": desc,
+                "input": {
+                    "last-accepted-at": accepted,
+                    "last-refused-at": refused,
+                    "last-refusal-reason": reason,
+                    "now": now,
+                    "quiet-after-seconds": quiet_after,
+                },
+                "expected": stream_status(accepted, refused, reason, now, quiet_after),
+            }
+        )
+
+    emit(
+        "stream-status.json",
+        "stream-status",
+        "spec 09 section 4.2 — the predicate behind the row a console renders for one stream. "
+        "`refused` when the most recent thing that happened was a refusal, whatever the quiet "
+        "interval says; `quiet` when nothing has been accepted within `quiet-after-seconds`; "
+        "`healthy` otherwise. Which row an implementation draws is its own business; the predicate "
+        "is not.",
+        vectors,
+        role="kernel",
+    )
+
+
+# --------------------------------------------------------------------------
+# 23. Stream recovery -- spec 04 section 7.2
+# --------------------------------------------------------------------------
+
+
+def gen_stream_recovery() -> None:
+    """spec 04 section 7.2 — the operator act that un-wedges a refused stream.
+
+    The shape under test is the same one `root-change` tests: read the change out of the envelope
+    and the payload it commits to. Who may make it is not asked here — that needs the deployment's
+    root set, and the answer is in spec 05 section 5.6, which puts `kernel.resume_stream` among the
+    actions no policy may permit without an enrolled human root's signature.
+    """
+    key = KEYS["agent:claude-code/ivan-mbp"]
+    ivan = KEYS["human:ivan"]
+
+    # The envelope the kernel refused, at seq 0 of the emitter's own stream: the mandate publication
+    # of a grant the kernel would not accept. Its `object-hash` as received is the only thing that
+    # can bridge the gap it leaves, and spec 04 section 7 already records it.
+    refused = sign_object(mandate_env(0, None, key, stream=STREAM), key)
+    refused_hash = object_hash(refused)
+
+    def document(**over: Any) -> dict:
+        body = {
+            "stream": STREAM,
+            "resume-seq": 0,
+            "refused-object-hash": refused_hash,
+            "reason-code": "mandate-standing-lifetime-exceeded",
+        }
+        for name, value in over.items():
+            if value is _DROP:
+                body.pop(name.replace("_", "-"), None)
+            else:
+                body[name.replace("_", "-")] = value
+        return body
+
+    def resume(doc: dict, *, args_hash: str | None = None, target: str | None = None) -> dict:
+        doc_hash = object_hash(doc)
+        return sign_object(
+            {
+                "v": V,
+                "kind": "effect",
+                "emitted-at": "2026-07-26T10:30:00.000Z",
+                "stream": "kernel:core",
+                "seq": 12,
+                "prev-hash": "3" * 64,
+                "identity": {"subject": "human:ivan", "key": ivan.key_id, "component": "kernel"},
+                "mandate-ref": "11" * 32,
+                "policy-version": POLICY_VERSION,
+                "classification": "consequential",
+                "execution": {
+                    "action": "kernel.resume_stream",
+                    "target": target if target is not None else f"stream:{STREAM}",
+                    "args-hash": args_hash or doc_hash,
+                    "outcome": "applied",
+                    "started-at": "2026-07-26T10:30:00.000Z",
+                    "finished-at": "2026-07-26T10:30:00.000Z",
+                },
+                "evidence": {
+                    "schema": "kernel.resume_stream.v1",
+                    "media-type": "application/json",
+                    "payload-hash": doc_hash,
+                    "retain-until": "2036-07-26T00:00:00.000Z",
+                },
+            },
+            ivan,
+        )
+
+    def payloads(doc: dict) -> list[dict]:
+        return [
+            {
+                "payload-hash": object_hash(doc),
+                "media-type": "application/json",
+                "payload": doc,
+            }
+        ]
+
+    # The chain the emitter goes on submitting once the gap is authorized. It is the chain it built
+    # while wedged, unchanged: nothing is renumbered, nothing is rewritten, and seq 0 stays refused.
+    good = document()
+    after_one = sign_object(base_effect(1, refused_hash, key, stream=STREAM), key)
+    after_two = sign_object(base_effect(2, object_hash(after_one), key, stream=STREAM), key)
+
+    cases = [
+        (
+            "resumes-a-refused-position",
+            resume(good),
+            payloads(good),
+            {
+                "valid": True,
+                "error": None,
+                "stream": STREAM,
+                "resume-seq": 0,
+                "bridge-prev-hash": refused_hash,
+                "chain-valid": True,
+                "chain-anchored": True,
+                "chain-head-hash": object_hash(after_two),
+            },
+            "the exit from a wedge, and the whole of it: one position, one bridge hash, and a chain "
+            "that verifies from the refused bytes onward without the refused envelope ever becoming "
+            "valid",
+            {"chain": [after_one, after_two], "expected-first-prev": refused_hash},
+        ),
+        (
+            "document-is-not-supplied",
+            resume(good),
+            [],
+            {"valid": False, "error": "stream-resume-unbound"},
+            "an absent payload is ordinarily decay and here it is not: the position being resumed "
+            "exists nowhere else in the envelope",
+            None,
+        ),
+        (
+            "args-hash-does-not-commit-to-the-document",
+            resume(good, args_hash="a" * 64),
+            payloads(good),
+            {"valid": False, "error": "stream-resume-unbound"},
+            "the approval signature binds `args-hash`; a resume whose document it does not cover is "
+            "a signature over nothing",
+            None,
+        ),
+        (
+            "target-does-not-name-a-stream",
+            resume(good, target="policy:2026.07.1"),
+            payloads(good),
+            {"valid": False, "error": "stream-resume-malformed"},
+            "execution.target MUST be stream:<stream>",
+            None,
+        ),
+        (
+            "document-names-a-different-stream",
+            resume(document(stream="gw:ivan-mbp:0002")),
+            payloads(document(stream="gw:ivan-mbp:0002")),
+            {"valid": False, "error": "stream-resume-malformed"},
+            "two spellings of one fact: approve the resumption of one stream, resume another",
+            None,
+        ),
+        (
+            "refused-object-hash-is-not-a-digest",
+            resume(document(refused_object_hash="not-a-hash")),
+            payloads(document(refused_object_hash="not-a-hash")),
+            {"valid": False, "error": "stream-resume-malformed"},
+            "the bridge is a hash of bytes the kernel holds; anything else cannot be checked against "
+            "the rejection record",
+            None,
+        ),
+        (
+            "document-carries-an-unknown-member",
+            resume(document(skip_to=99)),
+            payloads(document(skip_to=99)),
+            {"valid": False, "error": "stream-resume-malformed"},
+            "a closed member set, for the same reason policy has one: a resume an implementation "
+            "does not fully understand is a resume it MUST NOT act on",
+            None,
+        ),
+    ]
+
+    vectors = []
+    for name, envelope, supplied, expected, desc, chain in cases:
+        vector = {
+            "name": name,
+            "description": desc,
+            "envelope": envelope,
+            "payloads": supplied,
+            "expected": expected,
+        }
+        if chain is not None:
+            vector.update(chain)
+        vectors.append(vector)
+
+    emit(
+        "stream-recovery.json",
+        "stream-recovery",
+        "spec 04 section 7.2 — resuming a stream wedged by a refusal. Read the resume out of "
+        "`envelope` with `payloads`: the result MUST match `expected.valid`, on failure the code "
+        "MUST equal `expected.error`, and on success `expected.stream`, `expected.resume-seq` and "
+        "`expected.bridge-prev-hash` are the position authorized and the `object-hash` of the "
+        "refused bytes that bridges it. Where `chain` is present, verifying it against "
+        "`expected-first-prev` MUST succeed and return `expected.chain-head-hash` — the emitter's "
+        "own chain, unrenumbered, continuing past a position that stays refused.",
+        vectors,
+        {"refused-envelope": refused, "refused-object-hash": refused_hash},
+        role="kernel",
+    )
+
+
 def gen_index() -> None:
     index = {
         "v": V,
@@ -4087,6 +4640,9 @@ def main() -> int:
     gen_gate_arguments()
     gen_gate_resubmission()
     gen_root_change()
+    gen_sync_outcome()
+    gen_stream_status()
+    gen_stream_recovery()
     gen_index()
     return 0
 

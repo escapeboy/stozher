@@ -22,7 +22,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
-__all__ = ["GatewayStore", "Parked"]
+__all__ = ["GatewayStore", "Parked", "Wedge"]
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS envelopes (
@@ -101,6 +101,21 @@ CREATE TABLE IF NOT EXISTS marks (
     key TEXT PRIMARY KEY,
     at  TEXT NOT NULL
 );
+
+-- A stream the kernel is refusing (§05 §7.1). One row per wedged stream, and it is the component's
+-- own answer to "is anything I emit reaching the audit" — the reason code the kernel gave, when it
+-- first gave it, and how many effects were served under the grace window since. It outlives the
+-- process on purpose: a restart is not a recovery, and a wedge that cleared itself on a restart
+-- would make the state unobservable to exactly the operator who restarts things to see what happens.
+CREATE TABLE IF NOT EXISTS wedges (
+    stream           TEXT PRIMARY KEY,
+    envelope_id      TEXT NOT NULL,
+    seq              INTEGER NOT NULL,
+    reason_code      TEXT NOT NULL,
+    detail           TEXT NOT NULL,
+    first_refused_at TEXT NOT NULL,
+    grace_served     INTEGER NOT NULL DEFAULT 0
+);
 """
 
 
@@ -169,6 +184,20 @@ class Parked:
         self.catalog_class: str | None = row["catalog_class"]
         self.seed: dict[str, Any] | None = json.loads(row["seed_json"]) if row["seed_json"] else None
         self.consumed_at: str | None = row["consumed_at"]
+
+
+class Wedge:
+    """A stream the kernel is refusing, and the reason it gave (§05 §7.1)."""
+
+    def __init__(self, row: sqlite3.Row) -> None:
+        self.stream: str = row["stream"]
+        self.envelope_id: str = row["envelope_id"]
+        self.seq: int = int(row["seq"])
+        self.reason_code: str = row["reason_code"]
+        self.detail: str = row["detail"]
+        self.first_refused_at: str = row["first_refused_at"]
+        #: How many `read`/`benign` effects were served under the grace window (§05 §7.1 clause 4).
+        self.grace_served: int = int(row["grace_served"])
 
 
 class GatewayStore:
@@ -277,11 +306,20 @@ class GatewayStore:
             for row in rows
         ]
 
-    def mark_pushed(self, envelope_id: str, at: str) -> None:
+    def mark_pushed(self, envelope_id: str, at: str, error: str | None = None) -> None:
+        """Close the push of one envelope: accepted (`error` is None) or refused.
+
+        One statement, and it writes the reason rather than erasing it. It used to be
+        `SET pushed_at = ?, push_error = NULL`, run immediately after the refusal path had written
+        the kernel's reason code into `push_error` — so the reason survived exactly one statement,
+        the row became indistinguishable from an accepted one, and `pending_push_count()` reported
+        a healthy queue while every envelope in it had been rejected. §05 §7.1 clause 2 now forbids
+        erasing it on any later transition of the row, and this is the transition that was doing it.
+        """
         with self._connect() as connection:
             connection.execute(
-                "UPDATE envelopes SET pushed_at = ?, push_error = NULL WHERE id = ?",
-                (at, envelope_id),
+                "UPDATE envelopes SET pushed_at = ?, push_error = ? WHERE id = ?",
+                (at, error, envelope_id),
             )
 
     def mark_push_error(self, envelope_id: str, detail: str) -> None:
@@ -296,6 +334,62 @@ class GatewayStore:
                 "SELECT COUNT(*) AS n FROM envelopes WHERE pushed_at IS NULL"
             ).fetchone()
         return int(row["n"])
+
+    def refused_push_count(self) -> int:
+        """Envelopes the kernel answered "no" to. Never zero while a stream is wedged."""
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT COUNT(*) AS n FROM envelopes WHERE push_error IS NOT NULL "
+                "AND pushed_at IS NOT NULL"
+            ).fetchone()
+        return int(row["n"])
+
+    # -- refused streams (§05 §7.1) ---------------------------------------------------------
+
+    def record_wedge(
+        self, stream: str, envelope_id: str, seq: int, reason_code: str, detail: str, at: str
+    ) -> None:
+        """Record that the kernel refused this stream at this position.
+
+        `INSERT OR IGNORE`: the *first* refusal is the one the grace window is measured from, so a
+        second refusal on the same stream must not move `first_refused_at`. A wedge that could be
+        re-graced by re-offering bytes would not be bounded (§05 §7.1 clause 4).
+        """
+        with self._connect() as connection:
+            connection.execute(
+                "INSERT OR IGNORE INTO wedges (stream, envelope_id, seq, reason_code, detail, "
+                "first_refused_at) VALUES (?, ?, ?, ?, ?, ?)",
+                (stream, envelope_id, seq, reason_code, detail, at),
+            )
+
+    def wedge(self, stream: str) -> Wedge | None:
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT * FROM wedges WHERE stream = ?", (stream,)
+            ).fetchone()
+        return Wedge(row) if row is not None else None
+
+    def wedges(self) -> list[Wedge]:
+        with self._connect() as connection:
+            rows = connection.execute("SELECT * FROM wedges ORDER BY stream").fetchall()
+        return [Wedge(row) for row in rows]
+
+    def clear_wedge(self, stream: str) -> None:
+        """The kernel accepted something on this stream again — and that is the only thing that
+        ends the state (§05 §7.2 rule 2). Not a timer, not a restart, not a new session."""
+        with self._connect() as connection:
+            connection.execute("DELETE FROM wedges WHERE stream = ?", (stream,))
+
+    def note_grace_use(self, stream: str) -> int:
+        """Count one effect served under the grace window. Returns the running total."""
+        with self._connect() as connection:
+            connection.execute(
+                "UPDATE wedges SET grace_served = grace_served + 1 WHERE stream = ?", (stream,)
+            )
+            row = connection.execute(
+                "SELECT grace_served FROM wedges WHERE stream = ?", (stream,)
+            ).fetchone()
+        return int(row["grace_served"]) if row is not None else 0
 
     # -- write-ahead records ----------------------------------------------------------------
 

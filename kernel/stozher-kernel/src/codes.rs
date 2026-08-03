@@ -64,6 +64,19 @@ pub const ROOT_ENROLLMENT_MALFORMED: &str = "root-enrollment-malformed";
 /// has already answered, which must not be representable: one request, one answer.
 pub const GATE_DECISION_ALREADY_RECORDED: &str = "gate-decision-already-recorded";
 
+/// §04 §7.2 rule 2 — `execution.args-hash` MUST equal `object-hash` of the resume document, so the
+/// root's signature binds the exact position being resumed. Named here rather than left to
+/// `policy-change-document-unbound`, whose subject is a policy document.
+pub const STREAM_RESUME_UNBOUND: &str = "stream-resume-unbound";
+
+/// §04 §7.2 rules 2 and 3 — a resume whose document is not a well-formed resume document: an
+/// unknown member, a stream that disagrees with `execution.target`, a bridge that is not a digest.
+pub const STREAM_RESUME_MALFORMED: &str = "stream-resume-malformed";
+
+/// §04 §7.2 rule 5 — a resume naming a position for which this store holds no rejection. There is
+/// nothing to bridge, and a bridge to bytes the kernel never saw is a gap with a signature on it.
+pub const STREAM_RESUME_POSITION_UNKNOWN: &str = "stream-resume-position-unknown";
+
 /// An infrastructure failure — the database is unreachable or corrupt.
 ///
 /// **Not a rejection.** A rejection means "this object is invalid"; this means "the kernel could not

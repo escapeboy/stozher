@@ -237,33 +237,58 @@ class Emitter:
 
         Push is asynchronous, ordered per stream and retried. A failure leaves the row unpushed and
         the loop tries again — the local chain is the record of truth until the kernel has it.
+
+        **A refusal stops the stream** (§05 §7.1 clause 3). It used to mark the refused row pushed
+        and carry straight on to the next envelope, which the kernel then refused `chain-seq-gap`,
+        and so on to the end of the queue: every record of that session was marked delivered, none
+        of it was, and `pending_push_count()` said zero. Now the position is recorded as a wedge and
+        nothing past it is submitted until the wedge is lifted (§04 §7.2), so the rest of the chain
+        is still there to submit when it is.
         """
         accepted = 0
+        wedged: set[str] = set()
         for envelope_id, envelope, payloads in self._store.unpushed(limit):
+            # This envelope is one this component chained and signed itself, and `append_next` wrote
+            # the row's `stream` from the same member, so reading the position out of the body here
+            # is reading its own record rather than trusting a claim.
+            stream = str(envelope.get("stream", ""))
+            seq = int(envelope.get("seq", -1))
+            if stream in wedged or self._store.wedge(stream) is not None:
+                # Submitting past a wedge produces a second rejection record naming the wrong
+                # condition, and loses the envelope. Hold it: the local chain keeps it.
+                wedged.add(stream)
+                continue
             try:
                 response = self._kernel.ingest(envelope, payloads)
             except KernelUnreachableError as e:
                 self._store.mark_push_error(envelope_id, str(e))
                 break
             if response.accepted:
+                # An acceptance is the one event that ends a refused state (§05 §7.2 rule 2). It
+                # normally clears nothing, because normally there is nothing to clear.
                 self._store.mark_pushed(envelope_id, self._clock.now())
+                self._store.clear_wedge(stream)
                 accepted += 1
                 continue
             # A refusal is permanent for these bytes; retrying identical bytes forever would hide it.
-            self._store.mark_push_error(envelope_id, f"{response.reason_code}: {response.body}")
-            self._store.mark_pushed(envelope_id, self._clock.now())
+            reason = response.reason_code or "x-kernel-refused"
+            detail = str(response.body.get("reason") or response.body)
+            self._store.mark_pushed(envelope_id, self._clock.now(), f"{reason}: {detail}")
+            self._store.record_wedge(stream, envelope_id, seq, reason, detail, self._clock.now())
+            wedged.add(stream)
             # This is an operator-visible failure, not a transient one: the local chain and the
             # kernel's copy of it have diverged, so every later envelope on this stream will be
-            # refused `chain-seq-gap`. The local chain still holds the record, and the kernel's
-            # rejection stream holds the reason.
+            # refused `chain-seq-gap`. The local chain still holds the record, the kernel's
+            # rejection stream holds the reason, and so now does this component's own state.
             logger.error(
-                "the kernel refused envelope %s (%s): %s — %s; stream %s cannot be appended to at "
-                "the kernel until an operator resolves this",
+                "the kernel refused envelope %s (%s): %s — %s; stream %s is wedged at seq %s and "
+                "this component will not submit past it until an operator resumes the stream",
                 envelope_id,
                 envelope.get("kind"),
-                response.reason_code,
-                response.body.get("reason"),
-                envelope.get("stream"),
+                reason,
+                detail,
+                stream,
+                seq,
             )
         return accepted
 

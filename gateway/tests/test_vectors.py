@@ -24,7 +24,7 @@ from typing import Any
 import pytest
 
 from stozher_gateway import chain as chain_module
-from stozher_gateway import crypto, mandate, money, payload
+from stozher_gateway import crypto, mandate, money, payload, sync
 from stozher_gateway.canonical import (
     CanonicalizationError,
     canonicalize,
@@ -412,6 +412,33 @@ def handle_gate_resubmission(doc: dict[str, Any], vector: dict[str, Any], label:
     )
 
 
+def handle_sync_outcome(doc: dict[str, Any], vector: dict[str, Any], label: str) -> None:
+    """`spec/05 §7.1` — what this component may do when its last submission was refused.
+
+    Run against the same function the enforcer calls, not a copy of the rule: the whole point of the
+    file is that a kernel in Rust and a gateway in Python answer identically, and a handler that
+    re-stated the predicate would be testing the handler.
+
+    The `unreachable` vectors are why this file is not simply "refuse when wedged". A kernel that
+    cannot answer is §7's offline case and nothing here changes it; an implementation that refused
+    everything would fail three vectors in this file, which is exactly the point of their being in
+    it.
+    """
+    supplied = vector["input"]
+    decision = sync.decide(
+        outcome=supplied["submission-outcome"],
+        reason_code=supplied["reason-code"],
+        classification=supplied["class"],
+        elapsed_seconds=supplied["elapsed-since-first-refusal-seconds"],
+        offline=supplied["policy"]["offline"][supplied["class"]],
+        wedge_grace_seconds=supplied["policy"]["wedge-grace-seconds"],
+    )
+    expected = vector["expected"]
+    equal(decision.action, expected["action"], f"{label}/action")
+    equal(decision.reason_code, expected["reason-code"], f"{label}/reason-code")
+    equal(decision.finding, expected["finding"], f"{label}/finding")
+
+
 HANDLERS: dict[str, Callable[[dict[str, Any], dict[str, Any], str], None]] = {
     "jcs": handle_jcs,
     "jcs-invalid": handle_jcs_invalid,
@@ -430,6 +457,7 @@ HANDLERS: dict[str, Callable[[dict[str, Any], dict[str, Any], str], None]] = {
     "policy-evaluation": handle_policy_evaluation,
     "gate-arguments": handle_gate_arguments,
     "gate-resubmission": handle_gate_resubmission,
+    "sync-outcome": handle_sync_outcome,
 }
 
 
@@ -473,6 +501,8 @@ def test_the_declined_files_are_the_ones_expected() -> None:
         "checkpoint.json",
         "manifest.json",
         "root-change.json",
+        "stream-recovery.json",
+        "stream-status.json",
         "trigger.json",
     ], declined
 

@@ -111,6 +111,9 @@ the subject under test.
 | `checkpoint` | `checkpoint`, `range[]`, `expected-first-prev`, `expected.{valid,error,head-hash,anchored}` | verify the checkpoint against the range (§04 §4), anchoring the first envelope when `expected-first-prev` is not null. **MUST NOT read any payload** |
 | `manifest` | `manifest`, `expected.{valid,error}` | validate as a signed object and against §08 §1. Registration conditions (§08 §3) are not part of this check |
 | `parity` | `spec`, `algorithm`, `input`, `expected`, `divergence` | dispatch on `algorithm` (§3.1) and run the named algorithm — the same one an existing kind already exercises, on an input that reaches a branch the existing kind does not |
+| `sync-outcome` | `input.{submission-outcome,reason-code,class,elapsed-since-first-refusal-seconds,policy}`, `expected.{action,reason-code,finding}` | run §05 §7.1: `serve` or `refuse`, the reason code a refusal carries **verbatim**, and whether serving it is also a finding. `refused` is not `unreachable` — the `offline` map governs only the second |
+| `stream-status` | `input.{last-accepted-at,last-refused-at,last-refusal-reason,now,quiet-after-seconds}`, `expected.{status,reason-code}` | run §09 §4.2's predicate: `healthy` \| `quiet` \| `refused`. The row an implementation renders is its own business; the predicate is not |
+| `stream-recovery` | `envelope`, `payloads[]`, optional `chain[]` + `expected-first-prev`, `expected.{valid,error,stream,resume-seq,bridge-prev-hash,chain-*}` | read the resume out of the envelope and the payload its `args-hash` commits to (§04 §7.2). Where `chain` is present, verify it against `expected-first-prev` — the emitter's own chain continuing past a position that stays refused |
 
 `expected.error` is `null` on success vectors and otherwise a **normative error code** from the spec
 (§00 §1). Implementations MUST report exactly that code — the codes are part of the wire contract,
@@ -204,6 +207,12 @@ Two properties of this file are load-bearing and worth stating separately:
 - **Decay** (§04 §5): the same envelope with and without its payload has the **identical** envelope
   hash, and the chain verifies either way. This is the GDPR property expressed as a test rather than
   as a paragraph.
+- **The refused state** (§05 §7.1, §09 §4.2, §04 §7.2): a stream entering it, an effect attempted
+  under each of the four weight classes while in it, the grace window's expiry, the operator act
+  that ends it, and a chain that verifies across the bridged position. `sync-outcome` deliberately
+  includes `unreachable` + `read` + `offline.read: allow` → **serve**: an implementation that
+  answered "refuse" to everything would otherwise pass this file, and refusing everything is a
+  denial-of-service weapon rather than a fix.
 
 ## 5. Consuming from another language
 

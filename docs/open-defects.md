@@ -8,24 +8,24 @@ a defect nobody recorded is orphaned evidence — the meta-test forbids both.
 Evidence is *committed and excluded*, not deleted:
 
 ```sh
-./gateway/.venv/bin/python3 -m pytest gateway/tests -q                 # 204 passed, 2 deselected
-./gateway/.venv/bin/python3 -m pytest gateway/tests -q -m open_defect  # 2 failed  (DEF-2 only)
-cargo test --manifest-path kernel/Cargo.toml                           # see below
-cargo test --manifest-path kernel/Cargo.toml --test def2_mandate_swap -- --ignored
+./gateway/.venv/bin/python3 -m pytest gateway/tests -q                 # 209 passed
+./gateway/.venv/bin/python3 -m pytest gateway/tests -q -m open_defect  # 209 deselected — empty, all four closed
+cargo test --manifest-path kernel/Cargo.toml                           # 356 passed, 1 ignored
 ```
 
-The quarantined run is **red by design**: every remaining failure is a defect stating itself.
+**The quarantine is empty.** All four defects are closed, and each one's evidence moved into
+the default suite as it went: DEF-1 to `gateway/tests/test_def1_replay_idempotence.py`, DEF-2 to
+`gateway/tests/test_def2_mandate_swap.py` and `kernel/stozher-kernel/tests/def2_mandate_swap.rs`,
+DEF-4 to `gateway/tests/test_policy_bundle.py`. DEF-4's deliberate *pass* went with them and is
+still a control: it is the reason "there is no offline mode" cannot be said.
 
-DEF-1's and DEF-4's evidence both left the quarantine when they closed, and the shared
-`test_open_defects.py` went with them — DEF-1's is in `gateway/tests/test_def1_replay_idempotence.py`
-and DEF-4's in `gateway/tests/test_policy_bundle.py`, both in the default run. DEF-4's deliberate
-*pass* went too, and it is still a control: it is the reason "there is no offline mode" cannot be
-said.
+The marker and its two commands stay. `test_defect_register.py` binds them to this file in both
+directions, so the next open defect has somewhere to go and cannot be recorded without evidence.
 
 | Id | Status | Classification | Severity | One line |
 |---|---|---|---|---|
 | DEF-1 | closed | **spec hole**, now stated | high | Replaying a run duplicated the approval queue: the gateway re-parked instead of resolving to its own outstanding request. §06 §4.2 now requires the reuse; the gateway does it. |
-| DEF-2 | open | **spec hole** + one implementation defect alongside | high | A component whose envelopes the kernel refuses keeps serving and keeps returning success; to `spec/` a refused emitter is merely a late one. |
+| DEF-2 | closed | **spec hole** + one implementation defect alongside | high | A component whose envelopes the kernel refuses keeps serving and keeps returning success; to `spec/` a refused emitter is merely a late one. |
 | DEF-3 | closed | scope limit, stated | — | `Governor` does not support `async def`. It now refuses at decoration instead of recording `applied` before the body runs. |
 | DEF-4 | closed | **spec hole** (tooling/documentation), closed in the implementation | high for adoption, none for security | There was no way to obtain a verified policy without a live kernel, so a cold CI container could not open a session at all. `policy export-bundle` is the way in; the offline profile itself always worked. |
 | DEF-5 | not a defect | — | — | Proposed: ambient-state authorization on the `Governor` path. Investigated and **not found**; four independent bindings recompute authority per call. |
@@ -76,32 +76,52 @@ notify-once bound, and the counterfactual that two genuinely different calls sti
 `kernel/stozher-kernel/tests/open_defects.rs::def1_the_queue_is_idempotent_for_one_request_and_cannot_be_for_one_call`,
 `kernel/stozher-kernel/tests/kernel_vectors.rs::every_gate_resubmission_vector_matches_this_implementation`.
 
-## DEF-2 — a refused component is indistinguishable from a healthy one
+## DEF-2 — a refused component was indistinguishable from a healthy one — **closed**
 
-Full analysis and the proposed normative fix: **`docs/proposals/DEF-2-mandate-continuity.md`**.
+Full analysis and the proposal this change implements: **`docs/proposals/DEF-2-mandate-continuity.md`**.
 
-The specification models an emitter in two states, chained locally and synced, and treats the
-distance as latency (§04 §3). **A permanent refusal is a third state the text does not name**, so
-every MUST that fires in it lands on the kernel — which discharges all of them (§04 §7 rejection
-records, §09 §4.2 quiet streams). Nothing is required of the component: not to stop serving, not to
-tell its caller, not even to keep the reason code. §03 §7 describes the state exactly and concedes
+The specification modelled an emitter in two states, chained locally and synced, and treated the
+distance as latency (§04 §3). **A permanent refusal was a third state the text did not name**, so
+every MUST that fired in it landed on the kernel — which discharged all of them (§04 §7 rejection
+records, §09 §4.2 quiet streams). Nothing was required of the component: not to stop serving, not to
+tell its caller, not even to keep the reason code. §03 §7 described the state exactly and conceded
 the cost in five words — *"and no explanation"* — in a rationale bullet with no RFC 2119 keyword.
+**Detection latency observed: seven days.**
 
-**No vector covers a mid-stream mandate change.** Twenty vector files; this state is in none.
+**What closed it.**
 
-**Alongside, and not the cause:** `emitter.py:253` writes the kernel's reason into
-`envelopes.push_error`, then `mark_pushed` runs `SET pushed_at = ?, push_error = NULL`
-(`store.py:236`). The reason survives one statement, the row becomes indistinguishable from an
-accepted one, and `pending_push_count()` reports zero. `push_error` is written in two places and read
-nowhere. This is what makes the silence total rather than merely unhelpful. Left unfixed
-deliberately: it does not remedy DEF-2 and fixing it alone would manufacture a sense of closure.
+- **`spec/05 §7.1`, "Refused is not offline"** — three submission outcomes rather than two; a
+  component MUST NOT treat `refused` as `unreachable`; the reason decides whether grace exists
+  (`mandate-*` and `policy-not-published`: none, for any class), the class decides who may use it
+  (`read`/`benign` only, each served effect a counted finding); expiry blocks everything; the caller
+  gets the §06 §4.1 object carrying the kernel's reason code verbatim. `§7.2` adds the component's
+  side of recovery.
+- **`spec/09 §4.2`** gains a third bullet: refused is surfaced immediately and distinguishably from
+  quiet. *Quiet is the absence of evidence; refused is evidence.*
+- **`spec/04 §7.2`, "Resuming a wedged stream"** — the exit ADR-0007 §6 asked for and `spec/`
+  never had: a root-approved `kernel.resume_stream` envelope on `kernel:core` bridging exactly one
+  position with the `object-hash` the rejection record already holds. It validates nothing: the
+  refused envelope stays refused and the rejection record stays.
+- **`spec/10 §1.4`** names the resolver — *"resolvable" means resolvable by the kernel*.
+- **Three new vector files** (`sync-outcome.json` 16, `stream-status.json` 9,
+  `stream-recovery.json` 7), including the case that stops "refuse everything" passing:
+  `unreachable` + `read` + `offline.read: allow` → **serve**.
 
-**Detection latency observed: seven days.** Bounded below by `checkpoint-interval` and above by
-nothing — the only signal is a console row nobody has to open.
+**Alongside, and not the cause — also fixed here:** `emitter.py::push_pending` wrote the kernel's
+reason into `envelopes.push_error`, then `mark_pushed` ran `SET pushed_at = ?, push_error = NULL`
+(`store.py::mark_pushed`). The reason survived one statement, the row became indistinguishable from
+an accepted one, and `pending_push_count()` reported zero. `mark_pushed` now takes the outcome and
+writes it in one statement; §05 §7.1 clause 2 forbids erasing it on any later transition.
 
-**Evidence:** `gateway/tests/test_def2_mandate_swap.py` (two quarantined, plus an unquarantined
-counterfactual proving the harness lets a legitimate session through),
-`kernel/stozher-kernel/tests/def2_mandate_swap.rs`.
+**Evidence, now unquarantined and in the default runs:**
+`gateway/tests/test_def2_mandate_swap.py` (three, including the counterfactual proving the harness
+lets a legitimate session through), `kernel/stozher-kernel/tests/def2_mandate_swap.rs` (three,
+including both recovery negatives).
+
+**What remains, and is not this defect:** external security review of the recovery act, and the
+fleet-wide question of what an operator console should offer as the *action* — the kernel accepts a
+signed resume, and no CLI subcommand mints one yet, so today an operator assembles it the way they
+assemble any other gated effect. Tracked in `docs/spec-debt.md` row 3.
 
 ## DEF-3 — `async def`, closed as a stated scope limit
 
@@ -177,3 +197,7 @@ identity is field-wise, not by `request-hash`. **DEF-4 closed** — `policy expo
 kernel, bundle verification with bounded staleness on the gateway, and the `[gateway] enabled`
 ruling that it governs the in-process path too. The normative text the bundle still lacks is
 proposed in `docs/proposals/DEF-4-policy-bundle.md`; no `spec/` edit was made for it.
+
+2026-08-03, fix run. **DEF-2 closed** — `spec/05 §7.1` names the refused state, the grace is
+reason-gated then class-bound, and `kernel.resume_stream` makes a wedge reversible under a root
+signature without validating anything it bridges.

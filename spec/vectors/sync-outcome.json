@@ -1,0 +1,391 @@
+{
+  "v": "stozher/0.1",
+  "kind": "sync-outcome",
+  "description": "spec 05 section 7.1 — what a component may do when its last submission was `accepted`, `unreachable` or `refused`. Run the predicate over `input`; `expected.action` is `serve` or `refuse`, `expected.reason-code` is the code a refusal carries verbatim, and `expected.finding` is whether serving it must also be recorded as a finding. A `refused` submission is NOT the offline case: the offline map governs a kernel that cannot answer, never one that has answered no.",
+  "vectors": [
+    {
+      "name": "accepted-serves",
+      "description": "the ordinary state: the kernel took the record and the component carries on",
+      "input": {
+        "submission-outcome": "accepted",
+        "reason-code": null,
+        "class": "consequential",
+        "elapsed-since-first-refusal-seconds": 0,
+        "policy": {
+          "offline": {
+            "read": "allow",
+            "benign": "allow",
+            "consequential": "block",
+            "prohibited": "block"
+          },
+          "wedge-grace-seconds": 300
+        }
+      },
+      "expected": {
+        "action": "serve",
+        "reason-code": null,
+        "finding": false
+      }
+    },
+    {
+      "name": "unreachable-read-under-offline-allow-serves",
+      "description": "the counterfactual. A kernel that cannot answer is section 7's offline case and nothing here changes it — an implementation that refuses everything fails this vector",
+      "input": {
+        "submission-outcome": "unreachable",
+        "reason-code": null,
+        "class": "read",
+        "elapsed-since-first-refusal-seconds": 0,
+        "policy": {
+          "offline": {
+            "read": "allow",
+            "benign": "allow",
+            "consequential": "block",
+            "prohibited": "block"
+          },
+          "wedge-grace-seconds": 300
+        }
+      },
+      "expected": {
+        "action": "serve",
+        "reason-code": null,
+        "finding": false
+      }
+    },
+    {
+      "name": "unreachable-benign-under-offline-allow-serves",
+      "description": "the same, one class up: the offline map is what decides, not the fact of not reaching the kernel",
+      "input": {
+        "submission-outcome": "unreachable",
+        "reason-code": null,
+        "class": "benign",
+        "elapsed-since-first-refusal-seconds": 0,
+        "policy": {
+          "offline": {
+            "read": "allow",
+            "benign": "allow",
+            "consequential": "block",
+            "prohibited": "block"
+          },
+          "wedge-grace-seconds": 300
+        }
+      },
+      "expected": {
+        "action": "serve",
+        "reason-code": null,
+        "finding": false
+      }
+    },
+    {
+      "name": "unreachable-consequential-under-offline-block-refuses",
+      "description": "an action requiring a human signature cannot acquire one while the kernel is unreachable",
+      "input": {
+        "submission-outcome": "unreachable",
+        "reason-code": null,
+        "class": "consequential",
+        "elapsed-since-first-refusal-seconds": 0,
+        "policy": {
+          "offline": {
+            "read": "allow",
+            "benign": "allow",
+            "consequential": "block",
+            "prohibited": "block"
+          },
+          "wedge-grace-seconds": 300
+        }
+      },
+      "expected": {
+        "action": "refuse",
+        "reason-code": "policy-stale-offline",
+        "finding": false
+      }
+    },
+    {
+      "name": "refused-mandate-unresolved-read-refuses-immediately",
+      "description": "the DEF-2 case, and the state the specification did not name: the kernel has answered no. A read performed without authority is still an effect, so it stops with everything else and it stops at once",
+      "input": {
+        "submission-outcome": "refused",
+        "reason-code": "mandate-unresolved",
+        "class": "read",
+        "elapsed-since-first-refusal-seconds": 0,
+        "policy": {
+          "offline": {
+            "read": "allow",
+            "benign": "allow",
+            "consequential": "block",
+            "prohibited": "block"
+          },
+          "wedge-grace-seconds": 300
+        }
+      },
+      "expected": {
+        "action": "refuse",
+        "reason-code": "mandate-unresolved",
+        "finding": false
+      }
+    },
+    {
+      "name": "refused-mandate-unresolved-benign-refuses-immediately",
+      "description": "no class has grace under a mandate-family reason",
+      "input": {
+        "submission-outcome": "refused",
+        "reason-code": "mandate-unresolved",
+        "class": "benign",
+        "elapsed-since-first-refusal-seconds": 0,
+        "policy": {
+          "offline": {
+            "read": "allow",
+            "benign": "allow",
+            "consequential": "block",
+            "prohibited": "block"
+          },
+          "wedge-grace-seconds": 300
+        }
+      },
+      "expected": {
+        "action": "refuse",
+        "reason-code": "mandate-unresolved",
+        "finding": false
+      }
+    },
+    {
+      "name": "refused-mandate-unresolved-consequential-refuses",
+      "description": "the class that would be refused under every reading",
+      "input": {
+        "submission-outcome": "refused",
+        "reason-code": "mandate-unresolved",
+        "class": "consequential",
+        "elapsed-since-first-refusal-seconds": 0,
+        "policy": {
+          "offline": {
+            "read": "allow",
+            "benign": "allow",
+            "consequential": "block",
+            "prohibited": "block"
+          },
+          "wedge-grace-seconds": 300
+        }
+      },
+      "expected": {
+        "action": "refuse",
+        "reason-code": "mandate-unresolved",
+        "finding": false
+      }
+    },
+    {
+      "name": "refused-mandate-unresolved-prohibited-refuses",
+      "description": "nothing permits a prohibited action, wedged or not",
+      "input": {
+        "submission-outcome": "refused",
+        "reason-code": "mandate-unresolved",
+        "class": "prohibited",
+        "elapsed-since-first-refusal-seconds": 0,
+        "policy": {
+          "offline": {
+            "read": "allow",
+            "benign": "allow",
+            "consequential": "block",
+            "prohibited": "block"
+          },
+          "wedge-grace-seconds": 300
+        }
+      },
+      "expected": {
+        "action": "refuse",
+        "reason-code": "mandate-unresolved",
+        "finding": false
+      }
+    },
+    {
+      "name": "refused-mandate-standing-lifetime-exceeded-read-refuses",
+      "description": "the whole `mandate-*` family, not one code: what the kernel refused was the authority",
+      "input": {
+        "submission-outcome": "refused",
+        "reason-code": "mandate-standing-lifetime-exceeded",
+        "class": "read",
+        "elapsed-since-first-refusal-seconds": 0,
+        "policy": {
+          "offline": {
+            "read": "allow",
+            "benign": "allow",
+            "consequential": "block",
+            "prohibited": "block"
+          },
+          "wedge-grace-seconds": 300
+        }
+      },
+      "expected": {
+        "action": "refuse",
+        "reason-code": "mandate-standing-lifetime-exceeded",
+        "finding": false
+      }
+    },
+    {
+      "name": "refused-policy-not-published-read-refuses",
+      "description": "a component enforcing a policy the organization never published is enforcing nothing the organization can be held to",
+      "input": {
+        "submission-outcome": "refused",
+        "reason-code": "policy-not-published",
+        "class": "read",
+        "elapsed-since-first-refusal-seconds": 0,
+        "policy": {
+          "offline": {
+            "read": "allow",
+            "benign": "allow",
+            "consequential": "block",
+            "prohibited": "block"
+          },
+          "wedge-grace-seconds": 300
+        }
+      },
+      "expected": {
+        "action": "refuse",
+        "reason-code": "policy-not-published",
+        "finding": false
+      }
+    },
+    {
+      "name": "refused-other-reason-read-inside-grace-serves",
+      "description": "one malformed envelope must not be able to stop a fleet faster than a human can read the reason — bounded, and loud",
+      "input": {
+        "submission-outcome": "refused",
+        "reason-code": "aggregate-window-too-long",
+        "class": "read",
+        "elapsed-since-first-refusal-seconds": 0,
+        "policy": {
+          "offline": {
+            "read": "allow",
+            "benign": "allow",
+            "consequential": "block",
+            "prohibited": "block"
+          },
+          "wedge-grace-seconds": 300
+        }
+      },
+      "expected": {
+        "action": "serve",
+        "reason-code": null,
+        "finding": true
+      }
+    },
+    {
+      "name": "refused-other-reason-benign-inside-grace-serves",
+      "description": "the last second of the window still serves, and is still a finding",
+      "input": {
+        "submission-outcome": "refused",
+        "reason-code": "aggregate-window-too-long",
+        "class": "benign",
+        "elapsed-since-first-refusal-seconds": 299,
+        "policy": {
+          "offline": {
+            "read": "allow",
+            "benign": "allow",
+            "consequential": "block",
+            "prohibited": "block"
+          },
+          "wedge-grace-seconds": 300
+        }
+      },
+      "expected": {
+        "action": "serve",
+        "reason-code": null,
+        "finding": true
+      }
+    },
+    {
+      "name": "refused-other-reason-consequential-inside-grace-refuses",
+      "description": "grace over `consequential` is exactly the window an auditor asks 'what else was still permitted' about",
+      "input": {
+        "submission-outcome": "refused",
+        "reason-code": "aggregate-window-too-long",
+        "class": "consequential",
+        "elapsed-since-first-refusal-seconds": 0,
+        "policy": {
+          "offline": {
+            "read": "allow",
+            "benign": "allow",
+            "consequential": "block",
+            "prohibited": "block"
+          },
+          "wedge-grace-seconds": 300
+        }
+      },
+      "expected": {
+        "action": "refuse",
+        "reason-code": "aggregate-window-too-long",
+        "finding": false
+      }
+    },
+    {
+      "name": "refused-other-reason-prohibited-inside-grace-refuses",
+      "description": "the same, at the class no authority reaches",
+      "input": {
+        "submission-outcome": "refused",
+        "reason-code": "aggregate-window-too-long",
+        "class": "prohibited",
+        "elapsed-since-first-refusal-seconds": 0,
+        "policy": {
+          "offline": {
+            "read": "allow",
+            "benign": "allow",
+            "consequential": "block",
+            "prohibited": "block"
+          },
+          "wedge-grace-seconds": 300
+        }
+      },
+      "expected": {
+        "action": "refuse",
+        "reason-code": "aggregate-window-too-long",
+        "finding": false
+      }
+    },
+    {
+      "name": "refused-other-reason-read-at-grace-expiry-refuses",
+      "description": "the boundary is closed: at `wedge-grace` exactly, the window has elapsed",
+      "input": {
+        "submission-outcome": "refused",
+        "reason-code": "aggregate-window-too-long",
+        "class": "read",
+        "elapsed-since-first-refusal-seconds": 300,
+        "policy": {
+          "offline": {
+            "read": "allow",
+            "benign": "allow",
+            "consequential": "block",
+            "prohibited": "block"
+          },
+          "wedge-grace-seconds": 300
+        }
+      },
+      "expected": {
+        "action": "refuse",
+        "reason-code": "aggregate-window-too-long",
+        "finding": false
+      }
+    },
+    {
+      "name": "refused-other-reason-benign-past-grace-refuses",
+      "description": "an unbounded grace is an accountability hole; the stopped state cannot be waited out",
+      "input": {
+        "submission-outcome": "refused",
+        "reason-code": "aggregate-window-too-long",
+        "class": "benign",
+        "elapsed-since-first-refusal-seconds": 3600,
+        "policy": {
+          "offline": {
+            "read": "allow",
+            "benign": "allow",
+            "consequential": "block",
+            "prohibited": "block"
+          },
+          "wedge-grace-seconds": 300
+        }
+      },
+      "expected": {
+        "action": "refuse",
+        "reason-code": "aggregate-window-too-long",
+        "finding": false
+      }
+    }
+  ]
+}

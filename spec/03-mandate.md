@@ -335,7 +335,13 @@ is present in the envelope iff it is present in the object.
   rejection record of §04 §7, and **the emitter's stream is wedged at that position until an
   operator intervenes** — §04 §3 admits no gap, so it cannot simply skip past them. Nothing is lost
   and nothing is silently accepted; but an operator who expects revocation to be free will find a
-  stopped component and no explanation, and that is worth one sentence here rather than one incident.
+  stopped component, and that is worth one sentence here rather than one incident.
+
+  This bullet said *"a stopped component **and no explanation**"* for the whole of v0.1, and both
+  halves of that were wrong. The component was not stopped — nothing required it to stop, so it went
+  on serving into a kernel accepting none of it — and the absence of an explanation was recorded
+  here as an accepted cost rather than as the defect it was. `spec/05 §7.1` now says what the
+  component owes in that state, §09 §4.2 what the kernel owes, and §04 §7.2 how the wedge ends.
 - `revoked-at` MUST NOT be earlier than the revoked mandate's `issued-at`
   (`revocation-before-issue`). Backdating a revocation to erase a window of authority is a
   rejection, not a workflow.

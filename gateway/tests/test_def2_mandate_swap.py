@@ -17,15 +17,23 @@ who signs a longer-lived replacement and drops it in place produces exactly the 
 gateway accepts the mandate, the kernel accepts nothing that cites it, and the calls keep flowing.
 
 The trigger is incidental. Any kernel-side refusal of the grant lands in the same place, because the
-gateway's push loop treats a refusal as terminal for those bytes and then carries on
+gateway's push loop treated a refusal as terminal for those bytes and then carried on
 (`emitter.py::push_pending`).
 
-The two tests marked `open_defect` assert the behaviour the design requires, so they fail while the
-defect is open; they are excluded from the default run and are run with
-`python3 -m pytest gateway/tests -q -m open_defect`.
-`test_a_published_mandate_still_reaches_the_kernel` is deliberately *not* quarantined: it is the
-counterfactual, it runs in the default suite, and it proves this harness lets a legitimate session
-through — so a failure in the two below is the defect rather than a broken fixture.
+**Closed by `spec/05 §7.1`, `spec/09 §4.2`, `spec/10 §1.4` and `spec/04 §7.2`.** These tests are no
+longer quarantined; they assert the behaviour the specification now requires. Two assertions moved
+when the defect closed, and both moved because the state they described stopped being reachable:
+
+* the calls are refused rather than served, so `_serve_one_read` returns the §06 §4.1 refusal object
+  instead of the upstream result;
+* nothing is submitted past a wedge (§05 §7.1 clause 3), so the later envelopes of that session no
+  longer arrive at the kernel to be rejected `mandate-unresolved` one after another. The test asks
+  instead for what the fix is *for*: the kernel's own reason code reaching the caller, the stream
+  head unmoved, and the rest of the chain still held locally rather than marked delivered.
+
+`test_a_published_mandate_still_reaches_the_kernel` is the counterfactual and always was: it proves
+this harness lets a legitimate session through, so a failure in the two below is the defect rather
+than a broken fixture.
 """
 
 from __future__ import annotations
@@ -41,6 +49,7 @@ import pytest
 from stozher_gateway import clock as clock_module
 from stozher_gateway.config import load_config_file
 from stozher_gateway.enforce import Call
+from stozher_gateway.refusal import RefusalError
 from stozher_gateway.runtime import Gateway
 
 from .support import Kernel, gateway_config_file
@@ -48,6 +57,12 @@ from .support import Kernel, gateway_config_file
 #: An upstream call that would really have happened. The gateway returns it unchanged when it lets
 #: a call through, so seeing it come back *is* "the gateway served this call".
 APPLIED = "upstream-applied"
+
+#: The stream every gateway in this module writes: `gw:<device>:<caller>` from the configuration
+#: `support.gateway_config_file` writes. Named here because the kernel is module-scoped and the
+#: tests below need the head *before* they open a session — a session now offers its mandate at
+#: connect (§10 §1.4), so measuring afterwards would measure the thing under test.
+STREAM = "gw:test-mbp:claude-code"
 
 
 def _standing_mandate(kernel: Kernel, *, days: int) -> dict[str, Any]:
@@ -126,10 +141,19 @@ def environment(world: World, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -
 
 
 def _serve_one_read(gateway: Gateway, session: Any) -> Any:
-    """Put one governed `read` through the gateway and get its envelopes offered to the kernel."""
-    result = gateway.enforcer.call(
-        session, Call("github", "get_file", {"path": "README.md"}, None), lambda: APPLIED
-    )
+    """Put one governed `read` through the gateway and get its envelopes offered to the kernel.
+
+    Returns the upstream result when the call was served, and the §06 §4.1 refusal object when it
+    was not — the two things a caller can actually receive. A refusal is raised, which is what marks
+    the MCP result as an error (`refusal.py`), so a helper that let it propagate would fail the test
+    that is asking whether the gateway refuses.
+    """
+    try:
+        result = gateway.enforcer.call(
+            session, Call("github", "get_file", {"path": "README.md"}, None), lambda: APPLIED
+        )
+    except RefusalError as refused:
+        result = refused.document
     gateway.emitter.flush_windows()
     gateway.emitter.push_pending()
     return result
@@ -150,54 +174,60 @@ def test_a_published_mandate_still_reaches_the_kernel(world: World, environment:
     assert gateway.emitter.pending_push_count() == 0
 
 
-@pytest.mark.open_defect
 def test_the_gateway_stops_serving_once_the_kernel_refuses_its_mandate(
     world: World, environment: None
 ) -> None:
     """The defect, in one sentence: the kernel has refused this session's mandate grant and every
-    envelope citing it, and the next tool call is still served as if nothing happened.
+    envelope citing it, and the next tool call was still served as if nothing happened.
 
-    ADR-0001 requires every effect to happen under a *traceable* mandate. Here the mandate resolves
-    only inside the process that benefits from it: the audit the organization actually queries has
-    no record of the week, and the caller was never told that the record it was promised does not
-    exist.
+    ADR-0001 requires every effect to happen under a *traceable* mandate. The mandate resolved only
+    inside the process that benefits from it: the audit the organization actually queries had no
+    record of the week, and the caller was never told that the record it was promised does not
+    exist. §05 §7.1 clause 4 now refuses every class under a `mandate-*` reason — `read` included,
+    because a read without authority is still an effect — and clause 5 makes the caller's answer the
+    kernel's own reason code.
     """
     world.mandate_file.write_text(json.dumps(_standing_mandate(world.kernel, days=180)))
+    before, _ = world.kernel.head(STREAM)
     gateway = world.gateway()
     session = gateway.open_session()
     gateway.emitter.push_pending()
 
-    # The kernel refused the grant, so nothing on this stream has been accepted.
+    # The kernel refused the grant, so nothing this session emits has been accepted.
     count, _ = world.kernel.head(session.stream)
-    assert count == 0, "the fixture failed to produce the refused-grant state"
+    assert count == before, "the fixture failed to produce the refused-grant state"
     _, rejections = world.kernel.request("GET", "/v1/rejections?limit=20")
     reasons = {rejection["reason"] for rejection in rejections["rejections"]}
     assert "mandate-standing-lifetime-exceeded" in reasons
 
-    # And yet: the gateway serves, and every envelope it emits is refused `mandate-unresolved`.
     result = _serve_one_read(gateway, session)
-    _, rejections = world.kernel.request("GET", "/v1/rejections?limit=20")
-    assert "mandate-unresolved" in {r["reason"] for r in rejections["rejections"]}
-    count, _ = world.kernel.head(session.stream)
-    assert count == 0
 
     assert result != APPLIED, (
         "DEF-2: the gateway forwarded a call and returned the upstream result while the kernel was "
         "refusing every envelope it emitted; the caller has no way to know the effect is unaudited"
     )
+    # The caller is told, in the §06 §4.1 shape, carrying the kernel's reason code verbatim.
+    assert result["result"] == "blocked"
+    assert result["reason-code"] == "mandate-standing-lifetime-exceeded"
+
+    # And nothing was submitted past the wedge: the head has not moved, and the envelopes emitted
+    # after the refusal are still held locally rather than marked delivered (§05 §7.1 clause 3).
+    count, _ = world.kernel.head(session.stream)
+    assert count == before
+    assert gateway.emitter.pending_push_count() > 0
 
 
-@pytest.mark.open_defect
 def test_the_kernels_refusal_survives_somewhere_the_gateway_can_be_asked(
     world: World, environment: None
 ) -> None:
-    """The other half of "silent": even an operator who goes looking cannot find it.
+    """The other half of "silent": even an operator who goes looking could not find it.
 
-    `emitter.py::push_pending` writes the refusal into `envelopes.push_error` and then calls
-    `mark_pushed`, whose UPDATE sets `push_error = NULL` (`store.py::mark_pushed`). The reason code
-    the kernel gave exists for the duration of one statement. Afterwards the row is indistinguishable
-    from an accepted one, `pending_push_count()` is 0, and the gateway's own state says the push
-    queue is healthy. The only trace is a line on stderr.
+    `emitter.py::push_pending` wrote the refusal into `envelopes.push_error` and then called
+    `mark_pushed`, whose UPDATE was `SET pushed_at = ?, push_error = NULL`
+    (`store.py::mark_pushed`). The reason code the kernel gave existed for the duration of one
+    statement. Afterwards the row was indistinguishable from an accepted one, `pending_push_count()`
+    was 0, and the gateway's own state said the push queue was healthy. The only trace was a line on
+    stderr. §05 §7.1 clause 2 now forbids erasing the reason on any later transition of the row.
     """
     world.mandate_file.write_text(json.dumps(_standing_mandate(world.kernel, days=180)))
     gateway = world.gateway()
@@ -213,7 +243,15 @@ def test_the_kernels_refusal_survives_somewhere_the_gateway_can_be_asked(
             ).fetchall()
         ]
 
-    assert any(error and "mandate-unresolved" in error for error in errors), (
+    assert any(
+        error and "mandate-standing-lifetime-exceeded" in error for error in errors
+    ), (
         "DEF-2: no row of the local chain records that the kernel refused it, so nothing the "
         "gateway can be asked distinguishes a synced stream from a rejected one"
     )
+    # And the same fact is answerable without reading the chain row by row: the wedge is the
+    # component's own account of "is anything I emit reaching the audit".
+    wedge = gateway.store.wedge(session.stream)
+    assert wedge is not None
+    assert wedge.reason_code == "mandate-standing-lifetime-exceeded"
+    assert gateway.store.refused_push_count() == 1
