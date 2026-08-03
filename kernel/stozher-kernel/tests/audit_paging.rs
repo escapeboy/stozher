@@ -348,3 +348,44 @@ async fn an_export_refuses_a_filter_it_does_not_recognise() {
     let (status, _) = get(&world, "/console/audit/export?classification=read").await;
     assert_eq!(status, StatusCode::OK);
 }
+
+/// The browsed page keeps the typo and stops asserting the filter held.
+///
+/// The sibling of the export refusal above, and the half that was missing. `Filters::from_params`
+/// ignoring a name it does not know is right for a page someone is browsing — but the sentence
+/// under it reads "N record(s) match these filters", which is the assertion that just became false.
+/// An incident responder typed `?class=consequential`, was handed all 87 records under that
+/// sentence, and read the number as a finding. `?banana=zzz` did the same. Refusing here would make
+/// a typo in the address bar an error page; saying so costs a line and keeps the page usable.
+#[tokio::test]
+async fn the_audit_page_names_a_filter_it_ignored_rather_than_widening_in_silence() {
+    let world = world().await;
+    append_effects(&world, 3).await;
+
+    for typo in ["class=consequential", "banana=zzz"] {
+        let (status, body) = get(&world, &format!("/console/audit?{typo}")).await;
+        assert_eq!(
+            status,
+            StatusCode::OK,
+            "browsing must not become an error page"
+        );
+        let name = typo.split('=').next().unwrap();
+        assert!(
+            body.contains("Not a filter:") && body.contains(name),
+            "the page did not say it had ignored {name:?}: {body}"
+        );
+    }
+
+    // The paired negative: a page whose filters all exist says nothing of the kind. Without this,
+    // a banner rendered unconditionally would satisfy every assertion above.
+    let (status, body) = get(&world, "/console/audit?classification=read").await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(
+        !body.contains("Not a filter:"),
+        "a page with only real filters claimed one had been ignored: {body}"
+    );
+    // `after` rides along from the paging links and is not a filter, so it must not be named either.
+    let (status, body) = get(&world, "/console/audit?limit=2").await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(!body.contains("Not a filter:"), "{body}");
+}
