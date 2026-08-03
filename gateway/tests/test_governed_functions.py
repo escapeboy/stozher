@@ -174,6 +174,86 @@ def test_the_same_call_written_two_ways_is_one_action(governor: Any) -> None:
     assert hashes[0] == hashes[1], "the same action committed to two different argument hashes"
 
 
+def test_what_the_gate_records_is_what_the_function_receives(governor: Any) -> None:
+    """The defect a first integrator hit, and the worst one this module can carry.
+
+    `BoundArguments.arguments` keys a `**kwargs` parameter under its own name, so calling
+    `function(**arguments)` passed `{'extra': {'cc': ...}}` as a single keyword named `extra` —
+    which `**extra` then collected under the key `'extra'`. The approver signed `cc`; the function
+    received a dict called `extra` containing it. No exception, no warning, and the two records
+    that are supposed to be the same thing disagreed.
+    """
+    seen: list[dict[str, Any]] = []
+
+    with governor:
+
+        # `tool=` so the action is one the fixture's policy classifies `read`: what is under test is
+        # the signature, not the classification.
+        @governor.governed(server="ops", tool="tail_logs")
+        def send_email(to: str, subject: str = "(none)", **extra: Any) -> str:
+            seen.append({"to": to, "subject": subject, "extra": extra})
+            return "sent"
+
+        assert send_email("ops@example.com", cc="boss@example.com", priority=1) == "sent"
+
+    assert seen == [
+        {
+            "to": "ops@example.com",
+            "subject": "(none)",
+            "extra": {"cc": "boss@example.com", "priority": 1},
+        }
+    ], "the function did not receive the arguments the caller passed"
+
+
+def test_a_positional_only_parameter_is_governable(governor: Any) -> None:
+    """The same line, with a different symptom: there is no keyword spelling for a positional-only
+    parameter, so `function(**arguments)` raised `TypeError` on a signature Python has had since
+    3.8. A gate that cannot wrap a legal signature is a gate that gets removed from that tool."""
+    seen: list[tuple[str, str]] = []
+
+    with governor:
+
+        @governor.governed(server="ops", tool="tail_logs")
+        def run_query(query: str, /, database: str = "main") -> str:
+            seen.append((query, database))
+            return "0 rows"
+
+        assert run_query("SELECT 1") == "0 rows"
+
+    assert seen == [("SELECT 1", "main")]
+
+
+def test_an_async_function_is_refused_rather_than_recorded_as_applied(governor: Any) -> None:
+    """`Enforcer.call` is synchronous: it chains `applied` as soon as `forward()` returns, and for a
+    coroutine function that is when the coroutine is *constructed*. Decorating one produced a chain
+    that said the effect had been applied before the body ran — and said it still if the caller
+    never awaited, or if the await raised. Refusing at decoration is the honest answer."""
+
+    with pytest.raises(TypeError, match="async"):
+
+        @governor.governed(server="ops")
+        async def fetch(url: str) -> str:
+            return "body"
+
+
+def test_a_configuration_path_that_does_not_exist_is_refused(tmp_path: Path) -> None:
+    """`load_config` treats a missing file as a disabled gateway, which is right for the MCP server
+    and wrong for a caller who named one: they got a Governor built from defaults and discovered it
+    at the first call. A typo in a path is not a decision to run ungoverned."""
+    from stozher_gateway.config import ConfigError
+
+    with pytest.raises(ConfigError, match="no such configuration file"):
+        Governor.from_config(tmp_path / "absent.toml")
+
+
+def test_the_exception_a_caller_must_catch_is_importable_from_the_package(governor: Any) -> None:
+    """`deploy/README.md` names `RefusalError` and it was importable only from a private submodule,
+    which sent the first integrator into the source to find out from where."""
+    import stozher_gateway
+
+    assert stozher_gateway.RefusalError is RefusalError
+
+
 def test_a_governor_that_was_never_opened_refuses_rather_than_running_ungoverned(
     governor: Any,
 ) -> None:

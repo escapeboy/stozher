@@ -42,7 +42,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any, TypeVar
 
-from .config import GatewayConfig, load_config
+from .config import ConfigError, GatewayConfig, load_config, load_config_file
 from .enforce import Call, Session
 from .runtime import Gateway, StartupRefusedError
 
@@ -60,8 +60,20 @@ class Governor:
 
     @classmethod
     def from_config(cls, path: str | Path | None = None) -> Governor:
-        """Load the same configuration file the MCP gateway reads."""
-        return cls(load_config(Path(path) if path is not None else None))
+        """Load the same configuration file the MCP gateway reads.
+
+        A path that was named and does not exist is an error here, though `load_config` treats a
+        missing file as a disabled gateway. That default is right for the MCP server — a Harbormaster
+        with no Stozher configuration loses nothing — and wrong for a caller who typed a filename:
+        they got a Governor built from defaults, with no kernel and no identity, and found out at
+        the first call. A typo in a path is not a decision to run ungoverned.
+        """
+        if path is not None:
+            named = Path(path)
+            if not named.is_file():
+                raise ConfigError(f"{named}: no such configuration file")
+            return cls(load_config_file(named))
+        return cls(load_config(None))
 
     # -- lifecycle ---------------------------------------------------------------------------
 
@@ -115,6 +127,18 @@ class Governor:
 
         def decorate(function: F) -> F:
             name = tool or function.__name__
+            # Refused at decoration rather than at the call, because the failure it prevents is
+            # silent. `Enforcer.call` is synchronous and records `applied` once `forward()` returns
+            # — for a coroutine function that is the moment the coroutine object is *constructed*,
+            # so the chain would carry an applied effect before the body had run, and carry it still
+            # if the caller never awaited or if the await raised. A gate whose record is written
+            # before the work is a gate that lies in exactly the direction that matters.
+            if inspect.iscoroutinefunction(function) or inspect.isasyncgenfunction(function):
+                raise TypeError(
+                    f"{name} is async, and `governed` cannot record it honestly: the effect would "
+                    "be chained as applied when the coroutine is created, not when it runs. Wrap "
+                    "the call in a synchronous function and govern that one."
+                )
             signature = inspect.signature(function)
 
             @functools.wraps(function)
@@ -132,8 +156,15 @@ class Governor:
                 bound.apply_defaults()
                 arguments = dict(bound.arguments)
                 call = Call(server, name, arguments, schema)
+                # `bound.args`/`bound.kwargs`, not `**arguments`. `BoundArguments.arguments` keys a
+                # `**kwargs` parameter under its own name, so `function(**arguments)` handed the
+                # function `{'extra': {'cc': ...}}` as one keyword named `extra` — the approver
+                # signed `cc`, the function received a dict called `extra` containing it. The same
+                # line made a positional-only parameter raise, because there is no keyword spelling
+                # for one. The gate recording arguments the function never got is the worst defect
+                # this module can have, and it was silent.
                 return self._gateway.enforcer.call(
-                    self._session, call, lambda: function(**arguments)
+                    self._session, call, lambda: function(*bound.args, **bound.kwargs)
                 )
 
             return governed_call  # type: ignore[return-value]

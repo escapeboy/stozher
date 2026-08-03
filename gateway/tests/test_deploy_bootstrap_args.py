@@ -108,3 +108,70 @@ def test_a_complete_second_root_pair_passes_the_argument_gate(
     )
     assert "given together" not in result.stderr
     assert witness.exists(), "the run stopped before it reached the build stage"
+
+
+def _ceremony_images(witness: Path) -> set[str]:
+    """Every image tag the ceremony's throwaway containers were started from.
+
+    `docker run` lines only. `docker compose` reads `.env` itself and is not what this is about.
+    """
+    tags = set()
+    for line in witness.read_text().splitlines():
+        words = line.split()
+        if not words or words[0] != "run":
+            continue
+        tags |= {word for word in words if word.startswith("stozher-kernel:")}
+    return tags
+
+
+def test_the_ceremony_runs_the_image_named_in_dot_env(sandbox: tuple[Path, Path]) -> None:
+    """The tag in `.env` is the tag the ceremony executes.
+
+    This script is the only one that runs before `.env` can be in anyone's environment, and `.env`
+    is where `deploy/README.md` tells an operator to put a per-install tag. Resolving `IMAGE` at the
+    top — before the file was read — meant the whole ceremony ran the shared `stozher-kernel:0.1.0`
+    while `docker compose` read `.env` and built and started the right one. The install then had a
+    store written by one binary and served by another; on a host with two installs, the binary was
+    the other deployment's. It surfaced as a second root enrolled into the root set and missing from
+    the policy's approvers — behaviour this repository had already fixed in the binary.
+    """
+    script, witness = sandbox
+    (script.parents[1] / ".env").write_text(
+        "STOZHER_UID=1000\nSTOZHER_GID=1000\nSTOZHER_KERNEL_PORT=8830\n"
+        "COMPOSE_PROJECT_NAME=stozher-elsewhere\n"
+        "STOZHER_KERNEL_IMAGE=stozher-kernel:from-dot-env\n"
+    )
+    _run(script, "--root", "human:ivan")
+    assert witness.exists(), "the run stopped before it reached the ceremony"
+    tags = _ceremony_images(witness)
+    assert tags == {"stozher-kernel:from-dot-env"}, (
+        "the ceremony ran a binary the operator did not name in .env: " + repr(sorted(tags))
+    )
+
+
+def test_the_environment_still_wins_over_dot_env(sandbox: tuple[Path, Path]) -> None:
+    """The paired negative, and the precedence `docker compose` uses.
+
+    Reading `.env` unconditionally would be the same defect with the operands swapped: an exported
+    tag is how the two must be kept in step when a caller drives this script, and compose lets the
+    environment override the file. A fix that always preferred the file would satisfy the test above
+    while breaking that.
+    """
+    script, witness = sandbox
+    (script.parents[1] / ".env").write_text(
+        "STOZHER_UID=1000\nSTOZHER_GID=1000\n"
+        "STOZHER_KERNEL_IMAGE=stozher-kernel:from-dot-env\n"
+    )
+    env = dict(
+        os.environ,
+        PATH=f"{script.parents[2] / 'bin'}:{os.environ['PATH']}",
+        STOZHER_KERNEL_IMAGE="stozher-kernel:from-the-environment",
+    )
+    subprocess.run(
+        [str(script), "--root", "human:ivan"],
+        capture_output=True,
+        text=True,
+        env=env,
+        timeout=60,
+    )
+    assert _ceremony_images(witness) == {"stozher-kernel:from-the-environment"}
