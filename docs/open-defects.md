@@ -46,63 +46,64 @@ directions, so the next open defect has somewhere to go and cannot be recorded w
 | DEF-4 | closed | **spec hole** (tooling/documentation), closed in the implementation | high for adoption, none for security | There was no way to obtain a verified policy without a live kernel, so a cold CI container could not open a session at all. `policy export-bundle` is the way in; the offline profile itself always worked. |
 | DEF-5 | not a defect | — | — | Proposed: ambient-state authorization on the `Governor` path. Investigated and **not found**; four independent bindings recompute authority per call. |
 | DEF-6 | closed | implementation defect, introduced by DEF-2's fix | high (availability) | One `503 x-store-unavailable` — the kernel's own *"could not answer; retry"* — wedged the emitter's stream permanently. Found by an intermittent `blocked` where `parked` was expected; reproduced deterministically. |
-| DEF-7 | observed | not yet established | high if real (availability); **no confidence loss** — the kernel refused correctly | On Linux CI, `test_the_gate` saw the gateway's own effect refused `gate-authorization-replayed` at `seq` 7 and the stream wedge. Evidence: GitHub Actions run **30905170959**, job 91978477109. Failed 1 of 3 runs of that job (30905170959 first attempt; its re-run and 30906172961 both green). Never seen on the author's macOS in eight days. |
+| DEF-7 | open | implementation defect (gateway bookkeeping) | high if real (availability); **no confidence loss** — the kernel refused correctly | A catalog seed can be applied twice, spending one single-use approval on two envelopes; the kernel refuses the second `gate-authorization-replayed` and the emitter's stream wedges. Found by CI on Linux (run **30905170959**, 1 of 3 runs); **reproduced deterministically with no concurrency** in `gateway/tests/test_def7_seed_replay.py`. Never seen on the author's macOS in eight days. |
 
-## DEF-7 — an approval spent twice, seen once, mechanism not established
+## DEF-7 — one approval, two envelopes. Open, with a deterministic reproduction.
 
-**Status `observed`, and that status was added for this row.** The register had `open`, `closed` and
-`not a defect`, and `open` obliges a quarantined reproduction. There is no honest reproduction to
-write yet, and writing one for a mechanism I have guessed at would be manufacturing evidence for a
-story. Rounding it to "flake" is the other wrong answer: DEF-6 arrived through exactly this door — an
-intermittent failure that looked like noise and was a real defect once someone made it deterministic.
+**Found by CI on its first run, on a machine that was not the author's.** Eight days of running this
+suite many times a day on macOS never produced it; the first Linux run did — `test_the_gate`, an
+effect refused `gate-authorization-replayed` at `seq` 7 and the stream wedged. GitHub Actions run
+**30905170959**, job 91978477109. It failed 1 of 3 runs of that job.
 
-**What was observed.** The first run of `.github/workflows/gates.yml`, on Linux, 2026-08-04:
+**Reproduced deterministically, and it needs no concurrency at all** —
+`gateway/tests/test_def7_seed_replay.py`, quarantined. The observation looked like a race. It is not
+one; it is a missing fact.
 
+### The mechanism
+
+`Enforcer._seed_catalog` ends with two statements, in this order and in two separate transactions:
+
+```python
+envelope_id = self._emitter.append(...)   # spends the approver's single-use signature
+self._store.seed_catalog(...)             # raises the guard, afterwards
 ```
-test_the_gate — assert rejections["count"] == 0   ("Nothing the gateway emitted was refused")
-  1 rejection: kind=effect  seq=7  stream=gw:test-mbp:claude-code
-  gate-authorization-replayed: request eb6f20a4a35c34e780cf31b7a6a1fe70b24d0a4395018a04bec6d4b8f46226ef
-                               was already used
-  → the stream wedges; a following read is served under the §05 §7.1 grace window
-221 passed, 1 failed
-```
 
-GitHub Actions run **30905170959**, job 91978477109. The re-run of that job passed, and so did the
-whole workflow on the next commit (**30906172961**). **One failure in three runs of the gateway job**
-— never once on macOS in eight days of running this suite many times a day.
+The only thing preventing a second application is `catalog_entry(server, tool) is None`, checked at
+both call sites — `apply_pending_seeds`, which runs at **every session open**, and the gate path
+after a decision verifies. And `seeded_pending()` does not exclude seeds that have already been
+applied: **the fact "this seed is spent" lives in a different table, is written after the envelope,
+and is never marked on the seed itself.**
 
-One in three is frequent enough to be worth catching in a loop rather than waiting for, and that is
-what "running the e2e file in a loop on Linux" below is now costed against: at this rate a handful of
-iterations should produce a second observation, and a second observation is what turns the guess
-below into something to test.
+So the window between the append and the catalog write is one in which the guard still passes.
+Anything that looks in it seeds again: a crash between the two statements, or a second gateway
+process — a deployment runs one per MCP client over one SQLite file, and `apply_pending_seeds` is
+the first thing each of them does.
 
-**What is established, and what is not.**
+### What is established, and what is still not
 
-*Established:* the kernel behaved correctly. A single-use approval was presented twice and the second
-presentation was refused, which is `spec/06 §5`'s guarantee doing its job. No authority leaked; the
-worst outcome was availability — the emitter wedged its own stream, and §05 §7.1's grace then served
-a `read` while flagging it, which is also correct.
+*Established:* the double application, from the code and from a test that provokes it without
+concurrency. Also that the kernel is right — a single-use approval presented twice is refused, which
+is `spec/06 §5` working. **No authority leaked.** The cost is availability: the emitter wedges its
+own stream, and §05 §7.1's grace then serves a `read` while flagging it, which is also correct.
 
-*Not established:* why the gateway presented it twice. There is a guard in `enforce.py` at the seed
-path, and its own comment names this exact failure — *"emitting the seed envelope twice would spend
-the approver's single-use signature on the second copy and the kernel would refuse it
-`gate-authorization-replayed` — correctly, which is why the guard is here rather than a hope that it
-never happens."* The guard is `catalog_entry(...) is None` followed by the emit: check-then-act. That
-it is check-then-act is a fact; **that this is what fired is a hypothesis and is recorded as one.**
+*Still not:* which of the three routes into the window the CI run actually took. The reproduction
+shows the state is reachable and that the code re-applies from it; it does not show that overlapping
+sessions are what got there on 2026-08-04. That distinction is kept because the fix differs — an
+idempotence marker on the seed fixes all three, while serialising session open fixes only one.
 
-**Why it is filed at `high if real`.** It is DEF-6's family: the kernel refuses correctly and the
-*component* wedges itself as a consequence. That shape has already produced one high-severity
-availability defect in this repository, and the grace window that softens it is a bounded hole
-(§05 §7.1) rather than a fix.
+### Correction to this row's first version
 
-**What would move it out of `observed`.** Determine whether the seed path can run twice for one
-decision without a race — if the catalog write and the decision's consumption are not one
-transaction, the state is constructible directly and needs no concurrency at all, which would make
-this `open` with a deterministic reproduction in an afternoon. If it does need a race, the next step
-is running the e2e file in a loop on Linux to get a second observation before theorising further.
+Filed on 2026-08-04 as `observed`, with the mechanism called *"a hypothesis and recorded as one"* and
+the next step costed as *"running the e2e file in a loop on Linux"*. The loop was never needed: the
+cheaper half of that plan — read whether the catalog write and the decision's consumption are one
+transaction — answered it in one file read. **Recording the hypothesis as a hypothesis is what made
+the cheap check the obvious next move instead of the expensive one.**
 
-**Not fixed here, and deliberately.** The mechanism is unproven; a fix aimed at a guess would be
-untestable by construction and would close the row without closing the defect.
+### Not fixed here
+
+The reproduction is the deliverable; the fix is a design choice this run does not make. The shape it
+wants: the seed carries its own "applied" fact, written in the same transaction as the envelope that
+applies it — the same lesson `PRAGMA`-level uniqueness already taught the chain (ADR-0028 §6).
 
 ## DEF-6 — a kernel that could not answer was recorded as one that said no
 
