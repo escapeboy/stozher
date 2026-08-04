@@ -168,7 +168,9 @@ is exactly the audit surface ADR-0003 argues against; an on-prem relay is the no
   inference, not an observation**, and is recorded as such. Not S4-specific; every S4 gate run has
   passed. Worth a deterministic fix at S5 (copy the built binary aside per test session).
 - **Pre-existing kernel flake, unrelated to S4.** On a baseline run *before* any change,
-  `concurrency.rs::one_approval_cannot_be_consumed_twice_however_the_requests_race` failed once: it
+  `concurrency.rs::s6_one_approval_cannot_be_spent_twice` (named here as
+  `one_approval_cannot_be_consumed_twice_however_the_requests_race` until the citation was corrected
+  on 2026-08-04) failed once: it
   needs at least one of eight racers to lose on *replay* rather than chain position, and under load
   all seven can lose on position first. Passed 5/5 isolated and every subsequent full run. The
   assertion is inherently timing-dependent — worth tightening, not currently wrong.

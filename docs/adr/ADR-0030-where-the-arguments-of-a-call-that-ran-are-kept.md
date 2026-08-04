@@ -125,6 +125,10 @@ nothing, which is this file.
 
 ## 6. Residuals
 
+**All five were closed on 2026-08-04; see the second table in §7 for what binds each.** The list is
+kept as written rather than deleted, because what it got wrong is more useful than what it got right:
+the first bullet was already false when this file was committed.
+
 - **The route's authentication is not bound by a test.** `get_payload` refuses an unauthenticated
   caller, and the export document tells a regulator the route is *"authenticated"* — but
   `no_ambient_approval.rs`'s `every_read_route_requires_a_credential_and_none_of_them_writes`
@@ -161,12 +165,29 @@ nothing, which is this file.
 
 **Claims above with no test behind them:**
 
+**All four were closed on 2026-08-04**, and one of them had already closed itself:
+
 | Claim | Status |
 |---|---|
-| `GET /v1/payloads/{hash}` requires a credential | **No test.** Not in `every_read_route_requires_a_credential_and_none_of_them_writes`'s route list; see §6. |
-| `_effect_body` attaches `{server, tool, arguments}` to every effect body unconditionally | **No test.** Only the presence of an `evidence` member on an attempt is asserted; see §6. |
-| The defaults are `P365D` / `P3650D` | **No test.** The mechanism is bound; the durations are not. |
-| `console/templates/audit.html` names the route | **No test.** The export's equivalent sentence is bound; the console's is not. |
+| `GET /v1/payloads/{hash}` requires a credential | **Bound**, and this row was **stale when written down here**. The route was added to `no_ambient_approval.rs::every_read_route_requires_a_credential_and_none_of_them_writes` when that list went from six routes to sixteen — this ADR called it "the highest-value gap this ADR found", it was fixed, and the table was never reconciled. `a_new_route_cannot_be_added_without_appearing_in_the_credential_test` now reads `http.rs` so the list cannot fall behind the router again. |
+| `_effect_body` attaches `{server, tool, arguments}` to every effect body unconditionally | **Bound**: `gateway/tests/test_enforcement.py::test_every_effect_carries_its_arguments_as_a_payload_beside_the_envelope`. It asserts the payload's contents, its media type, that `envelope["evidence"]["payload-hash"]` is the hash of what was actually carried, and that it holds for an **attempt** — the case where the arguments in the store are the only record the call was tried at all. Mutation-tested by dropping `arguments` from the payload. |
+| The defaults are `P365D` / `P3650D` | **Bound**: `console_evidence_and_approver.rs::the_baseline_profile_keeps_the_retention_numbers_it_is_documented_to_keep`, over all four classes. Mutation-tested by shortening `consequential` to `P90D`. |
+| `console/templates/audit.html` names the route | **Bound**: `console_evidence_and_approver.rs::the_audit_page_names_the_payload_route_as_the_export_does`, which asserts the route string rather than the prose, and carries the export's guard — naming the route must not become quoting the values. Mutation-tested by replacing the route with "the documented route". |
+
+**The fifth residual is fixed rather than bound.** `_retain_until`'s docstring claimed
+`min(our preference, emitted-at + policy TTL)`; there is no "our preference" term and there never
+was. The docstring now says what the code does and why the missing term is the stronger property: a
+`min` would let an emitter *shorten* retention below what policy requires, and evidence an emitter
+can shorten is evidence an emitter can lose.
+
+**What this table is really a record of.** Four claims were listed here as unbound; one of them had
+been bound days earlier and nobody struck it. That is the third time in three days a ledger in this
+repository has been found describing a state of affairs that stopped being true — `docs/spec-debt.md`
+(five claims), ADR-0032 §5 (its own gap, overstated), and now this. The pattern is not carelessness
+about any one entry: it is that **the artifact and the record of the artifact are updated by
+different acts**, and only the first is forced. Nothing in the suite fails when a residuals table
+goes stale, which is exactly why these need re-reading against the code on a schedule rather than
+when someone happens to look.
 
 ## Related
 

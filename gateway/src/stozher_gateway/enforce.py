@@ -1349,5 +1349,12 @@ class Enforcer:
         return body, payloads
 
     def _retain_until(self, at: str, classification: str, policy: Policy) -> str:
-        """`min(our preference, emitted-at + policy TTL)` — an emitter cannot buy longer retention."""
+        """`emitted-at + policy TTL` — an emitter cannot buy longer retention, or shorter.
+
+        This used to say `min(our preference, emitted-at + policy TTL)`. There is no "our
+        preference" term and there never was: the emitter has no say at all, which is a stronger
+        property than the one the docstring claimed and the reason it reads oddly. A `min` would let
+        an emitter shorten retention below what policy requires, and evidence an emitter can
+        shorten is evidence an emitter can lose (ADR-0030 §6).
+        """
         return clock_module.shift(at, clock_module.parse_duration(policy.evidence_ttl(classification)))

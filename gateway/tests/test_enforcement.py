@@ -965,3 +965,46 @@ def test_a_tool_the_policy_does_not_name_still_parks_on_its_first_call(harness: 
         "the class is allowed; only §10 §4 is refusing this"
     )
     assert harness.forwarded == []
+
+
+def test_every_effect_carries_its_arguments_as_a_payload_beside_the_envelope(
+    harness: Harness,
+) -> None:
+    """ADR-0030 §6, the second residual: `_effect_body` builds `{server, tool, arguments}` for
+    every effect and nothing asserted it.
+
+    The nearest binding was `test_a_prohibited_action_is_never_forwarded_and_is_recorded_as_attempted`,
+    which asserts only that an `evidence` member exists — so the member could have gone on naming a
+    `payload-hash` while the payload behind it stopped being built, or stopped travelling with the
+    envelope, and every test would still have passed. Every test that reads a payload's contents
+    builds the payload by hand in its own fixture, which asserts the fixture.
+
+    This is the claim ADR-0030 exists to record: the arguments of a call that ran ARE retained.
+    """
+    with pytest.raises(RefusalError):
+        harness.call("delete_repo", repo="acme/backend")
+
+    unpushed = harness.store.unpushed(limit=10)
+    assert len(unpushed) == 1
+    _, envelope, payloads = unpushed[0]
+
+    # The payload travels beside the envelope, not inside it — §04 §5.2 binds them by hash, and the
+    # values must be erasable without touching a signed byte.
+    assert len(payloads) == 1, payloads
+    carried = payloads[0]
+    assert carried["payload"] == {
+        "server": "github",
+        "tool": "delete_repo",
+        "arguments": {"repo": "acme/backend"},
+    }
+    assert carried["media-type"] == "application/json"
+
+    # And the binding itself: the envelope's `payload-hash` is the hash of what was carried. A
+    # payload that does not answer to the digest in the signed object is not evidence of anything.
+    assert envelope["evidence"]["payload-hash"] == carried["payload-hash"]
+    assert carried["payload-hash"] == object_hash(carried["payload"])
+
+    # An attempt is the case that matters most and the one most easily missed: this call was never
+    # forwarded, so the arguments in the store are the only record that it was tried at all.
+    assert harness.forwarded == []
+    assert envelope["execution"]["outcome"] == "attempted"

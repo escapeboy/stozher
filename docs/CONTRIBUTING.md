@@ -60,3 +60,48 @@ claim→test table, where the test's **full name** is the citation and no line n
 **Where it does not apply.** A citation into `spec/` uses its section numbers (`spec/06 §4.4`) —
 those are stable identifiers, not positions. A citation into a frozen artefact — a vector file, a
 tagged release, a specific commit named as such — may use whatever locator that artefact guarantees.
+
+**One correction to the sentence above, from 2026-08-04.** *"A stale citation fails loudly — `grep`
+returns nothing"* is true only of someone who runs the grep. Two ADRs were found citing a test in
+`concurrency.rs` called `one_approval_cannot_be_consumed_twice_however_the_requests_race` — a name no
+test has carried for some time; the property was bound throughout by `s6_one_approval_cannot_be_spent_twice`,
+and the rot sat in the record unnoticed. It now fails loudly for real:
+`gateway/tests/test_doc_citations.py::test_every_test_an_adr_cites_still_exists` resolves every
+`file::test_name` citation in `docs/` against the tree, so a rename that leaves a decision record
+behind fails the suite rather than waiting for a reader.
+
+---
+
+## Verify a ledger against the artifact, never against the report of work done on it
+
+**The rule.** Any file that tracks outstanding work — `docs/spec-debt.md`, `docs/open-defects.md`, an
+ADR's residuals or claim→test table — is reconciled **against the current code and text** at the end
+of every run that pays into it. Not against the run's own summary of what it did, and not only when
+somebody comes looking for an item.
+
+**Why, from what happened.** Three instances inside three days, and none of them was a careless
+entry — every one was true when written:
+
+1. **`docs/spec-debt.md` carried five false claims at once.** A vector recorded as owed had been
+   written; two rows shown as outstanding had been paid; both *"an ADR is owed, and this run does not
+   write it"* bullets had been discharged the day before by ADR-0029 and ADR-0030.
+2. **ADR-0032 §5 overstated its own gap** on the day it was written, claiming nothing surfaced a
+   record that `/console/rejections` had been listing all along. The error pointed the other way and
+   cost the same.
+3. **ADR-0030 §6's first residual — *"the highest-value gap this ADR found"* — was already closed**
+   when the file was committed, and stayed listed as open for days afterwards.
+
+**The structural cause, which is why this needs a rule rather than more care.** The artifact and the
+record of the artifact are changed by **different acts**, and only the first one has a test. Nothing
+in any suite fails when a residuals table goes stale. The party that pays a debt is reliably not the
+party that strikes it off, because striking it off is a separate piece of work that nothing forces.
+
+**What this costs when skipped.** `docs/spec-debt.md` row 2 already stated it: *"an inventory that
+lists paid debt sends a reviewer hunting for a gap that is not there, which costs the same as missing
+one."* The version that flatters — a gap reported as larger than it is — costs the same again, and is
+harder to notice because nobody double-checks bad news about their own work.
+
+**Mechanically enforced half.** Citations are checked (see above). A table saying *"No test"* about a
+claim that has since been bound is **not** mechanically detectable — nothing distinguishes an honest
+gap from a stale one — so that half stays a reading duty, discharged at the end of the run rather
+than deferred to the next reader.

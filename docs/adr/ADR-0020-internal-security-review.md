@@ -82,8 +82,11 @@ Stated because a review that reports only findings tells you nothing about cover
   structural code and turn the verifier into an oracle. ADR-0006 §1 records that this was wrong for
   the whole of v0.1 and was corrected in v0.2; it is right now.
 - **Replay consumption is atomic with the append.** The `gate_use` row is written inside the same
-  `BEGIN IMMEDIATE` transaction, and `one_approval_cannot_be_consumed_twice_however_the_requests_race`
-  races it.
+  `BEGIN IMMEDIATE` transaction, and `concurrency.rs::s6_one_approval_cannot_be_spent_twice`
+  (*"the only thing they contend for is the approval itself and not a chain position"*) races it.
+  [Citation corrected 2026-08-04: this had named `one_approval_cannot_be_consumed_twice_however_the_requests_race`,
+  which no test has been called for some time. The property was bound throughout; the pointer to it
+  was not.]
 - **Ed25519.** Only `verify_strict` is exposed — no lenient path exists to reach — so small-order
   keys and non-canonical signatures are refused.
 - **Arithmetic.** Every timestamp and duration operation is checked and range-bounded; nothing
