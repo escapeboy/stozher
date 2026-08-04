@@ -60,15 +60,28 @@ def build_kernel() -> Path:
     global _SESSION_BINARY
     if _SESSION_BINARY is not None and _SESSION_BINARY.exists():
         return _SESSION_BINARY
-    if not KERNEL_BINARY.exists():
-        if shutil.which("cargo") is None:  # pragma: no cover - CI always has cargo
-            raise RuntimeError("cargo is needed to build the kernel for the integration gate")
-        subprocess.run(
-            ["cargo", "build", "--bin", "stozher-kernel"],
-            cwd=REPO / "kernel",
-            check=True,
-            capture_output=True,
-        )
+    # **Always build.** This used to be `if not KERNEL_BINARY.exists()`, and in CI the gateway job
+    # restores `kernel/target` from a cache keyed on `Cargo.lock` — which does not change when Rust
+    # *source* does. So the binary existed, the build was skipped, and this suite spent days testing
+    # the gateway against a kernel from some earlier commit.
+    #
+    # It cost most of a day on DEF-7: three separate diagnostics were added to the kernel and none
+    # of them ever appeared in a failure, because the kernel running in CI did not contain them.
+    # The fix for the concurrent-submission window looked like it had not worked, for the same
+    # reason. The docstring below calls this suite "the real binary, not a stub" and it was true of
+    # every local run and false of every CI run.
+    #
+    # Letting cargo decide is the whole point: it is incremental, it is the authority on whether
+    # anything needs doing, and a warm cache makes a no-op build cost about a second. A guard that
+    # second-guesses it can only ever be wrong in this direction.
+    if shutil.which("cargo") is None:  # pragma: no cover - CI always has cargo
+        raise RuntimeError("cargo is needed to build the kernel for the integration gate")
+    subprocess.run(
+        ["cargo", "build", "--bin", "stozher-kernel"],
+        cwd=REPO / "kernel",
+        check=True,
+        capture_output=True,
+    )
     session = Path(tempfile.gettempdir()) / f"stozher-kernel-{os.getpid()}"
     shutil.copy2(KERNEL_BINARY, session)
     session.chmod(0o755)

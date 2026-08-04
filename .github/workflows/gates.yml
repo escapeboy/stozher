@@ -88,7 +88,12 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             kernel/target
-          key: cargo-gw-${{ runner.os }}-${{ hashFiles('kernel/Cargo.lock') }}
+          # The Rust *sources* are in the key, not only `Cargo.lock`. Keyed on the lockfile alone,
+          # a source-only change restored a `kernel/target` built from an older commit — and
+          # `support.py` then skipped the build because the binary was there. `restore-keys` still
+          # gives a warm incremental cache; what changes is that a stale entry can no longer be
+          # mistaken for a current one.
+          key: cargo-gw-${{ runner.os }}-${{ hashFiles('kernel/Cargo.lock', 'kernel/**/*.rs') }}
           restore-keys: cargo-gw-${{ runner.os }}-
 
       - uses: actions/setup-python@v5
