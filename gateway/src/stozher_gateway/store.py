@@ -589,6 +589,37 @@ class GatewayStore:
             ).fetchall()
         return [Parked(row) for row in rows]
 
+    def envelopes_citing_authorization(self, request_hash: str) -> list[tuple[str, int, str, str]]:
+        """Every locally chained envelope carrying this approval: `(id, seq, action, emitted-at)`.
+
+        A diagnostic, and it exists because DEF-7 has now survived four fixes. The kernel's refusal
+        says *"request <hash> was already used"* and nothing about **which two envelopes** spent it —
+        and the answer is in this component's own chain, where nobody was looking. A defect whose
+        reproduction we cannot write is one where the next occurrence has to carry its own evidence.
+        """
+        with self._connect() as connection:
+            rows = connection.execute(
+                "SELECT id, seq, envelope_json FROM envelopes WHERE envelope_json LIKE ? "
+                "ORDER BY stream, seq",
+                (f"%{request_hash}%",),
+            ).fetchall()
+        found = []
+        for row in rows:
+            envelope = json.loads(row["envelope_json"])
+            authorization = envelope.get("authorization") or {}
+            decision = authorization.get("decision") or {}
+            if decision.get("request-hash") != request_hash:
+                continue
+            found.append(
+                (
+                    str(row["id"]),
+                    int(row["seq"]),
+                    str(envelope.get("execution", {}).get("action", "<none>")),
+                    str(envelope.get("emitted-at", "<none>")),
+                )
+            )
+        return found
+
     def seeds_awaiting_a_decision(self) -> list[Parked]:
         """Parked rows whose **classification question** is still unanswered, decided call or not.
 

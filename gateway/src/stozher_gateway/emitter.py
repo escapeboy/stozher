@@ -325,6 +325,25 @@ class Emitter:
                 # Overwriting it with `chain-seq-gap` would replace the cause with its consequence.
                 wedged.add(stream)
                 continue
+            if reason == "gate-authorization-replayed":
+                # DEF-7 has survived four fixes and is still not reproducible on the author's
+                # machine. The kernel says *which approval* was spent twice and cannot say which two
+                # envelopes spent it — but this component's own chain holds both, and nobody had
+                # looked there. Logged at the moment of refusal so the next CI occurrence arrives
+                # with the answer instead of another hypothesis.
+                spent = str(
+                    (envelope.get("authorization") or {}).get("decision", {}).get("request-hash", "")
+                )
+                if spent:
+                    logger.error(
+                        "DEF-7 evidence — approval %s is cited by these locally chained envelopes: "
+                        "%s; the one the kernel refused is %s at seq %s (%s)",
+                        spent,
+                        self._store.envelopes_citing_authorization(spent),
+                        envelope_id,
+                        seq,
+                        envelope.get("execution", {}).get("action", "<none>"),
+                    )
             # A refusal is permanent for these bytes; retrying identical bytes forever would hide it.
             self._store.mark_pushed(envelope_id, self._clock.now(), f"{reason}: {detail}")
             self._store.record_wedge(stream, envelope_id, seq, reason, detail, self._clock.now())
