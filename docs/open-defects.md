@@ -124,8 +124,14 @@ Both are real defects and both are closed. Neither is the one this row was opene
 local: 224 passed × 5, `test_the_gate` 8 of 8 in isolation, against roughly 1-in-6 before. Every one
 of those numbers was true and none of them was the claim. CI on the very commit carrying both fixes
 failed the same way — `gate-authorization-replayed`, `seq` 7, same stream — run **30910475650**,
-while the *same commit* on the other branch passed (30910472179). The residue reproduces on Linux at
-roughly 1 in 2.
+while the *same commit* on the other branch passed (30910472179).
+
+**Correction to the rate, made the next hour.** That paragraph first said the residue reproduces on
+Linux *"at roughly 1 in 2"*. It was an estimate from a sample of two — the one failure and the one
+pass that happened to sit beside it — written into a document as though it were measured. On the
+fixed code the record is **1 failure in 5 Linux runs** (30910475650 failed; 30910472179, 30910991085,
+30911348123, 30911348909 passed), with more samples being taken. A rate is a claim like any other and
+this one had no test behind it, which is the failure this file spent the week correcting elsewhere.
 
 The mistake has a name and this repository has been cataloguing it all week: **a fix was verified
 against the symptom's frequency rather than against the symptom.** An intermittent failure getting
