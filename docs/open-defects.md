@@ -8,12 +8,28 @@ a defect nobody recorded is orphaned evidence — the meta-test forbids both.
 Evidence is *committed and excluded*, not deleted:
 
 ```sh
-./gateway/.venv/bin/python3 -m pytest gateway/tests -q                 # 209 passed
-./gateway/.venv/bin/python3 -m pytest gateway/tests -q -m open_defect  # 209 deselected — empty, all four closed
-cargo test --manifest-path kernel/Cargo.toml                           # 356 passed, 1 ignored
+./gateway/.venv/bin/python3 -m pytest gateway/tests -q                 # the default run
+./gateway/.venv/bin/python3 -m pytest gateway/tests -q -m open_defect  # the quarantine, and only it
+cargo test --manifest-path kernel/Cargo.toml -- --test-threads=1       # the kernel
 ```
 
-**The quarantine is empty.** All four defects are closed, and each one's evidence moved into
+*(The pass counts that used to stand in those comments were four days stale by 2026-08-04. A number
+in a document is a claim with no test behind it — `docs/CONTRIBUTING.md` says why, at length.)*
+
+## The three statuses, and the one added on 2026-08-04
+
+- **`open`** — the mechanism is known well enough to reproduce, and a quarantined test does. This is
+  the only status the meta-test demands evidence for.
+- **`observed`** — *added 2026-08-04 for DEF-7.* Something real happened and is on record, and the
+  mechanism is **not yet established**, so no honest reproduction can be written. A row here MUST
+  cite where the observation lives (a CI run id, a log) so a reader can go and look. It is a
+  deliberately uncomfortable status: it exists so that "we saw it once and could not pin it" has
+  somewhere to be written down, instead of being rounded to "flake" and forgotten — which is what
+  nearly happened to DEF-6, and DEF-6 was real.
+- **`closed`** / **`not a defect`** — the reproduction has moved into the default suite, or there
+  was nothing to reproduce.
+
+**The quarantine is empty.** All four of the original defects are closed, and each one's evidence moved into
 the default suite as it went: DEF-1 to `gateway/tests/test_def1_replay_idempotence.py`, DEF-2 to
 `gateway/tests/test_def2_mandate_swap.py` and `kernel/stozher-kernel/tests/def2_mandate_swap.rs`,
 DEF-4 to `gateway/tests/test_policy_bundle.py`. DEF-4's deliberate *pass* went with them and is
@@ -30,6 +46,58 @@ directions, so the next open defect has somewhere to go and cannot be recorded w
 | DEF-4 | closed | **spec hole** (tooling/documentation), closed in the implementation | high for adoption, none for security | There was no way to obtain a verified policy without a live kernel, so a cold CI container could not open a session at all. `policy export-bundle` is the way in; the offline profile itself always worked. |
 | DEF-5 | not a defect | — | — | Proposed: ambient-state authorization on the `Governor` path. Investigated and **not found**; four independent bindings recompute authority per call. |
 | DEF-6 | closed | implementation defect, introduced by DEF-2's fix | high (availability) | One `503 x-store-unavailable` — the kernel's own *"could not answer; retry"* — wedged the emitter's stream permanently. Found by an intermittent `blocked` where `parked` was expected; reproduced deterministically. |
+| DEF-7 | observed | not yet established | high if real (availability); **no confidence loss** — the kernel refused correctly | On Linux CI, `test_the_gate` saw the gateway's own effect refused `gate-authorization-replayed` at `seq` 7 and the stream wedge. Evidence: GitHub Actions run **30905170959**, job 91978477109. Failed 1 of 2 runs; the re-run passed all four jobs. Never seen on the author's macOS in eight days. |
+
+## DEF-7 — an approval spent twice, seen once, mechanism not established
+
+**Status `observed`, and that status was added for this row.** The register had `open`, `closed` and
+`not a defect`, and `open` obliges a quarantined reproduction. There is no honest reproduction to
+write yet, and writing one for a mechanism I have guessed at would be manufacturing evidence for a
+story. Rounding it to "flake" is the other wrong answer: DEF-6 arrived through exactly this door — an
+intermittent failure that looked like noise and was a real defect once someone made it deterministic.
+
+**What was observed.** The first run of `.github/workflows/gates.yml`, on Linux, 2026-08-04:
+
+```
+test_the_gate — assert rejections["count"] == 0   ("Nothing the gateway emitted was refused")
+  1 rejection: kind=effect  seq=7  stream=gw:test-mbp:claude-code
+  gate-authorization-replayed: request eb6f20a4a35c34e780cf31b7a6a1fe70b24d0a4395018a04bec6d4b8f46226ef
+                               was already used
+  → the stream wedges; a following read is served under the §05 §7.1 grace window
+221 passed, 1 failed
+```
+
+GitHub Actions run **30905170959**, job 91978477109. The re-run of the same job passed, and all four
+jobs are green at the same commit. One failure in two runs; never once on macOS in eight days of
+running this suite many times a day.
+
+**What is established, and what is not.**
+
+*Established:* the kernel behaved correctly. A single-use approval was presented twice and the second
+presentation was refused, which is `spec/06 §5`'s guarantee doing its job. No authority leaked; the
+worst outcome was availability — the emitter wedged its own stream, and §05 §7.1's grace then served
+a `read` while flagging it, which is also correct.
+
+*Not established:* why the gateway presented it twice. There is a guard in `enforce.py` at the seed
+path, and its own comment names this exact failure — *"emitting the seed envelope twice would spend
+the approver's single-use signature on the second copy and the kernel would refuse it
+`gate-authorization-replayed` — correctly, which is why the guard is here rather than a hope that it
+never happens."* The guard is `catalog_entry(...) is None` followed by the emit: check-then-act. That
+it is check-then-act is a fact; **that this is what fired is a hypothesis and is recorded as one.**
+
+**Why it is filed at `high if real`.** It is DEF-6's family: the kernel refuses correctly and the
+*component* wedges itself as a consequence. That shape has already produced one high-severity
+availability defect in this repository, and the grace window that softens it is a bounded hole
+(§05 §7.1) rather than a fix.
+
+**What would move it out of `observed`.** Determine whether the seed path can run twice for one
+decision without a race — if the catalog write and the decision's consumption are not one
+transaction, the state is constructible directly and needs no concurrency at all, which would make
+this `open` with a deterministic reproduction in an afternoon. If it does need a race, the next step
+is running the e2e file in a loop on Linux to get a second observation before theorising further.
+
+**Not fixed here, and deliberately.** The mechanism is unproven; a fix aimed at a guess would be
+untestable by construction and would close the row without closing the defect.
 
 ## DEF-6 — a kernel that could not answer was recorded as one that said no
 

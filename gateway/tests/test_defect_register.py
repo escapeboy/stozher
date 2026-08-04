@@ -23,6 +23,13 @@ REGISTER = REPO / "docs" / "open-defects.md"
 #: evidence: a closed defect's test is unquarantined and green, and a defect that turned out not to
 #: exist has nothing to reproduce.
 NEEDS_EVIDENCE = {"open"}
+#: `observed` (added 2026-08-04 for DEF-7) is the status for something real that happened and whose
+#: mechanism is not yet established, so no honest reproduction exists to quarantine. It would be a
+#: loophole in the rule above — a way to record a defect while owing nothing — except that it owes
+#: something else, and `test_an_observed_defect_says_where_the_observation_lives` collects it: a row
+#: at this status MUST cite where a reader can go and look. "We saw it and could not pin it" is a
+#: legitimate state; "we saw it" with no pointer is the claim the register exists to forbid.
+NEEDS_A_POINTER = {"observed"}
 
 _ROW = re.compile(r"^\|\s*(DEF-\d+)\s*\|\s*([a-z ]+?)\s*\|", re.MULTILINE)
 #: Both spellings, because the two languages cannot use the same one: a Python identifier may not
@@ -113,3 +120,28 @@ def test_a_defect_that_is_not_open_carries_no_quarantined_test() -> None:
         "A fixed defect's test belongs in the default suite; a defect that does not exist has "
         "nothing to reproduce."
     )
+
+
+def test_an_observed_defect_says_where_the_observation_lives() -> None:
+    """`observed` owes a pointer, since it does not owe a reproduction.
+
+    The status exists so that "something real happened and I could not pin it" has somewhere to be
+    written down rather than being rounded to "flake" — which is what nearly happened to DEF-6, and
+    DEF-6 was a real high-severity defect. But a status that obliges nothing is a way to record a
+    defect for free, and a register that accepts free rows stops being evidence. So this one obliges
+    the other half: a reader must be able to go and look at what was seen.
+    """
+    text = REGISTER.read_text(encoding="utf-8")
+    register = _registered()
+    observed = [defect for defect, status in register.items() if status in NEEDS_A_POINTER]
+
+    for defect in observed:
+        # The row itself, not the whole file: a pointer three sections away is not a pointer the
+        # reader of the table has.
+        row = next(
+            line for line in text.splitlines() if line.startswith(f"| {defect} ")
+        )
+        assert re.search(r"\b\d{6,}\b", row), (
+            f"{defect} is recorded as `observed` and its row cites no run identifier or log. "
+            "An observation nobody else can go and look at is the claim this register forbids."
+        )
