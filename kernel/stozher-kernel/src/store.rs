@@ -56,6 +56,11 @@ fn is_unique_violation(e: &sqlx::Error) -> bool {
     matches!(e, sqlx::Error::Database(err) if err.is_unique_violation())
 }
 
+/// `SQLITE_BUSY` (code 5) — the lock was held, not the statement refused.
+fn is_busy(e: &sqlx::Error) -> bool {
+    matches!(e, sqlx::Error::Database(err) if err.code().as_deref() == Some("5"))
+}
+
 /// A stored envelope, with the ingest-time facts that are not inside the signed object.
 #[derive(Debug, Clone)]
 pub struct StoredEnvelope {
@@ -357,15 +362,43 @@ impl Store {
         rejection_stream: &str,
         migrations: &[crate::migrate::Migration],
     ) -> Result<Self> {
-        let pool = SqlitePoolOptions::new()
-            .max_connections(8)
-            // An in-memory database lives only as long as a connection to it does.
-            .min_connections(1)
-            .idle_timeout(None)
-            .max_lifetime(None)
-            .connect_with(options)
-            .await
-            .map_err(db)?;
+        // `busy_timeout` is a **per-connection pragma**, so it is not yet in force while a
+        // connection is being set up — and `journal_mode = WAL` on a database that is not already
+        // in WAL takes a brief exclusive lock. A pool that opens two connections at once to a file
+        // nobody has opened before therefore has one of them fail `SQLITE_BUSY` outright, with no
+        // busy handler to wait on. It needs a *fresh* file (WAL is already set on every later open)
+        // and a machine slow enough for the two opens to overlap, which is why this appeared only
+        // on two-core CI runners and never once on the author's: DEF-8, seen five times across the
+        // `s1`/`s2`/`s4`/`s6` load tests as `x-store-unavailable: database is locked` from
+        // `Store::open` on a brand-new scratch path.
+        //
+        // Retried rather than serialised: the losing connection wants the lock for a few
+        // microseconds, and forcing every open through a single connection would slow every start
+        // to fix a collision that only happens on the first one. This is also not test-only — the
+        // failing call is `Store::open`, so under the same contention a kernel would refuse to boot.
+        let mut attempt: u64 = 0;
+        let pool = loop {
+            let result = SqlitePoolOptions::new()
+                .max_connections(8)
+                // An in-memory database lives only as long as a connection to it does.
+                .min_connections(1)
+                .idle_timeout(None)
+                .max_lifetime(None)
+                .connect_with(options.clone())
+                .await;
+            match result {
+                Ok(pool) => break pool,
+                Err(e) if is_busy(&e) && attempt < 8 => {
+                    attempt += 1;
+                    tracing::warn!(
+                        attempt,
+                        "the database was locked while opening it; retrying (DEF-8)"
+                    );
+                    tokio::time::sleep(std::time::Duration::from_millis(50 * attempt)).await;
+                }
+                Err(e) => return Err(db(e)),
+            }
+        };
         // Read before migrating, so a re-verification that refuses can put the stamp back.
         let before = crate::migrate::version(&pool).await?;
         let applied = crate::migrate::run(&pool, migrations).await?;
