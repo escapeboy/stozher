@@ -3750,6 +3750,179 @@ def gen_gate_arguments() -> None:
     )
 
 
+def gen_gate_admission() -> None:
+    """spec 06 section 4.4 rule 9 and spec 09 section 7 — the order a submission is refused in, and
+    which refusal earns a durable record.
+
+    Two facts this file exists to pin, both of which an implementation gets wrong by being
+    reasonable:
+
+    **A size refusal is not a lie.** `gate-arguments-too-large` says a component was correct and
+    verbose; `gate-arguments-hash-mismatch` says it submitted values its own signed commitment does
+    not cover. Only the second is a finding about the component, so only the second is recorded. An
+    implementation that records "every §4.4 refusal" fills the audit chain with the wrong events.
+
+    **The bound is counted over the records, not over the queue.** The obvious reading of "bounded by
+    the §09 §7 rate limit" is to count the subject's parked requests — and that number is provably
+    zero for a component that only ever lies, because a refused submission parks nothing. Counting
+    parked rows would leave the record path unbounded by exactly the caller it needs bounding
+    against. `parked-rows-at-the-cap-do-not-suppress-the-record` and
+    `a-mismatch-at-the-cap-is-rate-limited-and-not-recorded` are the two halves of that, and an
+    implementation that wired the wrong counter passes neither.
+    """
+    per_subject = 30
+    window_seconds = 300
+
+    def case(
+        name: str,
+        description: str,
+        outcome: str,
+        status: int,
+        record: bool,
+        *,
+        arguments_check: str | None = None,
+        already_queued: bool = False,
+        parked_in_window: int = 0,
+        mismatches_in_window: int = 0,
+    ) -> dict:
+        return {
+            "name": name,
+            "description": description,
+            "input": {
+                "arguments-check": arguments_check,
+                "already-queued": already_queued,
+                "parked-in-window": parked_in_window,
+                "mismatches-in-window": mismatches_in_window,
+                "rate-limit": {
+                    "per-subject": per_subject,
+                    "window-seconds": window_seconds,
+                },
+            },
+            "expected": {"outcome": outcome, "status": status, "record": record},
+        }
+
+    vectors = [
+        case(
+            "no-arguments-queues",
+            "a component that never held the preimage omits the member and parks normally",
+            "queued",
+            201,
+            False,
+        ),
+        case(
+            "matching-arguments-queue",
+            "the ordinary path: the values are what the request commits to",
+            "queued",
+            201,
+            False,
+            arguments_check="accept",
+        ),
+        case(
+            "a-retry-of-a-queued-request-is-idempotent",
+            "a component retrying after a lost response is behaving correctly and is not counted "
+            "twice for it, even with the queue at its cap",
+            "already-queued",
+            200,
+            False,
+            arguments_check="accept",
+            already_queued=True,
+            parked_in_window=per_subject,
+        ),
+        case(
+            "a-mismatch-is-recorded",
+            "the finding ADR-0011 section 2 asked for: a component submitted values its own "
+            "args-hash does not cover, and the organization gets to see it",
+            "gate-arguments-hash-mismatch",
+            422,
+            True,
+            arguments_check="gate-arguments-hash-mismatch",
+        ),
+        case(
+            "a-mismatch-on-an-already-queued-request-is-still-recorded",
+            "idempotency is about the request, never about the lie: the retry skip must not launder "
+            "a mismatch into silence",
+            "gate-arguments-hash-mismatch",
+            422,
+            True,
+            arguments_check="gate-arguments-hash-mismatch",
+            already_queued=True,
+        ),
+        case(
+            "a-mismatch-one-below-the-cap-is-recorded",
+            "the paired positive for the case below: one short of the cap still records",
+            "gate-arguments-hash-mismatch",
+            422,
+            True,
+            arguments_check="gate-arguments-hash-mismatch",
+            mismatches_in_window=per_subject - 1,
+        ),
+        case(
+            "a-mismatch-at-the-cap-is-rate-limited-and-not-recorded",
+            "the bound: a component cannot write to the audit chain faster than section 09 rule 7 "
+            "lets it park, and the refusal it receives says which limit it met",
+            "gate-rate-limited",
+            429,
+            False,
+            arguments_check="gate-arguments-hash-mismatch",
+            mismatches_in_window=per_subject,
+        ),
+        case(
+            "parked-rows-at-the-cap-do-not-suppress-the-record",
+            "which counter bounds the record: a subject at the queue cap that has recorded no "
+            "mismatch still earns one, so an implementation counting parked rows fails here",
+            "gate-arguments-hash-mismatch",
+            422,
+            True,
+            arguments_check="gate-arguments-hash-mismatch",
+            parked_in_window=per_subject,
+        ),
+        case(
+            "too-large-is-refused-and-not-recorded",
+            "a size refusal is a bound, not a finding: the component was honest and verbose, and "
+            "rule 3 already tells it to park without the values",
+            "gate-arguments-too-large",
+            422,
+            False,
+            arguments_check="gate-arguments-too-large",
+        ),
+        case(
+            "too-large-is-not-bounded-by-the-mismatch-count",
+            "the bound applies to the recorded condition only: an over-sized submission is refused "
+            "on its own terms even from a subject at the mismatch cap",
+            "gate-arguments-too-large",
+            422,
+            False,
+            arguments_check="gate-arguments-too-large",
+            mismatches_in_window=per_subject,
+        ),
+        case(
+            "the-queue-cap-still-refuses-a-fresh-honest-request",
+            "unchanged by any of the above, and asserted so a change to the record path cannot move "
+            "it unnoticed",
+            "gate-rate-limited",
+            429,
+            False,
+            arguments_check="accept",
+            parked_in_window=per_subject,
+        ),
+    ]
+    emit(
+        "gate-admission.json",
+        "gate-admission",
+        "spec 06 section 4.4 rule 9 and spec 09 section 7 — the order in which a gate submission is "
+        "refused, and which refusal earns a durable record. Run the admission predicate over "
+        "`input`; `expected.outcome` is `queued`, `already-queued`, or the reason code the refusal "
+        "carries, `expected.status` is the HTTP status, and `expected.record` is whether the kernel "
+        "MUST write a section 04 rule 7.1 rejection-stream record for it. `arguments-check` is the "
+        "section 4.4 rule 3/4 result over the submitted values (`null` when the member was omitted); "
+        "`mismatches-in-window` counts the subject's OWN recorded argument mismatches in the window, "
+        "which is not `parked-in-window` and is zero for a component that only ever lies.",
+        vectors,
+        {"role-note": "the admission order is the kernel's part; an emitter never runs it"},
+        role="kernel",
+    )
+
+
 def gen_gate_resubmission() -> None:
     """spec 06 section 4.2 — a call asked a second time before anybody has answered the first.
 
@@ -4676,6 +4849,7 @@ def main() -> int:
     gen_trigger()
     gen_manifest()
     gen_gate_arguments()
+    gen_gate_admission()
     gen_gate_resubmission()
     gen_root_change()
     gen_sync_outcome()

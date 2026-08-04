@@ -148,6 +148,13 @@
       "description": "spec 06 section 4.4 rules 3 and 4 — argument values submitted beside a parked request. Canonicalize `arguments`; if the canonical form exceeds 16384 BYTES the result is `gate-arguments-too-large`; otherwise if its SHA-256 differs from `args-hash` the result is `gate-arguments-hash-mismatch`; otherwise `accept`. `canonical-bytes` is the length that decides the first test, and is given so a harness measuring characters fails visibly."
     },
     {
+      "path": "gate-admission.json",
+      "kind": "gate-admission",
+      "role": "kernel",
+      "count": 11,
+      "description": "spec 06 section 4.4 rule 9 and spec 09 section 7 — the order in which a gate submission is refused, and which refusal earns a durable record. Run the admission predicate over `input`; `expected.outcome` is `queued`, `already-queued`, or the reason code the refusal carries, `expected.status` is the HTTP status, and `expected.record` is whether the kernel MUST write a section 04 rule 7.1 rejection-stream record for it. `arguments-check` is the section 4.4 rule 3/4 result over the submitted values (`null` when the member was omitted); `mismatches-in-window` counts the subject's OWN recorded argument mismatches in the window, which is not `parked-in-window` and is zero for a component that only ever lies."
+    },
+    {
       "path": "gate-resubmission.json",
       "kind": "gate-resubmission",
       "role": "primitive",

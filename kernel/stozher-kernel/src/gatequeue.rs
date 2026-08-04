@@ -75,6 +75,13 @@ const SUBMISSION_MEMBERS: [&str; 2] = ["request", "arguments"];
 /// is already bounded by the per-subject cap of §09 §7.
 pub const ARGUMENTS_MAX_BYTES: usize = 16_384;
 
+/// §06 §4.4 rule 4's refusal — the one §4.4 refusal that earns a durable record (rule 9).
+///
+/// A constant rather than a literal because it is now compared in three places as well as produced
+/// in one, and a code that is only ever written out by hand is a rename waiting to reach some of
+/// its sites.
+pub const ARGUMENTS_HASH_MISMATCH: &str = "gate-arguments-hash-mismatch";
+
 /// Split a `POST /v1/gate/requests` body into the action request and the argument values.
 ///
 /// §06 §4.4 rule 1 admits two spellings and they mean the same thing: a submission object, and a
@@ -150,7 +157,7 @@ pub fn check_arguments(arguments: &Value, args_hash: &str) -> Result<String> {
     let hash = stozher_core::crypto::sha256_hex(canonical.as_bytes());
     if hash != args_hash {
         return Err(Error::new(
-            "gate-arguments-hash-mismatch",
+            ARGUMENTS_HASH_MISMATCH,
             format!("the arguments hash to {hash}, and the request commits to {args_hash}"),
         ));
     }

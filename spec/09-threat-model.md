@@ -165,7 +165,9 @@ is not immunity, and §07 says so in the same words.
   wrong thing to put there anyway, because it authorizes nothing and changes nobody's rights. It is
   a resource bound on kernel-side state that no component pulls or evaluates. Refusing a *request* is not refusing an *action*: the call is still gated and still
   blocked, and what the flooding subject loses is the ability to keep growing the queue a human has
-  to read.
+  to read. **The same cap bounds the argument-mismatch record** (§06 §4.4 rule 9), over its own
+  counter: the queue and the rejection stream are two things a subject can make grow, and a
+  component that only ever submits mismatches grows the second while leaving the first at zero.
 - A malicious approver acting within scope is not an attack the audit prevents — it is an attack the
   audit *records*, with a name, a timestamp, and a signature over the exact action. That is the
   designed outcome, and it is also why `single-use` and short `not-after` matter: the blast radius of

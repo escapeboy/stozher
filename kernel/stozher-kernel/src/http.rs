@@ -427,8 +427,14 @@ async fn post_gate_request(
             return refusal(StatusCode::UNPROCESSABLE_ENTITY, e.code(), e.detail(), None);
         }
     };
+    let store = kernel.ingest.store();
+    let limit = kernel.config.gate_rate_limit;
+    let since = match crate::clock::shift(&now, -limit.window_seconds) {
+        Ok(since) => since,
+        Err(e) => return unavailable(&e),
+    };
     // §06 §4.4 rule 4. The values are checked against the digest the approver's signature will
-    // cover *before* anything is recorded, so the queue never holds a list that would show a human
+    // cover *before* anything is queued, so the queue never holds a list that would show a human
     // one call while the effect executes another.
     let arguments = match arguments
         .as_ref()
@@ -436,25 +442,94 @@ async fn post_gate_request(
         .transpose()
     {
         Ok(arguments) => arguments,
-        Err(e) => {
-            // Said out loud, because ADR-0011 §2 asked for the *surfacing* half and §06 §4.4 rule 4
-            // kept only the predicate. Admission-time checking is the stronger half and it shipped;
-            // what went with it was the sentence "itself a finding worth surfacing, not an error to
-            // swallow". A component that submits values which are not what its own `args-hash`
-            // commits to is either broken or lying, and until this line the only party told was the
-            // component itself — a bare 422, no queue row, no rejection record, not even a log.
+        Err(e) if e.code() == crate::gatequeue::ARGUMENTS_HASH_MISMATCH => {
+            // §06 §4.4 rule 9 — the *surfacing* half of ADR-0011 §2, which was dropped when §4.4
+            // relocated the predicate. The check is the stronger half and it shipped; the sentence
+            // that went with it was "itself a finding worth surfacing, not an error to swallow".
+            // A component submitting values its own `args-hash` does not cover is broken or lying,
+            // and for a while the only party told was the component itself.
             //
-            // A rejection record would be the stronger answer and is not available here: §04 §7's
-            // records are about *envelopes*, and a gate submission is not one. That gap is recorded
-            // in `docs/spec-debt.md` rather than papered over with a record of the wrong kind.
+            // §04 §7.1 is where this belongs and always was: the rejection stream is the kernel's
+            // stream of durable records that are *not* envelopes — "an ingest rejection is the
+            // first such record; it is not the only one" — and the clock declaration is already a
+            // second. The comment that used to stand here said a record was unavailable because
+            // §04 §7's records are about envelopes. That was wrong about the section it cited.
+            //
+            // Bounded, because an unbounded write to a hash-chained store from anything a caller
+            // can send at will is a denial-of-service surface with an audit trail attached. The
+            // bound is §09 §7's cap over this path's *own* counter: `gate_requests_since` is the
+            // obvious choice and does not bind at all here, since a refused submission parks
+            // nothing and a component that only ever lies stays at zero parked forever.
+            let recorded = match store.argument_mismatches_since(&submitted_by, &since).await {
+                Ok(recorded) => recorded,
+                Err(e) => return unavailable(&e),
+            };
+            if recorded >= limit.per_subject {
+                tracing::warn!(
+                    subject = %submitted_by,
+                    recorded,
+                    window_seconds = limit.window_seconds,
+                    "argument mismatches refused: the per-subject rate limit was reached, and this \
+                     one is not recorded"
+                );
+                return refusal(
+                    StatusCode::TOO_MANY_REQUESTS,
+                    crate::codes::GATE_RATE_LIMITED,
+                    &format!(
+                        "{submitted_by} has had {recorded} submissions refused for arguments that \
+                         do not match their own request in the last {} seconds, at or above the \
+                         configured cap of {}. Further mismatches are refused without a record.",
+                        limit.window_seconds, limit.per_subject
+                    ),
+                    None,
+                );
+            }
+            let detail = match stozher_core::jcs::canonicalize(&serde_json::json!({
+                "action": queued.action,
+                "reason": e.detail(),
+                "request-hash": queued.request_hash,
+                "subject": queued.subject,
+            })) {
+                Ok(detail) => detail,
+                Err(e) => return unavailable(&e),
+            };
+            if let Err(e) = store
+                .record_rejection(
+                    kernel.ingest.kernel_key(),
+                    &crate::store::RejectionInput {
+                        reason: crate::gatequeue::ARGUMENTS_HASH_MISMATCH.to_owned(),
+                        object_hash: stozher_core::crypto::sha256_hex(detail.as_bytes()),
+                        detail,
+                        submitted_by: Some(submitted_by.clone()),
+                        received_at: now.clone(),
+                        // A gate submission claims no stream, no position and no kind. It is not an
+                        // envelope, which is exactly why it is recorded here and not appended.
+                        claimed_stream: None,
+                        claimed_seq: None,
+                        claimed_kind: None,
+                    },
+                )
+                .await
+            {
+                // The record is a MUST, so a store that cannot take it means the kernel could not
+                // complete the admission — not that it decided against the submission. Saying `422`
+                // here would be DEF-6's mistake again: reporting an unanswerable moment as a
+                // verdict about the bytes.
+                return unavailable(&e);
+            }
+            return refusal(StatusCode::UNPROCESSABLE_ENTITY, e.code(), e.detail(), None);
+        }
+        Err(e) => {
+            // Every other §4.4 refusal, which today is `gate-arguments-too-large` and a value with
+            // no canonical form. Rule 9 deliberately does not record these: an over-sized submission
+            // is a component being honest and verbose, rule 3 already tells it to park without the
+            // values, and a chain full of the refusals that do not matter hides the one that does.
             tracing::warn!(
                 subject = %submitted_by,
                 action = %queued.action,
                 request_hash = %queued.request_hash,
                 reason = %e.code(),
-                detail = %e.detail(),
-                "a component submitted arguments its own request does not commit to; the request \
-                 was refused and nothing was queued"
+                "a gate submission was refused on its arguments and nothing was queued"
             );
             return refusal(StatusCode::UNPROCESSABLE_ENTITY, e.code(), e.detail(), None);
         }
@@ -464,14 +539,8 @@ async fn post_gate_request(
     // not be counted twice for it. Refusing the *request* refuses nobody's action: the call it was
     // for is still gated and still blocked. What a flooding subject loses is the ability to keep
     // growing the queue a human has to read, which is the attack the section describes.
-    let store = kernel.ingest.store();
     let already_queued = match store.gate_request(&queued.request_hash).await {
         Ok(existing) => existing.is_some(),
-        Err(e) => return unavailable(&e),
-    };
-    let limit = kernel.config.gate_rate_limit;
-    let since = match crate::clock::shift(&now, -limit.window_seconds) {
-        Ok(since) => since,
         Err(e) => return unavailable(&e),
     };
     // This pre-check is the *message*, not the enforcement: it can name the count and point at the

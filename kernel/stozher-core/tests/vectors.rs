@@ -147,6 +147,10 @@ fn every_vector_validates_against_the_reference_implementation() {
                 // does not build, and a resume is read by `stozher_kernel::ingest`. Run by
                 // `stozher-kernel/tests/kernel_vectors.rs`, which asserts it ran every vector.
                 "stream-status" | "stream-recovery" => {}
+                // Admission order (§06 §4.4 rule 9) is a decision about a store's contents and a
+                // per-subject window, so it is asserted against the live route rather than a pure
+                // function: `stozher-kernel/tests/gate_admission_vectors.rs`.
+                "gate-admission" => {}
                 unknown => panic!(
                     "{path}: unsupported vector kind {unknown:?}. Vectors are never skipped: \
                      implement support or remove the file."

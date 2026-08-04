@@ -402,6 +402,28 @@ with the request.
    us" and "the call took no arguments" are different facts about what is being approved, exactly as
    §4.3 rule 6 separates a notification nobody attempted from one that failed.
 
+9. **A mismatch is a finding, and a durable one.** Rule 4's refusal is a statement about the
+   *component*, not about the request: one that submits values its own `args-hash` does not cover is
+   broken or lying, and the organization is entitled to see which of its components did it. A refusal
+   the submitter alone is told about is visible only to whoever is reading stderr at the time. The
+   kernel MUST therefore record it in the rejection stream (§04 §7.1), carrying the authenticated
+   caller, the request's `subject` and `action`, the `request-hash`, and the reason code. Two
+   boundaries, both deliberate:
+
+   - **Rule 4 only.** A rule 3 refusal (`gate-arguments-too-large`) MUST NOT earn a record. An
+     over-sized submission is a component being honest and verbose, and rule 3 already tells it what
+     to do instead — park without the values. Recording every §4.4 refusal would fill the chain with
+     the events that do not matter and make the one that does harder to find.
+   - **Bounded by §09 §7.** A caller that can write to the kernel's chain by submitting garbage is an
+     append-only store with a cheap write. The kernel MUST apply §09 §7's per-subject cap to this
+     path, counting **the subject's own recorded mismatches** in the window; at or above it the
+     submission MUST be refused `gate-rate-limited` and MUST NOT be recorded. The obvious counter is
+     the wrong one: a refused submission parks nothing, so a component that only ever lies has a
+     parked count of zero forever and would be bounded by nothing at all. The idempotency of §4.3
+     rule 1 MUST NOT exempt this path either — a retry of a *queued* request is a component behaving
+     correctly, but a retry carrying a mismatch is not the same event and MUST NOT be laundered into
+     silence by the request already being on the queue.
+
 ## 5. Approvers
 
 - `approvers` for a scope is determined by the matching `gate-rules` entry (§05 §1). Entries name

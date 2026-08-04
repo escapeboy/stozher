@@ -238,6 +238,11 @@ fn replay_vectors(report: &mut Report) -> BTreeSet<String> {
                 // `gatequeue::check_arguments` by `tests/kernel_vectors.rs`, and its route
                 // behaviour by `tests/gate_queue_and_console_decisions.rs`.
                 | "gate-arguments"
+                // The order the same route refuses in, and which refusal earns a §04 §7.1 record
+                // (§06 §4.4 rule 9). Nothing here reaches ingest either, and the decision depends on
+                // a store's contents and a per-subject window rather than on any single object, so
+                // it is run against the live route by `tests/gate_admission_vectors.rs`.
+                | "gate-admission"
                 // Action requests, not envelopes: there is nothing here to submit to ingest. The
                 // duty the file states is a component's (§06 §4.2), and the half this kernel owns —
                 // request identity and expiry — is run against the real `gatequeue::validate` by

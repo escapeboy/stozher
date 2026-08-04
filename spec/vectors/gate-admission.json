@@ -1,0 +1,217 @@
+{
+  "v": "stozher/0.1",
+  "kind": "gate-admission",
+  "description": "spec 06 section 4.4 rule 9 and spec 09 section 7 — the order in which a gate submission is refused, and which refusal earns a durable record. Run the admission predicate over `input`; `expected.outcome` is `queued`, `already-queued`, or the reason code the refusal carries, `expected.status` is the HTTP status, and `expected.record` is whether the kernel MUST write a section 04 rule 7.1 rejection-stream record for it. `arguments-check` is the section 4.4 rule 3/4 result over the submitted values (`null` when the member was omitted); `mismatches-in-window` counts the subject's OWN recorded argument mismatches in the window, which is not `parked-in-window` and is zero for a component that only ever lies.",
+  "role-note": "the admission order is the kernel's part; an emitter never runs it",
+  "vectors": [
+    {
+      "name": "no-arguments-queues",
+      "description": "a component that never held the preimage omits the member and parks normally",
+      "input": {
+        "arguments-check": null,
+        "already-queued": false,
+        "parked-in-window": 0,
+        "mismatches-in-window": 0,
+        "rate-limit": {
+          "per-subject": 30,
+          "window-seconds": 300
+        }
+      },
+      "expected": {
+        "outcome": "queued",
+        "status": 201,
+        "record": false
+      }
+    },
+    {
+      "name": "matching-arguments-queue",
+      "description": "the ordinary path: the values are what the request commits to",
+      "input": {
+        "arguments-check": "accept",
+        "already-queued": false,
+        "parked-in-window": 0,
+        "mismatches-in-window": 0,
+        "rate-limit": {
+          "per-subject": 30,
+          "window-seconds": 300
+        }
+      },
+      "expected": {
+        "outcome": "queued",
+        "status": 201,
+        "record": false
+      }
+    },
+    {
+      "name": "a-retry-of-a-queued-request-is-idempotent",
+      "description": "a component retrying after a lost response is behaving correctly and is not counted twice for it, even with the queue at its cap",
+      "input": {
+        "arguments-check": "accept",
+        "already-queued": true,
+        "parked-in-window": 30,
+        "mismatches-in-window": 0,
+        "rate-limit": {
+          "per-subject": 30,
+          "window-seconds": 300
+        }
+      },
+      "expected": {
+        "outcome": "already-queued",
+        "status": 200,
+        "record": false
+      }
+    },
+    {
+      "name": "a-mismatch-is-recorded",
+      "description": "the finding ADR-0011 section 2 asked for: a component submitted values its own args-hash does not cover, and the organization gets to see it",
+      "input": {
+        "arguments-check": "gate-arguments-hash-mismatch",
+        "already-queued": false,
+        "parked-in-window": 0,
+        "mismatches-in-window": 0,
+        "rate-limit": {
+          "per-subject": 30,
+          "window-seconds": 300
+        }
+      },
+      "expected": {
+        "outcome": "gate-arguments-hash-mismatch",
+        "status": 422,
+        "record": true
+      }
+    },
+    {
+      "name": "a-mismatch-on-an-already-queued-request-is-still-recorded",
+      "description": "idempotency is about the request, never about the lie: the retry skip must not launder a mismatch into silence",
+      "input": {
+        "arguments-check": "gate-arguments-hash-mismatch",
+        "already-queued": true,
+        "parked-in-window": 0,
+        "mismatches-in-window": 0,
+        "rate-limit": {
+          "per-subject": 30,
+          "window-seconds": 300
+        }
+      },
+      "expected": {
+        "outcome": "gate-arguments-hash-mismatch",
+        "status": 422,
+        "record": true
+      }
+    },
+    {
+      "name": "a-mismatch-one-below-the-cap-is-recorded",
+      "description": "the paired positive for the case below: one short of the cap still records",
+      "input": {
+        "arguments-check": "gate-arguments-hash-mismatch",
+        "already-queued": false,
+        "parked-in-window": 0,
+        "mismatches-in-window": 29,
+        "rate-limit": {
+          "per-subject": 30,
+          "window-seconds": 300
+        }
+      },
+      "expected": {
+        "outcome": "gate-arguments-hash-mismatch",
+        "status": 422,
+        "record": true
+      }
+    },
+    {
+      "name": "a-mismatch-at-the-cap-is-rate-limited-and-not-recorded",
+      "description": "the bound: a component cannot write to the audit chain faster than section 09 rule 7 lets it park, and the refusal it receives says which limit it met",
+      "input": {
+        "arguments-check": "gate-arguments-hash-mismatch",
+        "already-queued": false,
+        "parked-in-window": 0,
+        "mismatches-in-window": 30,
+        "rate-limit": {
+          "per-subject": 30,
+          "window-seconds": 300
+        }
+      },
+      "expected": {
+        "outcome": "gate-rate-limited",
+        "status": 429,
+        "record": false
+      }
+    },
+    {
+      "name": "parked-rows-at-the-cap-do-not-suppress-the-record",
+      "description": "which counter bounds the record: a subject at the queue cap that has recorded no mismatch still earns one, so an implementation counting parked rows fails here",
+      "input": {
+        "arguments-check": "gate-arguments-hash-mismatch",
+        "already-queued": false,
+        "parked-in-window": 30,
+        "mismatches-in-window": 0,
+        "rate-limit": {
+          "per-subject": 30,
+          "window-seconds": 300
+        }
+      },
+      "expected": {
+        "outcome": "gate-arguments-hash-mismatch",
+        "status": 422,
+        "record": true
+      }
+    },
+    {
+      "name": "too-large-is-refused-and-not-recorded",
+      "description": "a size refusal is a bound, not a finding: the component was honest and verbose, and rule 3 already tells it to park without the values",
+      "input": {
+        "arguments-check": "gate-arguments-too-large",
+        "already-queued": false,
+        "parked-in-window": 0,
+        "mismatches-in-window": 0,
+        "rate-limit": {
+          "per-subject": 30,
+          "window-seconds": 300
+        }
+      },
+      "expected": {
+        "outcome": "gate-arguments-too-large",
+        "status": 422,
+        "record": false
+      }
+    },
+    {
+      "name": "too-large-is-not-bounded-by-the-mismatch-count",
+      "description": "the bound applies to the recorded condition only: an over-sized submission is refused on its own terms even from a subject at the mismatch cap",
+      "input": {
+        "arguments-check": "gate-arguments-too-large",
+        "already-queued": false,
+        "parked-in-window": 0,
+        "mismatches-in-window": 30,
+        "rate-limit": {
+          "per-subject": 30,
+          "window-seconds": 300
+        }
+      },
+      "expected": {
+        "outcome": "gate-arguments-too-large",
+        "status": 422,
+        "record": false
+      }
+    },
+    {
+      "name": "the-queue-cap-still-refuses-a-fresh-honest-request",
+      "description": "unchanged by any of the above, and asserted so a change to the record path cannot move it unnoticed",
+      "input": {
+        "arguments-check": "accept",
+        "already-queued": false,
+        "parked-in-window": 30,
+        "mismatches-in-window": 0,
+        "rate-limit": {
+          "per-subject": 30,
+          "window-seconds": 300
+        }
+      },
+      "expected": {
+        "outcome": "gate-rate-limited",
+        "status": 429,
+        "record": false
+      }
+    }
+  ]
+}
