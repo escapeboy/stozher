@@ -765,3 +765,27 @@ class GatewayStore:
                 "INSERT OR IGNORE INTO gate_seen (request_hash, used_at) VALUES (?, ?)",
                 (request_hash, at),
             )
+
+    def claim_gate_use(self, request_hash: str, at: str) -> bool:
+        """Take exclusive right to spend this decision. `True` only for the caller that won it.
+
+        The same statement as [`record_gate_use`], read for its outcome instead of run for its
+        effect: `gate_seen.request_hash` is a PRIMARY KEY, so `INSERT OR IGNORE` is a compare-and-set
+        that exactly one caller wins, and `rowcount` is which one. Atomic against other threads and
+        against **other processes** — a deployment runs one gateway per MCP client over one file.
+
+        This exists because DEF-7 was a check-then-act: a guard read from one table, the signature
+        spent by an append, and the fact that made the guard true written to a third table
+        afterwards. Every one of those is a moment where a second look sees an unspent decision.
+        Claiming first collapses the three into one statement that cannot be half-done.
+
+        A claim the caller then fails to spend is a decision lost, not a decision doubled, and that
+        is the direction to fail in: an unspent claim costs a re-approval, a doubled spend wedges
+        the emitter's stream (§05 §7.1).
+        """
+        with self._connect(immediate=True) as connection:
+            cursor = connection.execute(
+                "INSERT OR IGNORE INTO gate_seen (request_hash, used_at) VALUES (?, ?)",
+                (request_hash, at),
+            )
+            return bool(cursor.rowcount)
