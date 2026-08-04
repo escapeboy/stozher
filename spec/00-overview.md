@@ -17,6 +17,23 @@ Where this specification says an object is *rejected*, the rejecting implementat
 apply the effect the object describes, MUST NOT store the object as valid, and MUST record the
 rejection (§04 §7).
 
+**Where more than one condition applies to one object, the most specific code wins.** A code naming
+a particular member on a particular kind takes precedence over one naming a class of members, which
+takes precedence over a generic structural code; where two are equally specific, the earlier
+section's applies. An implementation MUST NOT report a generic code for a condition this
+specification names specifically.
+
+The case that already exists: a `cognition` envelope carrying `execution`, `evidence`,
+`classification`, `authorization` or `commitment-ref` is `cognition-envelope-has-effect-fields`
+(§02 §9.1), **not** `schema-unknown-member` (§02 §2.1), though both conditions hold — while a
+`cognition` envelope carrying any *other* member outside its row is `schema-unknown-member`, because
+nothing names it more precisely. `spec/vectors/envelope-shape.json` pins both halves.
+
+This rule is stated because roughly ninety codes are defined here and §00 §1 makes them part of the
+wire contract: two implementations that resolve a collision differently disagree where a caller can
+see it. It was written down on 2026-08-04, after an implementer working from this specification
+alone lost four vectors to a precedence that only the corpus knew (`docs/spec-debt.md` §1a, row B3).
+
 Error identifiers written as `snake-case-in-backticks` (for example `chain-prev-hash-mismatch`)
 are **normative machine-readable codes**. An implementation MUST use exactly these codes when
 reporting the corresponding condition. Test vectors (`spec/vectors/`) assert on them.

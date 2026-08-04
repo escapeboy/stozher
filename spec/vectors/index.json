@@ -88,7 +88,7 @@
       "path": "authorization.json",
       "kind": "authorization",
       "role": "primitive",
-      "count": 19,
+      "count": 23,
       "description": "Gate authorization verification (spec 06 section 2). Verify `envelope.authorization` given `requires-gate`, `approvers` and the set of already-seen request hashes. This is the file that makes 'approved is not a boolean' testable."
     },
     {

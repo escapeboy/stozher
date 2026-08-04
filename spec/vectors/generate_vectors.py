@@ -2299,6 +2299,55 @@ def gen_authorization() -> None:
             "an authorization that is present is always verified, even when policy did not require "
             "one: junk cannot ride along (here the classification no longer matches the approval)",
         ),
+        # §06 §2 step (0) — the shape of a timestamp, checked before steps (8) and (9) compare
+        # timestamps as strings. Both implementations did this and the algorithm did not mention it,
+        # so nothing here bound it: found by an implementer working from `spec/` alone (spec-debt
+        # row B2). `"z"` is the case that matters, because it sorts *above* every real timestamp —
+        # a verifier that skipped this check would read it as an approval that never expires.
+        case(
+            "decision-not-after-is-not-a-timestamp",
+            env({"request": REQUEST, "decision": decision(
+                REQUEST, KEYS["human:ivan"], not_after="z")}),
+            True,
+            {"valid": False, "error": "encoding-bad-timestamp"},
+            "an approval whose `not-after` is not a §01 §2.3 timestamp is refused on its shape, "
+            "before any comparison: `\"z\"` sorts above every real instant, so the string compare "
+            "of step (9) would read it as an approval that never expires",
+        ),
+        case(
+            "decided-at-is-not-a-timestamp",
+            env({"request": REQUEST, "decision": decision(
+                REQUEST, KEYS["human:ivan"], decided_at="2026-07-26 09:14:58Z")}),
+            True,
+            {"valid": False, "error": "encoding-bad-timestamp"},
+            "the same rule over `decided-at`, with a value that is a plausible instant and not the "
+            "fixed-width form §01 §2.3 requires — step (8) compares it as a string too",
+        ),
+        # §06 §1.2 — `single-use` is a boolean, and a value that is not one is read as `true`.
+        # The safe reading of a malformed value here is the restrictive one: it costs an approver a
+        # second signature and never costs the organization a second effect.
+        case(
+            "single-use-that-is-not-a-boolean-is-single-use",
+            env({"request": REQUEST, "decision": decision(
+                REQUEST, KEYS["human:ivan"], single_use="yes")}),
+            True,
+            {"valid": False, "error": "gate-authorization-replayed"},
+            "a non-boolean `single-use` is treated as `true`, so a request hash already seen is a "
+            "replay: the malformed value is a defect in the approver's tooling and the restrictive "
+            "reading is the one that cannot leak an effect",
+            seen=[object_hash(REQUEST)],
+        ),
+        case(
+            "single-use-that-is-absent-is-single-use",
+            env({"request": REQUEST, "decision": {
+                k: v for k, v in decision(REQUEST, KEYS["human:ivan"]).items()
+                if k != "single-use"}}),
+            True,
+            {"valid": False, "error": "gate-decision-sig-invalid"},
+            "removing `single-use` breaks the signature that covered it, which is the more "
+            "fundamental refusal and the one a verifier must reach first — the member cannot go "
+            "missing on a decision anybody signed",
+        ),
     ]
 
     emit(

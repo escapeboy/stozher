@@ -123,6 +123,14 @@ refuse the very record of a human saying no.
 ```
 verify_authorization(E, requires-gate, approvers, at = E.emitted-at):
 
+  ; (0) shape, before anything is compared
+  if E.authorization present:
+      require A.request  conforms to section 1.1's closed member set   ; schema-*
+      require A.decision conforms to section 1.2's closed member set   ; schema-*
+      require each of A.request.not-after, A.decision.decided-at,
+              A.decision.not-after and `at` is a section 01 2.3 timestamp
+          else REJECT encoding-bad-timestamp
+
   if requires-gate and E.authorization absent:
       REJECT gate-authorization-missing                     ; (1)
 
@@ -213,8 +221,14 @@ attempting it.
   approval; it cannot proceed on the strength of a remembered fact.
 - A retry of a *failed* application of an approved action MAY reuse the same `authorization` provided
   the previous attempt did not append an accepted envelope with that `request-hash` (that is exactly
-  what step (9) tests) and `decision.not-after` has not passed. Idempotency of the effect itself is
+  what step (11) tests) and `decision.not-after` has not passed. Idempotency of the effect itself is
   the emitting component's responsibility, declared in its manifest.
+- **A `single-use` that is not a JSON boolean MUST be read as `true`**, and so MUST an absent one on
+  a decision that somehow reaches a verifier without it. This is not a rejection: a malformed value
+  here is a defect in the approver's tooling, and the restrictive reading of a defect costs an
+  approver a second signature while the permissive one costs the organization a second effect. A
+  verifier MUST report `single-use: true` to its caller in that case, so the `request-hash` still
+  enters the seen-set that step (11) consults.
 - `single-use: false` is a standing permission for a repeated specific action and MUST be used only
   where policy allows it. Anything broader belongs in a standing **mandate** (§03), which has
   mandatory expiry and a scope a human can read — not in a long-lived approval.
