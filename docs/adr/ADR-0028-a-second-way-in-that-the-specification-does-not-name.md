@@ -151,24 +151,38 @@ that is a change to `Enforcer`, not to `governed`.
   contending for ninety-six chain positions, and asserts every effect was recorded and every stream
   is contiguous from 0 with each `prev-hash` naming its predecessor.
 
-  **What that is worth, stated precisely, because the obvious summary would overstate it.** The
-  observable property holds under real contention — that is more than existed before, and it is what
-  "treat concurrent use as unverified" was asking for. But four mutations were tried, each removing
-  one guard independently: the emitter's window lock, the emitter's chain lock, the store's thread
-  lock, and the `BEGIN IMMEDIATE` that makes the read-and-insert atomic. **The test passed under
-  every one of them.** Under CPython's GIL this workload does not interleave at the critical
-  section, so the test is a smoke test for concurrent use, not evidence that any particular guard is
-  load-bearing.
+  **The test discriminates**, and getting there took two corrections that mutation found and
+  reasoning did not.
 
-  Recording that rather than writing "thread-safety is bound" is the whole of ADR-0013 §2: a test
-  that cannot fail when the guard is removed protects nothing, and a residual closed on one is worse
-  than one left open, because the next reader stops looking.
+  *First draft, `read` workload:* passed with every guard removed. `read` folds into aggregates
+  (§02 §7), so ninety-six calls produced two envelopes and the chaining it claimed to exercise
+  barely ran. `benign` emits one envelope per call — that is the workload now.
 
-  **What would discriminate it:** a seam that forces a yield between the head read and the insert,
-  or a free-threaded build. Neither exists here today. An earlier draft of this test used a `read`
-  action and was weaker still — `read` folds into aggregates (§02 §7), so ninety-six calls produced
-  two envelopes and the chaining it claimed to exercise barely ran; the `benign` workload is that
-  correction.
+  *Second draft, stock GIL:* still passed with every guard removed one at a time. CPython switches
+  threads every 5ms and the read-head-then-insert section finishes far inside that, so a thread was
+  essentially never preempted where it counts. `sys.setswitchinterval(1e-6)` for the duration of the
+  test makes the contention real. Test-only; no seam was added to shipped code.
+
+  **What the mutations then showed, which is a better answer than "it is bound".** With forced
+  switching, removing any *one* of the three serialization guards — the emitter's chain lock, the
+  store's thread lock, the `BEGIN IMMEDIATE` — still passes, 5/5 each. Removing **all three** fails,
+  5/5. They are genuinely redundant for the in-process thread case rather than nominally so: each
+  one alone suffices, and `BEGIN IMMEDIATE` additionally covers the cross-process case the other two
+  cannot reach.
+
+  **And the failure mode is the one worth having.** With every lock gone the test fails on
+  `chain-write-failed` — *"the effect was applied but its record could not be chained locally"* — not
+  on a corrupted chain. `PRIMARY KEY (stream, seq)` is a fourth guard, and `store.py`'s own comment
+  at the append had already said so: *"one loses `PRIMARY KEY (stream, seq)` — a `chain-write-failed`
+  raised"*. A race here cannot produce a wrong audit trail; the worst it produces is a refused call
+  that says exactly what happened. That property was designed in and, until this test, unobserved.
+
+  **Correction to the previous revision of this bullet**, written 2026-08-04 and superseded the same
+  day: it said the test was "exercised, not discriminated" and that a seam or a free-threaded build
+  would be needed. The first half was true of the draft it described; the second was wrong. What was
+  needed was one line of test-local scheduling pressure, and the reason it looked like it needed a
+  seam is that I stopped mutating after four negative results instead of asking why they were all
+  negative.
 - **The scope string is the integrator's.** `server="billing"` is asserted, not authenticated. Policy
   is written against action names, so an adopter who names two different things `billing` gives them
   one policy. The proxied path derives the scope from configuration; this one does not.
