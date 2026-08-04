@@ -1,9 +1,10 @@
-"""DEF-7 — a catalog seed can be applied twice, spending one single-use approval on two envelopes.
+"""DEF-7 — a catalog seed applied twice would spend one single-use approval on two envelopes.
 
-**Quarantined evidence for an open defect.** CI saw this once on Linux as
+**Closed 2026-08-04; this is the regression test, unquarantined and green.** CI saw it once on Linux as
 `gate-authorization-replayed` at `seq` 7 (run 30905170959); this file is the deterministic
-reproduction that made it `open` rather than `observed`. It needs no concurrency at all, which is
-why it is worth having: the observation looked like a race and the mechanism is a missing fact.
+reproduction that made it `open` rather than `observed`, and then the test the fix had to pass. It
+needs no concurrency at all, which is why it was worth having: the observation looked like a race
+and the mechanism was a missing fact.
 
 # The mechanism, from the code rather than from the failure
 
@@ -44,8 +45,6 @@ from stozher_gateway.gate import ActionRequest, action_request
 from stozher_gateway.refusal import RefusalError
 
 from .test_enforcement import ROOT, Harness
-
-pytestmark = pytest.mark.open_defect
 
 
 def _seed_decision(request_hash: str) -> dict[str, Any]:
@@ -150,7 +149,8 @@ def test_def7_a_seed_whose_catalog_write_did_not_land_is_applied_again(
     assert len(both) == 1, (
         f"the seed was applied {len(both)} times over one single-use approval. The second envelope "
         "cites the same decision, which the kernel refuses `gate-authorization-replayed` and which "
-        "wedges this emitter's stream (§05 §7.1)."
+        "wedges this emitter's stream (§05 §7.1). `Store.claim_gate_use` is what stops it: the "
+        "decision is claimed in one atomic statement before the signature is spent."
     )
     # And the sharper statement of the same fact, kept so a fix that dedupes envelopes without
     # fixing the bookkeeping still fails here.

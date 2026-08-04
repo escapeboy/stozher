@@ -1111,8 +1111,23 @@ class Enforcer:
             # would refuse it `gate-authorization-replayed` — correctly, which is why the guard is
             # here rather than a hope that it never happens.
             self._seed_catalog(session, parked, policy, approvers)
+        # DEF-7, the *call's* own approval — the second site, and the one my first fix missed. The
+        # marker was written here before the effect is emitted, which looks like claim-before-spend
+        # and is not: `record_gate_use` is `INSERT OR IGNORE` run for its effect and never read, so
+        # two callers in this window both "succeed" and both go on to emit. Reading the outcome is
+        # the whole difference between writing a marker and holding a claim.
+        if not self._store.claim_gate_use(ok.request_hash, self._clock.now()):
+            self._store.consume(parked.request_hash, self._clock.now())
+            raise refusal(
+                "blocked",
+                "gate-authorization-replayed",
+                "this approval has already been spent by this component; ask for a new one",
+                action=classification.action,
+                classification=classification.classification,
+                classification_tier=classification.tier,
+                request_hash=parked.request_hash,
+            )
         self._store.consume(parked.request_hash, self._clock.now())
-        self._store.record_gate_use(ok.request_hash, self._clock.now())
         return authorization
 
     def _seed_catalog(
@@ -1141,15 +1156,31 @@ class Enforcer:
             "emitted-at": self._clock.now(),
             "authorization": parked.seed,
         }
+        seed_hash = str(parked.seed["decision"]["request-hash"])
         try:
-            verify_authorization(probe, True, approvers, set(), self._clock.now())
+            # `set()` here was the other half of DEF-7: the call path passes what this component has
+            # already spent, and the seed path passed nothing, so a seed this very process had
+            # spent verified as fresh. The kernel caught it and the emitter's stream paid for it.
+            verify_authorization(probe, True, approvers, self._seen_hashes(seed_hash), self._clock.now())
         except GateRefusedError as e:
             # The catalog entry must not come into force without its own signature. A seed that
             # does not verify is dropped; the tool stays unclassified and the next call parks again.
             logger.error("the catalog seed for %s was refused: %s", action, e.code)
             return False
-        payload_hash = object_hash(entry)
         now = self._clock.now()
+        # DEF-7. The guard at both call sites is `catalog_entry(...) is None`, and the fact that
+        # makes it false is written *after* the append that spends the approver's single-use
+        # signature. Between those two statements a second look — the next session opening, a second
+        # gateway process on the same file, a retry after a crash — sees an unclaimed seed and
+        # spends it again. Claiming is one atomic statement and closes all three routes at once,
+        # which is why it is here rather than a lock around the pair.
+        if not self._store.claim_gate_use(seed_hash, now):
+            logger.info(
+                "the catalog seed for %s was already claimed; not spending its approval twice",
+                action,
+            )
+            return False
+        payload_hash = object_hash(entry)
         body = {
             "v": "stozher/0.1",
             "kind": "effect",
