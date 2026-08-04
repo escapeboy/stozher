@@ -1,6 +1,30 @@
 # Security policy
 
-## Status: an external review is attested; no report is held here
+## Status: a review with a named scope now exists, and it found a critical defect
+
+**2026-08-04.** An external review was run with its scope written down, and its report is in this
+repository: [`docs/validation/security-review-2026-08-04.md`](docs/validation/security-review-2026-08-04.md).
+It is the first security statement here that a reader can check rather than take.
+
+It found **one critical, one high, one medium** and three informational. The critical was real,
+reproduced three ways, and is fixed (`kernel/stozher-kernel/tests/root_approval_floor.rs`): the
+root-approval floor could be bypassed entirely, with **no approval signature of any kind**, by an
+envelope reporting `execution.outcome` as something other than `applied` or `failed` — the gate was
+waived because nothing applied, and the projection was written anyway. In the `resume_stream` case
+it needed no root key at all. The reviewer's own summary is the line to quote:
+
+> A review covering `ingest.rs` and `store.rs` together would have had to find it — so whatever the
+> prior "no findings" attestation covered, it was not this.
+
+**Two findings are open**: the JCS number parser (the two implementations disagree on 5.3% of a
+random corpus, which is an `object-hash` collision surface) and a timestamp-confusable divergence
+between the gateway and the kernel. Read §"Findings" of the report before deploying.
+
+The review is an **agent's**, not a firm's, and it says what it did not look at — `console.rs`,
+`http.rs`, `deploy/`, most of the gateway, no dependency audit, no timing work. That named gap is
+worth more than the previous unnamed clean bill, and it is still a gap.
+
+## The prior attestation, kept because it is the thing this replaces
 
 **Do not deploy this to protect anything you cannot afford to have wrong.**
 

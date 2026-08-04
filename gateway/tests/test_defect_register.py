@@ -141,7 +141,15 @@ def test_an_observed_defect_says_where_the_observation_lives() -> None:
         row = next(
             line for line in text.splitlines() if line.startswith(f"| {defect} ")
         )
-        assert re.search(r"\b\d{6,}\b", row), (
-            f"{defect} is recorded as `observed` and its row cites no run identifier or log. "
-            "An observation nobody else can go and look at is the claim this register forbids."
+        # A run identifier, **or** a preserved report in the tree. The second was added on
+        # 2026-08-04, when an external review and four design-partner evaluations produced
+        # observations whose home is a document rather than a CI run. Requiring a six-digit number
+        # would have pushed those rows to a status that fits them worse — and the obligation this
+        # test exists to enforce is "a reader can go and look", which a committed report satisfies
+        # at least as well as a run id, and outlives it: GitHub expires logs.
+        pointer = re.search(r"\b\d{6,}\b", row) or re.search(r"(docs/)?validation/[\w./-]+", row)
+        assert pointer, (
+            f"{defect} is recorded as `observed` and its row cites no run identifier, log, or "
+            "preserved report. An observation nobody else can go and look at is the claim this "
+            "register forbids."
         )

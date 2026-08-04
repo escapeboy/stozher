@@ -63,9 +63,21 @@ def _sources() -> dict[str, str]:
     return bodies
 
 
+#: Reports written by someone outside this repository, preserved verbatim.
+#:
+#: Their citations are to *their* tree — a reviewer's scratch worktree, a partner's install — and
+#: resolving them here is neither possible nor the point. The alternative was to edit an external
+#: report so it would pass our lint, which would make it no longer the document they wrote. A
+#: preserved outside opinion is evidence; an edited one is a summary of it.
+EXTERNAL_REPORTS = ("docs/validation/security-review-", "docs/validation/design-partners/")
+
+
 def _citations() -> list[tuple[Path, str, str]]:
     found: list[tuple[Path, str, str]] = []
     for doc in sorted((REPO / "docs").rglob("*.md")):
+        relative = doc.relative_to(REPO).as_posix()
+        if any(relative.startswith(prefix) for prefix in EXTERNAL_REPORTS):
+            continue
         for filename, name in CITATION.findall(doc.read_text(encoding="utf-8")):
             found.append((doc.relative_to(REPO), Path(filename).name, name))
     return found
