@@ -1,6 +1,8 @@
 # DEF-4 — the policy bundle: normative text for the bootstrap that was built
 
-**Status:** proposal. Nothing under `spec/` was edited to produce this document.
+**Status:** applied 2026-08-04 as `spec/05 §7.3`. Kept rather than deleted: the argument in §4 for why
+this is not a privileged path around §05 §5 is the reasoning behind the applied clauses, and it does
+not fit in the specification.
 **Classification:** **SPEC HOLE** (tooling/documentation), closed in the implementation; the wire
 object it introduces has no normative description yet.
 **Evidence:** `gateway/tests/test_policy_bundle.py` (16, default suite),
@@ -84,8 +86,13 @@ Three separations, and each of them is load-bearing:
 
 ## 5. The proposed normative text
 
-Written as an addition to `spec/05-policy-distribution.md`, numbered as a new §7.1 so §7's existing
-clauses keep their numbers. **Not applied** — this file is the proposal.
+**Applied 2026-08-04 as `spec/05 §7.3`, not §7.1.** The number this proposal asked for was taken by
+the mandate-continuity change ("Refused is not offline") between this being written and being
+applied, and §7.2 by the component's side of recovery — a collision worth naming, because a proposal
+that names a section number is a proposal with a fact in it that can go stale. The clauses below are
+the applied text; two sentences were added at rules 3 and 7 giving the reason each is stricter than
+the neighbouring rule it could be mistaken for, and a closing paragraph states that the producing
+side is not normative.
 
 > ### 7.1 Bootstrap (the first policy on a component that has never pulled)
 >

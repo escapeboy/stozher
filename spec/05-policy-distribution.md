@@ -351,6 +351,51 @@ closed entirely when what the kernel refused was the authority itself.
    grace were recorded at the kernel. They were not, and a recovery that quietly relabels them
    converts a bounded gap in the audit into a false statement about it.
 
+### 7.3 Bootstrap — the first policy on a component that has never pulled
+
+§6 requires a component to cache the last policy it verified, and §7 governs what it may do from that
+cache. Neither says how a component that has never reached the kernel obtains a first one, and the
+answer was: it cannot. A container that has never pulled has an empty cache, so it cannot classify
+anything, so it cannot start — which made every agent's own test suite depend on a running kernel,
+and a gate that cannot be tested around is a gate that gets commented out.
+
+A component MAY therefore be configured with a **policy bundle**: a single signed object carrying the
+policy document, the revocation set, and a checkpoint anchor, from which it seeds the caches §6 and
+§7 govern. It is a bootstrap and not a second channel — everything §7 forbids from a cache it forbids
+from a bundle.
+
+1. A bundle MUST carry `v`, `kind: "policy-bundle"`, `bundle-version`, `exported-at`, `max-age`,
+   `policy`, `revocations` and `anchor`. A component MUST refuse a bundle missing any of them
+   (`bundle-missing-member`) and MUST refuse a `bundle-version` it does not implement
+   (`bundle-version-unsupported`). `anchor` MUST be present and MAY be `null`: *"nothing was
+   anchored"* and *"this producer did not say"* are different facts.
+2. A component MUST verify the bundle's signature and MUST refuse it unless the signer is one of the
+   human roots that component has enrolled (`bundle-sig-invalid`, `bundle-signer-not-a-root`). A
+   bundle that is refused MUST NOT be cached, in whole or in part.
+3. A component MUST verify `policy` against the organization's policy key **independently** of the
+   bundle's signature (`policy-sig-invalid`). The bundle's signer MUST NOT be accepted in place of
+   the policy key — otherwise a root could mint policy by wrapping it, and §5's separation between
+   who signs policy and who approves its publication would hold everywhere except here.
+4. `max-age` MUST be a member of the signed body, so the party holding the file cannot extend it. A
+   component MUST refuse **to start** when `exported-at + max-age` is earlier than its own clock
+   (`bundle-expired`). It MUST NOT warn and continue: a component enforcing a policy no enrolled root
+   still vouches for is the state this clause exists to prevent.
+5. A component MUST record the bundle's `exported-at` as the policy's verification time, not the
+   moment of the load. A bundle-seeded component has not contacted the kernel, so §6's staleness
+   bound and §7's `offline` profile MUST govern it from its first call rather than after a grace
+   period no kernel granted.
+6. A bundle MUST NOT permit anything §7 does not. In particular it MUST NOT make a class whose gate
+   rule requires a human signature succeed offline: an action that needs a signature cannot acquire
+   one from a document, and §7's `block` for `consequential` is unchanged by any bundle.
+7. Every revocation in a bundle MUST verify, and a component MUST refuse the whole bundle over one
+   that does not (`bundle-revocation-sig-invalid`). This is deliberately stricter than §03 §7's live
+   feed, where dropping an unverifiable entry can only cause a refusal to be missed: a bundle's
+   entries arrive inside a set a root signed **as a set**, so one that does not verify means the set
+   is not the one that was signed.
+
+The producing side is not normative here. Any party holding an enrolled root key and the documents
+can emit a conforming bundle; this specification constrains only what a component accepts.
+
 ## 8. Tier 3 — drift learning (deferred, constrained here)
 
 Deferred until ~1000 approval events (build plan). The constraint is normative now so the deferral

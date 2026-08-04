@@ -95,6 +95,15 @@ usage:
   stozher-kernel root-publish --url <base> --request <path> --key <path>
                           [--evidence <path>] [--stream <name>] [--token-env <VAR>] [--config <path>]
                           record the approved root-set change
+  stozher-kernel resume-request --stream <name> --resume-seq <n> --refused-object-hash <64 hex>
+                          --reason-code <code> --requester <human:name> --key <path>
+                          --mandate <64 hex> --in-force <version> --out <path>
+                          [--evidence-out <path>] [--minutes <n>] [--config <path>]
+                          build the request that lets a wedged stream continue (spec 04 section 7.2)
+  stozher-kernel resume-publish --url <base> --request <path> --key <path>
+                          [--evidence <path>] [--stream <name>] [--token-env <VAR>] [--config <path>]
+                          record the approved resume; it lets the stream continue and validates
+                          nothing it bridges
   stozher-kernel effect-request --action <kernel.x> --target <t> --requester <subject>
                           --key <path> --mandate <64 hex> --in-force <version> --out <path>
                           (--args-hash <64 hex> | --args-from <path>)
@@ -240,6 +249,8 @@ fn main() -> ExitCode {
         "policy-publish" => policy_publish(&arguments),
         "root-request" => root_request(&arguments),
         "root-publish" => root_publish(&arguments),
+        "resume-request" => resume_request(&arguments),
+        "resume-publish" => resume_publish(&arguments),
         "effect-request" => effect_request(&arguments),
         "effect-publish" => effect_publish(&arguments),
         "conformance" => conformance(&arguments),
@@ -1944,6 +1955,241 @@ fn root_publish(arguments: &[String]) -> ExitCode {
     } else {
         serde_json::Value::Null
     };
+    publish_effect(
+        arguments, url, &token, key_path, &request, &evidence, &payloads,
+    )
+}
+
+/// Build the request that asks a root to let a wedged stream continue (§04 §7.2).
+///
+/// This exists because `spec/04 §7.2` and `spec/05 §7.1` shipped without it, and an operation with
+/// no command has no user: `submit-mandate` was the same shape, and its absence froze root rotation
+/// and every recovery path for a release. A wedge is now loud and safe and, until this command, had
+/// no exit anybody could type — which is a stopped fleet, not a security posture.
+///
+/// Two steps rather than one, for the reason every other ceremony here is two: the request is built
+/// where the operator is, and the signature that authorizes it comes from a root who read it. What
+/// this command emits is a question, and `resume-publish` is what carries the answer.
+fn resume_request(arguments: &[String]) -> ExitCode {
+    let value = |name: &str| value(arguments, name);
+    let (
+        Some(stream),
+        Some(resume_seq),
+        Some(refused_object_hash),
+        Some(reason_code),
+        Some(requester),
+        Some(key_path),
+        Some(mandate),
+        Some(in_force),
+        Some(out),
+    ) = (
+        value("--stream"),
+        value("--resume-seq"),
+        value("--refused-object-hash"),
+        value("--reason-code"),
+        value("--requester"),
+        value("--key"),
+        value("--mandate"),
+        value("--in-force"),
+        value("--out"),
+    )
+    else {
+        eprintln!(
+            "resume-request requires --stream <name>, --resume-seq <n>, --refused-object-hash \
+             <64 hex>, --reason-code <code>, --requester <human:name>, --key <path>, --mandate \
+             <64 hex>, --in-force <version> and --out <path>.\n\nThe seq, the hash and the code \
+             are the three fields /console/streams already shows for a wedged stream, and \
+             `refused-object-hash` is the `object-hash` the rejection record carries — the bridge \
+             the kernel will accept one envelope against."
+        );
+        return ExitCode::FAILURE;
+    };
+    let Ok(resume_seq) = resume_seq.parse::<u64>() else {
+        eprintln!("--resume-seq must be a whole number: the position the stream stopped at");
+        return ExitCode::FAILURE;
+    };
+    if refused_object_hash.len() != 64
+        || !refused_object_hash.chars().all(|c| c.is_ascii_hexdigit())
+    {
+        eprintln!(
+            "--refused-object-hash must be 64 lowercase hex: it is the hash of the rejected bytes \
+             as received, copied from the rejection record"
+        );
+        return ExitCode::FAILURE;
+    }
+    // The closed member set of §04 §7.2. Built here rather than accepted as a file, because every
+    // member is something the operator must have read off the console, and a document assembled by
+    // hand is a document with a typo in the position being bridged.
+    let document = serde_json::json!({
+        "stream": stream,
+        "resume-seq": resume_seq,
+        "refused-object-hash": refused_object_hash,
+        "reason-code": reason_code
+    });
+    let args_hash = match stozher_core::jcs::object_hash(&document) {
+        Ok(hash) => hash,
+        Err(e) => {
+            eprintln!("hashing the resume document: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let key = match seed_key(arguments, key_path, keys::ROLE_HUMAN_ROOT) {
+        Ok(key) => key,
+        Err(e) => {
+            eprintln!("{e}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let now = match offline_clock(arguments) {
+        Ok(clock) => clock.now(),
+        Err(e) => {
+            eprintln!("{e}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let minutes = value("--minutes")
+        .and_then(|m| m.parse::<i64>().ok())
+        .unwrap_or(60);
+    let (Ok(not_after), Ok(nonce)) = (
+        stozher_kernel::clock::shift(&now, minutes * 60),
+        genesis::request_nonce(),
+    ) else {
+        eprintln!("could not stamp the request");
+        return ExitCode::FAILURE;
+    };
+    let request = serde_json::json!({
+        "v": stozher_core::VERSION,
+        "kind": "action-request",
+        "requested-at": now,
+        "subject": requester,
+        "key": key.id().as_str(),
+        "component": "kernel",
+        "mandate-ref": mandate,
+        "policy-version": in_force,
+        "classification": "consequential",
+        "action": "kernel.resume_stream",
+        // §04 §7.2 rule 2: the target names the same stream as the document, so a signature over
+        // this request cannot be replayed against a different stream's wedge.
+        "target": format!("stream:{stream}"),
+        "args-hash": args_hash,
+        "nonce": nonce,
+        "not-after": not_after
+    });
+    let (Ok(canonical), Ok(hash)) = (
+        stozher_core::jcs::canonicalize(&request),
+        stozher_core::jcs::object_hash(&request),
+    ) else {
+        eprintln!("canonicalizing the request");
+        return ExitCode::FAILURE;
+    };
+    if let Err(e) = std::fs::write(out, &canonical) {
+        eprintln!("writing {out}: {e}");
+        return ExitCode::FAILURE;
+    }
+    let evidence_path =
+        value("--evidence-out").map_or_else(|| format!("{out}.evidence"), str::to_owned);
+    match stozher_core::jcs::canonicalize(&document)
+        .map_err(|e| e.to_string())
+        .and_then(|text| std::fs::write(&evidence_path, text).map_err(|e| e.to_string()))
+    {
+        Ok(()) => eprintln!("wrote {evidence_path} — the resume document the approval binds"),
+        Err(e) => {
+            eprintln!("writing {evidence_path}: {e}");
+            return ExitCode::FAILURE;
+        }
+    }
+    println!("{hash}");
+    eprintln!(
+        "wrote {out} — park it, have a root approve {hash}, then resume-publish.\n\nApproving this \
+         says the stream may continue. It does not say the refused envelope was acceptable: §04 \
+         §7.2 rule 4 forbids one act from meaning both, and the refusal and its record survive."
+    );
+    ExitCode::SUCCESS
+}
+
+/// Submit the approved resume so the kernel will accept one envelope past the wedge (§04 §7.2).
+fn resume_publish(arguments: &[String]) -> ExitCode {
+    let value = |name: &str| value(arguments, name);
+    let (Some(url), Some(request_path), Some(key_path)) =
+        (value("--url"), value("--request"), value("--key"))
+    else {
+        eprintln!("resume-publish requires --url <base>, --request <path> and --key <path>");
+        return ExitCode::FAILURE;
+    };
+    let Some(token) = credential(arguments) else {
+        return ExitCode::FAILURE;
+    };
+    let request: serde_json::Value = match std::fs::read(request_path)
+        .map_err(|e| e.to_string())
+        .and_then(|bytes| serde_json::from_slice(&bytes).map_err(|e| e.to_string()))
+    {
+        Ok(request) => request,
+        Err(e) => {
+            eprintln!("reading {request_path}: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
+    if request["action"].as_str() != Some("kernel.resume_stream") {
+        eprintln!(
+            "{request_path} is a request to {}, not to resume a stream",
+            request["action"].as_str().unwrap_or("nothing this reads")
+        );
+        return ExitCode::FAILURE;
+    }
+    let args_hash = request["args-hash"].as_str().unwrap_or_default().to_owned();
+    // Re-read and re-hashed rather than trusted from the request. If they differ, the operator is
+    // about to bridge a position nobody approved — and the whole point of §04 §7.2 rule 2 is that
+    // the signature binds the exact position rather than "a resumption" in the abstract.
+    let path =
+        value("--evidence").map_or_else(|| format!("{request_path}.evidence"), str::to_owned);
+    let document: serde_json::Value = match std::fs::read(&path)
+        .map_err(|e| e.to_string())
+        .and_then(|bytes| serde_json::from_slice(&bytes).map_err(|e| e.to_string()))
+    {
+        Ok(document) => document,
+        Err(e) => {
+            eprintln!("reading {path}: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let payloads = match stozher_core::jcs::object_hash(&document) {
+        Ok(hash) if hash == args_hash => vec![serde_json::json!({
+            "payload-hash": hash,
+            "media-type": "application/json",
+            "payload": document
+        })],
+        Ok(hash) => {
+            eprintln!(
+                "{path} hashes to {hash}, the request commits to {args_hash}: this is not the \
+                 resume that was approved"
+            );
+            return ExitCode::FAILURE;
+        }
+        Err(e) => {
+            eprintln!("hashing {path}: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let now = match offline_clock(arguments) {
+        Ok(clock) => clock.now(),
+        Err(e) => {
+            eprintln!("{e}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let retain_until = match stozher_kernel::clock::shift(&now, 365 * 86_400) {
+        Ok(retain_until) => retain_until,
+        Err(e) => {
+            eprintln!("clock: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let evidence = serde_json::json!({
+        "schema": "kernel.resume_stream.v1",
+        "media-type": "application/json",
+        "payload-hash": args_hash,
+        "retain-until": retain_until
+    });
     publish_effect(
         arguments, url, &token, key_path, &request, &evidence, &payloads,
     )

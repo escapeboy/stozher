@@ -31,6 +31,7 @@ from typing import Any
 
 import pytest
 
+from stozher_gateway.canonical import object_hash
 from stozher_gateway.crypto import ROLE_AGENT, ROLE_HUMAN_ROOT, ROLE_POLICY, derive
 from stozher_gateway.signing import SigningKey, object_id
 
@@ -371,3 +372,112 @@ def test_submit_mandate_tells_an_envelope_from_a_mandate(world: Any) -> None:
     )
     assert refused.returncode != 0
     assert b"already an envelope" in refused.stderr, refused.stderr.decode()
+
+
+def test_an_operator_can_build_the_act_that_unwedges_a_stream(world: Any) -> None:
+    """`spec/04 §7.2` shipped specified, gated and tested, and nothing minted one.
+
+    The same shape as `submit-mandate` before it: an operation with no command has no user, and the
+    kernel's own tests build the envelope by hand, which proves the ceremony works *given* the
+    document while imitating the one step no operator could perform. This drives the shipped binary
+    as a subprocess — a command exercised only through the library it wraps is a command nobody has
+    run.
+    """
+    kernel, ivan_file, _mira_file, root = world
+    out = root / "resume.json"
+    bridge = "a" * 64
+
+    built = run(
+        "resume-request",
+        "--stream", "gw:ivan-mbp:0001",
+        "--resume-seq", "7",
+        "--refused-object-hash", bridge,
+        "--reason-code", "mandate-unresolved",
+        "--requester", kernel.human_root.subject,
+        "--key", str(ivan_file),
+        "--mandate", "0" * 64,
+        "--in-force", kernel.policy_version,
+        "--out", str(out),
+        token=kernel.token,
+    )
+    assert built.returncode == 0, built.stderr.decode()
+
+    request = json.loads(out.read_text())
+    document = json.loads((root / "resume.json.evidence").read_text())
+
+    # §04 §7.2's closed member set, and nothing else in it.
+    assert set(document) == {"stream", "resume-seq", "refused-object-hash", "reason-code"}
+    assert document["resume-seq"] == 7, "the seq must survive as a number, not as its spelling"
+
+    # Rule 2: the target names the same stream as the document, and `args-hash` is the document's
+    # own hash — so the root's signature binds this position rather than "a resumption".
+    assert request["action"] == "kernel.resume_stream"
+    assert request["target"] == "stream:gw:ivan-mbp:0001"
+    assert request["classification"] == "consequential"
+    assert request["args-hash"] == object_hash(document)
+    assert built.stdout.decode().strip() == object_hash(request)
+
+
+def test_resume_publish_refuses_a_document_that_is_not_the_one_approved(world: Any) -> None:
+    """The counterfactual that makes the command worth having.
+
+    Re-reading the evidence and re-hashing it is the whole of rule 2's protection: a resume whose
+    document was swapped after the signature would bridge a position nobody approved. It must fail
+    on the operator's terminal rather than at the kernel, because by then the request is spent.
+    """
+    kernel, ivan_file, _mira_file, root = world
+    out = root / "swapped.json"
+    run(
+        "resume-request",
+        "--stream", "gw:ivan-mbp:0001",
+        "--resume-seq", "7",
+        "--refused-object-hash", "b" * 64,
+        "--reason-code", "mandate-unresolved",
+        "--requester", kernel.human_root.subject,
+        "--key", str(ivan_file),
+        "--mandate", "0" * 64,
+        "--in-force", kernel.policy_version,
+        "--out", str(out),
+        token=kernel.token,
+    )
+    evidence = root / "swapped.json.evidence"
+    document = json.loads(evidence.read_text())
+    document["resume-seq"] = 8  # one position further on: a different wedge entirely
+    evidence.write_text(json.dumps(document, separators=(",", ":"), sort_keys=True))
+
+    refused = run(
+        "resume-publish",
+        "--url", kernel.url,
+        "--request", str(out),
+        "--key", str(ivan_file),
+        token=kernel.token,
+    )
+    assert refused.returncode != 0
+    assert b"is not the resume that was approved" in refused.stderr, refused.stderr.decode()
+
+
+def test_resume_publish_tells_a_resume_from_any_other_request(world: Any) -> None:
+    """`submit-mandate` answered `schema-unknown-member: grantee` when handed the wrong object — a
+    complaint about the document when the wrapping was what was wrong, and a wrong instruction that
+    produces a plausible error is worse than no instruction. This one says what it was handed."""
+    kernel, ivan_file, _mira_file, root = world
+    other = root / "not-a-resume.json"
+    run(
+        "root-request",
+        "--requester", kernel.human_root.subject,
+        "--key", str(ivan_file),
+        "--mandate", "0" * 64,
+        "--in-force", kernel.policy_version,
+        "--retire", kernel.human_root.id,
+        "--out", str(other),
+        token=kernel.token,
+    )
+    refused = run(
+        "resume-publish",
+        "--url", kernel.url,
+        "--request", str(other),
+        "--key", str(ivan_file),
+        token=kernel.token,
+    )
+    assert refused.returncode != 0
+    assert b"kernel.retire_root, not to resume a stream" in refused.stderr, refused.stderr.decode()
