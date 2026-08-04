@@ -896,9 +896,11 @@ impl Ingest {
         // duplicated something; when the emitter was finally asked, its chain held exactly one
         // envelope citing the approval — because there only ever was one. The second spender was
         // the same envelope, and the ledger had been recording its id all along.
+        let mut spent_by: Option<String> = None;
         let seen = match env["authorization"]["decision"]["request-hash"].as_str() {
             Some(hash) => match self.store.gate_request_spent_by(hash).await? {
                 Some(spender) if spender != plan.id => {
+                    spent_by = Some(spender.clone());
                     // The last unlit place. `store.rs`'s unique-violation path names the spender and
                     // this one — the step 11 pre-check, which is where the refusal has actually been
                     // coming from — did not, so five rounds of CI reported "already used" and never
@@ -922,7 +924,24 @@ impl Ingest {
         };
 
         // §06 §2 — all eleven steps, in the normative order, from the reference implementation.
-        match gate::verify_authorization(env, requires_gate, &approvers, &seen) {
+        //
+        // The spender is folded into the *detail* rather than only logged, because the kernel's own
+        // stderr is not where this is read from: the failure that has been costing days appears in
+        // the gateway's job, which never sees the kernel's log. A diagnostic the reader cannot reach
+        // is the same as no diagnostic — five CI rounds proved that. `detail` travels in the refusal
+        // body, into the emitter's log and into the rejection record. It is explicitly not
+        // contractual (`Outcome::Rejected.detail`), so this adds no wire promise.
+        let verified =
+            gate::verify_authorization(env, requires_gate, &approvers, &seen).map_err(|e| {
+                match (&spent_by, e.code()) {
+                    (Some(spender), "gate-authorization-replayed") => Error::new(
+                        "gate-authorization-replayed",
+                        format!("{} (spent by envelope {spender})", e.detail()),
+                    ),
+                    _ => e,
+                }
+            });
+        match verified {
             Ok(Some(ok)) => {
                 if !applied {
                     // An approval carried by an envelope that reports no effect is not consumed;
