@@ -10,6 +10,29 @@ kept.</p>
 <p>Rejection chain: <b class="{% if chain_valid %}ok{% else %}prohibited{% endif %}">{% if chain_valid %}VALID{% else %}INVALID{% endif %}</b>
 · {{ count }} record(s) · head <span class="hash">{{ head_hash }}</span></p>
 
+{% if !mismatches.is_empty() %}
+<div class="note"><b class="violation">A component submitted arguments it had not committed to.</b>
+<code>spec/06 §4.4</code> rule 4 checks a gate submission's argument values against the
+<code>args-hash</code> the approver's signature will cover. A mismatch is not a malformed request: it
+means a component sent one set of values while its own signed commitment covers another, so it is
+either broken or lying, and neither is a thing to learn from a log. These callers did it often enough
+in the last {{ mismatch_window }} seconds to name here rather than leave in the table below.
+<table>
+<thead>
+<tr><th scope="col">submitted by</th><th scope="col">mismatches in window</th><th scope="col">most recent</th><th scope="col">state</th></tr>
+</thead>
+<tbody>
+{% for m in mismatches %}
+<tr><th scope="row">{{ m.submitted_by }}</th><td>{{ m.recorded }}</td><td>{{ m.latest }}</td>
+    <td>{% if m.capped %}<b class="violation">at the cap of {{ mismatch_cap }} — further mismatches
+    from this caller are refused <i>without</i> a record, so this count has stopped growing and the
+    component may not have</b>{% else %}below the cap of {{ mismatch_cap }}{% endif %}</td></tr>
+{% endfor %}
+</tbody>
+</table>
+</div>
+{% endif %}
+
 {% if rows.is_empty() %}
 <p class="empty">Nothing has been refused.</p>
 {% else %}
