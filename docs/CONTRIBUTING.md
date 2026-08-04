@@ -121,3 +121,26 @@ ADR-0032 §3.4's test took the whole `rejections` table away and got its `503` �
 query one statement earlier, never reaching the line under test. It stayed green when the record
 path was mutated to answer `422`. A test that fails for the right reason and one that passes for the
 wrong one look the same from the green tick; the mutation is the only thing that separates them.
+
+## A test that builds its own dependency must let the build tool decide whether to build
+
+`gateway/tests/support.py` boots the compiled kernel rather than a stub, and said so at length: *"an
+out-of-process witness rather than a mock agreeing with itself"*. It built that binary only `if not
+KERNEL_BINARY.exists()`. In CI the job restores `kernel/target` from a cache keyed on `Cargo.lock`,
+which does not change when Rust source does — so the binary existed, the build was skipped, and the
+suite ran the gateway against a kernel from an earlier commit for as long as that cache entry
+survived.
+
+**A mock that agrees with itself is at least suspected. A real binary from an unknown commit is
+trusted**, and that is why this is worth a rule of its own rather than a line in a changelog. It
+cost most of 2026-08-04: three diagnostics were added to the kernel for DEF-7 and none appeared in
+any failure, which was read as evidence about where the defect was and was evidence about nothing.
+
+The rule: **never guard a build on the artifact existing.** Cargo, and every build tool worth using,
+already answers "does this need building" more accurately than a file-existence check can, and it is
+incremental — a warm no-op build costs about a second. The guard cannot be right more often than the
+tool, and it can only be wrong in one direction: testing something other than what is in the tree.
+
+The same shape applies to the cache key. Key on what the artifact is *built from*, not on a
+convenient nearby file. `hashFiles('kernel/Cargo.lock')` describes the dependencies; the sources are
+what changed.

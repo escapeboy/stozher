@@ -59,6 +59,37 @@ directions, so the next open defect has somewhere to go and cannot be recorded w
 | DEF-14 | design question | not an implementation defect | high for adoption | One `classification` enum decides the gate, retention, offline behaviour **and** record granularity at once, and `execution.target` can only ever be `mcp:<server>`. All four design partners reached this from different directions and **none asked for a fifth class** — all four asked for a second dimension. Consequences measured: privileged-material access published as `benign` to keep a per-event record (legal, clinical); "restart the primary database" applied ungated as `benign` and indistinguishable in the trail from a worker restart (SRE); no amount-aware rule, so "at most €5,000/day" cannot be written anywhere (commerce). This is a wire-contract change and belongs to an ADR, not to a same-day fix. |
 | DEF-8 | observed | unestablished; kernel-side, and a different mechanism from DEF-7 | medium (CI reliability); no product impact established | `Store::open` on a **freshly created, uniquely named** scratch file failed `x-store-unavailable: database is locked` inside `s6_divergent_decisions_contend_for_the_core_stream`. Observed once in 34 runs — GitHub Actions run **30928079238**, job `kernel — fmt, clippy, tests`, panic at `stozher-testkit/src/lib.rs:161`. The obvious explanation was checked and is **wrong**: `scratch()` includes a nanosecond stamp, so the six iterations do not share a path, and the raw pool at `concurrency.rs:1191` is closed. `busy_timeout` is 30s on every kernel connection, which makes a genuine `SQLITE_BUSY` on a new file hard to account for. **Mechanism established 2026-08-04 after five occurrences** across the `s1`/`s2`/`s4`/`s6` load tests. `busy_timeout` is a per-connection pragma and is not in force while a connection is being set up, and `journal_mode = WAL` on a database not already in WAL takes a brief exclusive lock. A pool opening two connections at once to a file nobody has opened before has one fail `SQLITE_BUSY` outright, with no busy handler to wait on. It needs a *fresh* file and a machine slow enough for the two opens to overlap — which is why it appeared only on two-core runners. **Not test-only**: the failing call is `Store::open`, so under the same contention a kernel refuses to boot. Fixed by a bounded retry rather than by serialising every open. Status stays `observed` until CI agrees. |
 
+## The witness was real and it was watching a different system
+
+*Written 2026-08-04, after most of a day was spent on DEF-7 reading evidence that could not have
+existed.*
+
+`gateway/tests/support.py` built the kernel only `if not KERNEL_BINARY.exists()`. The gateway CI job
+restores `kernel/target` from a cache keyed on `hashFiles('kernel/Cargo.lock')` — and a lockfile does
+not change when Rust *source* does. The binary was there, the build was skipped, and every CI run of
+the gateway's integration suite exercised the gateway against a kernel from whenever that cache entry
+was written.
+
+Its own docstring says the suite runs *"the real binary, not a stub — an out-of-process witness
+rather than a mock agreeing with itself"*. True of every local run, false of every CI run. That is
+the worse failure: a mock that agrees with itself is at least suspected. A real binary from an
+unknown commit is trusted.
+
+**What it cost, precisely.** Three diagnostics were added to the kernel for DEF-7 and not one
+appeared in any failure — read as "the refusal comes from somewhere else", when the truth was "the
+kernel in CI does not contain your code". The `gate_request_spent_by` fix looked as though it had not
+worked. A whole chain of inference — *the spender is not this envelope, therefore some third writer
+exists* — rests on a log line that a stale binary could not have printed.
+
+**Every conclusion about the kernel drawn from a gateway-job failure since that cache entry was
+written has to be re-taken.** That includes the sentence above, and the DEF-7 row says so.
+
+**The rule this earns**, alongside the citation and record rules in `docs/CONTRIBUTING.md`: *a test
+that builds its own dependency must let the build tool decide whether to build.* A guard that skips
+a build because an artifact exists cannot be right more often than the build tool, and can only be
+wrong in the direction of testing something other than what is in the tree. Cargo is incremental; a
+warm no-op build costs about a second, which is the entire price of the property.
+
 ## The 2026-08-04 external review and design-partner program
 
 Five evaluations ran on one day against `96b9811`: one external security review
