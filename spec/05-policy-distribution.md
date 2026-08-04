@@ -283,6 +283,31 @@ them:
 | `unreachable` | no answer: transport failure, timeout, no route | retry; §7's `offline` map |
 | `refused` | the kernel answered with a rejection (§04 §7) | this subsection |
 
+**And what the caller is told, in each case.** The reason code is not an implementation's to choose:
+§7.1 rule 5 puts it in front of the calling agent verbatim, so two components that spell the same
+refusal differently disagree where an agent can see it.
+
+| Outcome | Disposition | The component's `reason-code` |
+|---|---|---|
+| `accepted` | — | none; the call proceeds |
+| `unreachable` | `offline[class]` is `allow` | none; the call is served under §7's offline map |
+| `unreachable` | `offline[class]` is anything else | **`policy-stale-offline`** |
+| `refused` | grace applies (rule 3) | none; the call is served, and is a finding |
+| `refused` | grace does not apply, or has expired | the **kernel's** reason code, verbatim (rule 5) |
+
+`policy-stale-offline` is this specification's code for *"this component could not reach the kernel,
+and the policy in force does not permit this class to proceed without it."* It is the component's
+own code and never the kernel's — by construction the kernel said nothing, which is what
+`unreachable` means. A component MUST NOT substitute a `policy-*` code of its own devising and MUST
+NOT report a transport error in its place: the caller is being told about an authorization
+disposition, not about a socket.
+
+*This table was added on 2026-08-04. The value was required by
+`spec/vectors/sync-outcome.json` and implemented identically on both sides, and appeared in no
+section of this specification — found by an implementer working from this text alone
+(`docs/spec-debt.md` §1a, row B1). It is documented here rather than introduced: the behaviour is
+unchanged and the vectors that bound it are untouched.*
+
 1. A component MUST NOT treat a `refused` submission as `unreachable`. The `offline` map governs a
    kernel that cannot answer, never one that has answered "no": retrying identical bytes is futile
    (§04 §3 makes the outcome deterministic in the bytes), and the `allow` row would otherwise
