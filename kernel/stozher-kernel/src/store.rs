@@ -1005,20 +1005,26 @@ impl Store {
         Ok(row.is_some())
     }
 
-    /// Whether an approval covering `request_hash` has already been consumed (§06 §2 step 11).
+    /// Which envelope consumed the approval covering `request_hash`, if one has (§06 §2 step 11).
+    ///
+    /// Returns the spending envelope's id rather than a bare `bool`, because the caller has to be
+    /// able to tell "some *other* envelope spent this" from "**this** envelope spent it". The
+    /// second is not a replay: it is one envelope arriving twice, and §06 §3's answer to that is
+    /// idempotent success. Returning a `bool` made the two indistinguishable, and that is DEF-7.
     ///
     /// # Errors
     ///
     /// [`codes::STORE_UNAVAILABLE`].
-    pub async fn gate_request_seen(&self, request_hash: &str) -> Result<bool> {
+    pub async fn gate_request_spent_by(&self, request_hash: &str) -> Result<Option<String>> {
         let row = sqlx::query(
-            "SELECT 1 AS present FROM gate_request_hashes WHERE request_hash = ?1 AND single_use = 1",
+            "SELECT envelope_id FROM gate_request_hashes WHERE request_hash = ?1 \
+             AND single_use = 1",
         )
         .bind(request_hash)
         .fetch_optional(&self.pool)
         .await
         .map_err(db)?;
-        Ok(row.is_some())
+        Ok(row.map(|r| r.get::<String, _>("envelope_id")))
     }
 
     // -- the pending queue (§06 §4.3) -------------------------------------------------------

@@ -880,11 +880,28 @@ impl Ingest {
             crate::gatequeue::validate_embedded(authorization)?;
         }
 
+        // An approval counts as *seen* only when some **other** envelope spent it. When the spender
+        // is this very envelope, this is one envelope arriving twice, and §06 §3's answer to that is
+        // idempotent success — which `submit` already implements, by `id()`, with a comment naming
+        // exactly this case: "a retry after a lost response succeeds instead of being read as an
+        // approval being used twice".
+        //
+        // That check reads the store before this one, so two *concurrent* submissions of the same
+        // envelope both pass it — neither has committed yet — and then the loser arrives here after
+        // the winner committed and is refused `gate-authorization-replayed`. The emitter treats a
+        // refusal as a verdict on its bytes and wedges the stream permanently (§05 §7.1 clause 3),
+        // over an envelope the kernel *has*, on a chain that was never divergent.
+        //
+        // This is DEF-7. Four fixes went into the emitter's own paths on the theory that it had
+        // duplicated something; when the emitter was finally asked, its chain held exactly one
+        // envelope citing the approval — because there only ever was one. The second spender was
+        // the same envelope, and the ledger had been recording its id all along.
         let seen = match env["authorization"]["decision"]["request-hash"].as_str() {
-            Some(hash) if self.store.gate_request_seen(hash).await? => {
-                HashSet::from([hash.to_owned()])
-            }
-            _ => HashSet::new(),
+            Some(hash) => match self.store.gate_request_spent_by(hash).await? {
+                Some(spender) if spender != plan.id => HashSet::from([hash.to_owned()]),
+                _ => HashSet::new(),
+            },
+            None => HashSet::new(),
         };
 
         // §06 §2 — all eleven steps, in the normative order, from the reference implementation.
