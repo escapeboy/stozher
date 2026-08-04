@@ -189,9 +189,18 @@ system never checks. The console's budgets page was correctly not built rather t
 - Vectors for `mandate-budget-exceeds-parent` and for boundary comparison — currently absent, so two
   implementations can disagree at the limit with nothing catching it.
 
-**Open decision for the owner:** whether exhausting a budget **blocks** or **gates**. Blocking is
-simpler and matches `prohibited`; gating turns a cap into an approval prompt and is probably what an
-organization actually wants. This is a product decision, not a technical one.
+~~**Open decision for the owner:** whether exhausting a budget **blocks** or **gates**.~~
+**Decided 2026-08-04 by the owner: it blocks.** Which is what `spec/03 §4.3` already required —
+*"Exhausted budget blocks like an expired mandate: `outcome: "blocked"`, envelope still emitted"* —
+and what both implementations already do: the gateway refuses preventively in
+`Enforcer._require_budget`, and the kernel appends-and-flags an effect that reports `applied` beyond
+its cap rather than refusing the record of something that already happened (ADR-0015).
+
+So the decision changes no code. It is recorded because an open question left standing in a design
+document is read by the next person as work outstanding, and this one had been answered by the
+implementation and the specification before it was ever put to the owner. Gating a cap — turning it
+into an approval prompt — is now a **future** proposal rather than an unresolved fork, and would be
+a spec change to §03 §4.3, not a configuration choice.
 
 ### 4.3 Conformance harness
 
