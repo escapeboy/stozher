@@ -810,6 +810,30 @@ impl Ingest {
             }
             _ => {}
         }
+        // An envelope that says the action did not apply MUST NOT apply it. For an ordinary effect
+        // that is a tautology — the effect happened in the outside world and this is only its
+        // record. For a root-approved action it is the whole security property, because the effect
+        // *is* the row written below, and `requires_gate` waives the approval on the strength of
+        // the same self-reported `outcome`. Without this the two rules compose into a bypass: an
+        // ordinary agent emits `kernel.resume_stream` with `outcome: "denied"` and no
+        // `authorization` at all, the gate is waived because nothing applied, and the resume is
+        // then written anyway. Found by external review, 2026-08-04; reproduced against this
+        // kernel, three ways, one of which needed no root key.
+        //
+        // Cleared here rather than by making `requires_gate` ignore `applied`, because the comment
+        // above is right about the legitimate case: recording that a human said *no* to a root
+        // enrolment must stay possible, and demanding an approval signature for the refusal would
+        // make the refusal unrecordable. The record is kept; only the state change is withheld.
+        let privileged = ROOT_APPROVED_ACTIONS
+            .contains(&env["execution"]["action"].as_str().unwrap_or_default())
+            || kind == "policy-change";
+        if !applied && privileged {
+            plan.projections.policy = None;
+            plan.projections.manifest = None;
+            plan.projections.enroll_root = None;
+            plan.projections.retire_root = None;
+            plan.projections.stream_resume = None;
+        }
         self.validate_commitment(env, manifest.as_ref(), subject)
             .await?;
 
