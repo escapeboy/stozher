@@ -129,8 +129,13 @@ while the *same commit* on the other branch passed (30910472179).
 **Correction to the rate, made the next hour.** That paragraph first said the residue reproduces on
 Linux *"at roughly 1 in 2"*. It was an estimate from a sample of two — the one failure and the one
 pass that happened to sit beside it — written into a document as though it were measured. On the
-fixed code the record is **1 failure in 5 Linux runs** (30910475650 failed; 30910472179, 30910991085,
-30911348123, 30911348909 passed), with more samples being taken. A rate is a claim like any other and
+fixed code the record is **1 failure in 8 Linux runs** — 30910475650 failed; 30910472179,
+30910991085, 30911348123, 30911348909 and three dispatched runs (30911638257, 30911640302,
+30911642652) passed. Before the fixes it was 1 in 3. **These two rates are not distinguishable at
+these sample sizes and this row does not claim they are**: the one failure sits on a commit carrying
+both fixes, so the residue is real whatever the rate. Sampling stopped here rather than running the
+workflow until it failed — the instrumentation added the same day means the next occurrence, whenever
+it comes, names the action in its own failure message. A rate is a claim like any other and
 this one had no test behind it, which is the failure this file spent the week correcting elsewhere.
 
 The mistake has a name and this repository has been cataloguing it all week: **a fix was verified
