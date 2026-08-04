@@ -898,7 +898,24 @@ impl Ingest {
         // the same envelope, and the ledger had been recording its id all along.
         let seen = match env["authorization"]["decision"]["request-hash"].as_str() {
             Some(hash) => match self.store.gate_request_spent_by(hash).await? {
-                Some(spender) if spender != plan.id => HashSet::from([hash.to_owned()]),
+                Some(spender) if spender != plan.id => {
+                    // The last unlit place. `store.rs`'s unique-violation path names the spender and
+                    // this one — the step 11 pre-check, which is where the refusal has actually been
+                    // coming from — did not, so five rounds of CI reported "already used" and never
+                    // said by what. The emitter's own chain holds one envelope citing this approval;
+                    // whatever `spender` is, it is not that one, and this line is what will finally
+                    // say so.
+                    tracing::error!(
+                        request_hash = hash,
+                        spent_by = %spender,
+                        refusing = %plan.id,
+                        stream = env["stream"].as_str().unwrap_or_default(),
+                        seq = env["seq"].as_u64().unwrap_or_default(),
+                        action = env["execution"]["action"].as_str().unwrap_or_default(),
+                        "DEF-7 — an approval was already spent by a different envelope"
+                    );
+                    HashSet::from([hash.to_owned()])
+                }
                 _ => HashSet::new(),
             },
             None => HashSet::new(),
