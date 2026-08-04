@@ -59,7 +59,7 @@ Applying it to everything currently on the table:
 | Budget accounting | **In** | Mandate scope is already normative; unenforced scope is a false claim |
 | Conformance harness (`spec/08`) | **In** | It is the mechanism that makes third-party emitters trustworthy |
 | Spec catch-up + vectors | **In** | Two implementations cannot verify each other without it |
-| CI | **In** | The product's thesis is "provable, not asserted"; unverifiable claims contradict it |
+| CI | **In** — delivered 2026-08-04, `.github/workflows/gates.yml` | The product's thesis is "provable, not asserted"; unverifiable claims contradict it. It was the last of the seven still undelivered, and its absence made §3's own rule below — *"a release is not done until its gate passes as an automated check"* — unenforceable: there was no automated check. Four jobs, running the same commands with the same flags a developer runs: kernel (fmt, clippy `-D warnings`, `--locked` tests at `--test-threads=1`), gateway (ruff, `mypy --strict`, pytest, building the real kernel binary as its integration tests require), corpus (regenerate the vectors and fail on any diff — a generator that has drifted from the committed files is a silent divergence between the two implementations), and citations (every test an ADR names still exists). |
 | Multi-tenancy | **Out** | Maxim 4, by construction |
 | Workflow/DAG editor | **Out** | That is an orchestrator (ADR-0002) |
 | Agent chat UI, dashboards, theming, marketplace | **Out** | `docs/design/console.md` names them out |
