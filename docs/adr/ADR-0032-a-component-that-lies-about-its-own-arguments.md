@@ -97,8 +97,26 @@ not that it decided against the submission. The route answers `503 x-store-unava
 Answering `422` would be DEF-6's mistake a second time: reporting a moment the kernel could not
 answer as a verdict about the bytes.
 
-*No test.* Stated here rather than left to look bound: injecting a store failure at that one line is
-not something the current harness can do without a fault-injection seam it does not have.
+*Bound 2026-08-04*: `gate_admission_vectors.rs::a_store_that_cannot_take_the_record_is_not_a_kernel_that_said_no`.
+
+**The "no test" here was wrong about the harness, and the correction is the useful part.** This
+originally read *"injecting a store failure at that one line is not something the current harness can
+do without a fault-injection seam it does not have."* The seam existed: `world_at` gives a world
+backed by a real file and `append_only_and_decay.rs` already opens that file directly, precisely to
+show a guarantee lives in the storage engine rather than in this crate's manners. It was the second
+time in two days that *"this needs a seam"* turned out to mean *"I stopped looking"* — ADR-0028 §6
+is the first, and there the same conclusion was reached and also wrong.
+
+**The first version of the test passed and proved nothing, and only the mutation said so.** It took
+the `rejections` table away outright and got its `503`. But §4.4 rule 9's bound reads that same table
+one statement *earlier* — `argument_mismatches_since` — so the route answered from the count and
+never reached the line under test. Mutating the record path to answer `422` left it green. The test
+now installs a `BEFORE INSERT` trigger that aborts, so the count succeeds and only the write fails;
+the same mutation now fails it, on the assertion that names the property.
+
+That sequence is the argument for mutation as a standard rather than a courtesy: a test that fails
+for the right reason and a test that passes for the wrong one are indistinguishable from the green
+tick.
 
 ## 4. Alternatives rejected
 
