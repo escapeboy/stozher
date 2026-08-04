@@ -256,11 +256,35 @@ class Emitter:
             # is reading its own record rather than trusting a claim.
             stream = str(envelope.get("stream", ""))
             seq = int(envelope.get("seq", -1))
-            if stream in wedged or self._store.wedge(stream) is not None:
-                # Submitting past a wedge produces a second rejection record naming the wrong
-                # condition, and loses the envelope. Hold it: the local chain keeps it.
-                wedged.add(stream)
+            if stream in wedged:
+                # Everything after the first envelope of a wedged stream is held: §05 §7.1 clause 3.
                 continue
+            standing = self._store.wedge(stream)
+            if standing is not None:
+                # **One** envelope is offered — this one, the first unpushed of a wedged stream and
+                # therefore the one immediately past the refused position, which is exactly what
+                # §04 §7.2's bridge makes acceptable. It is a probe for "has an operator published
+                # the resume yet", and it is the only way this component can find out: nothing else
+                # in the gateway learns that the kernel's view of the stream has changed.
+                #
+                # Before 2026-08-04 this branch skipped the stream outright, and `clear_wedge` has
+                # exactly one caller — an accepted push. A wedged stream submitted nothing, so
+                # nothing was accepted, so the wedge never cleared. The exit `spec/04 §7.2`
+                # specifies existed in the kernel and was unreachable from here: a design-partner
+                # evaluation revoked a mandate, published a correct root-approved resume, and
+                # watched eight envelopes stay stranded with no shipped command to free them.
+                #
+                # The cost is one refused submission per push cycle per wedged stream, and so one
+                # kernel rejection record. That is the cheaper side of the trade against a component
+                # that is permanently and silently dead.
+                logger.info(
+                    "stream %s is wedged at seq %s (%s); offering seq %s to find out whether an "
+                    "operator has resumed it",
+                    stream,
+                    standing.seq,
+                    standing.reason_code,
+                    seq,
+                )
             try:
                 response = self._kernel.ingest(envelope, payloads)
             except KernelUnreachableError as e:
@@ -293,8 +317,15 @@ class Emitter:
                     detail,
                 )
                 break
-            # A refusal is permanent for these bytes; retrying identical bytes forever would hide it.
             reason = response.reason_code or "x-kernel-refused"
+            if standing is not None:
+                # The probe was turned away: no resume has been published. Leave the envelope
+                # **unpushed** — marking it consumed would destroy the record the resume exists to
+                # deliver — and keep the original wedge, whose reason is the one an operator needs.
+                # Overwriting it with `chain-seq-gap` would replace the cause with its consequence.
+                wedged.add(stream)
+                continue
+            # A refusal is permanent for these bytes; retrying identical bytes forever would hide it.
             self._store.mark_pushed(envelope_id, self._clock.now(), f"{reason}: {detail}")
             self._store.record_wedge(stream, envelope_id, seq, reason, detail, self._clock.now())
             wedged.add(stream)
