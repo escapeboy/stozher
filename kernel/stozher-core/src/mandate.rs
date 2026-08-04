@@ -86,16 +86,14 @@ pub fn verify_mandate_chain(
     request: &MandateRequest,
     params: &VerifyParams<'_>,
 ) -> Result<MandateChainOk> {
-    walk(mandates, leaf_ref, Some(request), params)
+    walk(mandates, leaf_ref, Scoped::Full(request), params)
 }
 
 /// Walk a mandate chain without matching a request against its scope.
 ///
-/// For records that have no action, no weight class and no resource there is no request tuple to
-/// match: §03 §4.2 defines one over exactly those three members, and a `cognition` envelope carries
-/// none of them (§02 §6) while still being REQUIRED to cite a mandate so that spend is attributable.
-/// Every other check of §03 §5 — grantee key, signature, grantor, expiry, revocation, delegation
-/// bounds, termination at an enrolled human root — is performed identically.
+/// For a record that carries no dimension of §03 §4.2's request tuple there is nothing to match.
+/// **A `cognition` envelope is not such a record and MUST NOT use this entry point** — it carries
+/// `resource` (§02 §6) and is verified by [`verify_mandate_chain_for_resource`].
 ///
 /// This is deliberately a separate entry point rather than an option on [`VerifyParams`]: skipping
 /// the scope check is a narrow, named exception, and a caller has to ask for it by name.
@@ -108,13 +106,46 @@ pub fn verify_mandate_chain_unscoped(
     leaf_ref: &str,
     params: &VerifyParams<'_>,
 ) -> Result<MandateChainOk> {
-    walk(mandates, leaf_ref, None, params)
+    walk(mandates, leaf_ref, Scoped::Not, params)
+}
+
+/// Walk a mandate chain matching only the `resources` dimension of its scope (§03 §5).
+///
+/// A `cognition` envelope carries no `component`, `action` or `classification` and cannot be matched
+/// on them — but it does carry `resource`, and until 2026-08-04 the scope check was skipped whole
+/// because of the three it lacks. The consequence was that a mandate could not bound what an agent
+/// spends cognition on **at all**: `resources: ["model:cheap-*"]` bound every effect and no
+/// cognition. The dimensions the envelope cannot speak to are treated as unconstrained; the one it
+/// can is enforced exactly as it is for any other record.
+///
+/// # Errors
+///
+/// As [`verify_mandate_chain`]; `mandate-scope-not-permitted` names only the resource.
+pub fn verify_mandate_chain_for_resource(
+    mandates: &Map<String, Value>,
+    leaf_ref: &str,
+    resource: &str,
+    params: &VerifyParams<'_>,
+) -> Result<MandateChainOk> {
+    walk(mandates, leaf_ref, Scoped::ByResource(resource), params)
+}
+
+/// How much of §03 §4.2's request tuple the record being verified can supply.
+///
+/// An enum rather than an `Option` because there are three answers and the middle one is the whole
+/// point: "this record has no scope to check" and "this record has one dimension of scope to check"
+/// were the same branch, and the second was silently getting the first's treatment.
+#[derive(Clone, Copy)]
+enum Scoped<'a> {
+    Full(&'a MandateRequest),
+    ByResource(&'a str),
+    Not,
 }
 
 fn walk(
     mandates: &Map<String, Value>,
     leaf_ref: &str,
-    request: Option<&MandateRequest>,
+    request: Scoped<'_>,
     params: &VerifyParams<'_>,
 ) -> Result<MandateChainOk> {
     let revoked = revocation_index(mandates, params);
@@ -188,15 +219,29 @@ fn walk(
         let scope = current
             .get("scope")
             .ok_or_else(|| err!("schema-missing-member", "scope"))?;
-        if let Some(request) = request {
-            if !scope_permits(scope, request)? {
-                return Err(err!(
-                    "mandate-scope-not-permitted",
-                    "scope does not cover {}/{} on {}",
-                    request.component,
-                    request.action,
-                    request.resource
-                ));
+        match request {
+            Scoped::ByResource(resource) => {
+                if !patterns(scope, "resources")?
+                    .iter()
+                    .any(|p| matches(p, resource))
+                {
+                    return Err(err!(
+                        "mandate-scope-not-permitted",
+                        "scope does not cover the resource {resource}"
+                    ));
+                }
+            }
+            Scoped::Not => {}
+            Scoped::Full(request) => {
+                if !scope_permits(scope, request)? {
+                    return Err(err!(
+                        "mandate-scope-not-permitted",
+                        "scope does not cover {}/{} on {}",
+                        request.component,
+                        request.action,
+                        request.resource
+                    ));
+                }
             }
         }
 

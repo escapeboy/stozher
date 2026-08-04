@@ -148,8 +148,13 @@ is not immunity, and §07 says so in the same words.
 ## 7. Approver-side risks (A4)
 
 - A hurried approver is the system's weakest link and the console's main design problem: the pending
-  queue MUST show the mandate chain to the human root, the classification, and an evidence preview
-  (console doc) so a decision is possible in seconds without being blind.
+  queue MUST show the mandate chain to the human root, the classification, and the call's arguments
+  as §06 §4.4 supplies them, so a decision is possible in seconds without being blind. §06 §4.4 is
+  the normative answer to *how* — the values travel beside the request in the submission wrapper, so
+  §06 §1.1's closed member set is untouched — and it also bounds what the approver is owed: values
+  the submitting component held, checked against the digest their signature will cover, erased when
+  the request can no longer be answered. A queue that cannot show them MUST say so rather than
+  render nothing (§06 §4.4 rule 8).
 - Approval fatigue is an availability attack: an adversary that generates many gate-worthy actions can
   train an approver to click through. Requirements: the kernel MUST rate-limit gate requests per
   subject per interval (`gate-rate-limited`) and MUST surface a spike as a finding rather than as a

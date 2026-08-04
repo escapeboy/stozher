@@ -33,7 +33,7 @@ use stozher_core::error::{Error, Result};
 use stozher_core::gate::Approver;
 use stozher_core::mandate::{
     GrantParams, MandateRequest, VerifyParams, verify_grant, verify_mandate_chain,
-    verify_mandate_chain_unscoped, verify_revocation,
+    verify_revocation,
 };
 use stozher_core::signed::{KeyId, verify_signed_object};
 use stozher_core::{chain, crypto, envelope, gate, jcs, payload, signed};
@@ -472,11 +472,34 @@ impl Ingest {
         } else {
             match kind.as_str() {
                 "cognition" => {
-                    // A cognition envelope has no action, class or resource, so there is no request
-                    // tuple to match a scope against (§03 §4.2) — but it MUST still cite a mandate,
-                    // because spend is an organizational resource that has to be attributable.
+                    // A cognition envelope has no `component`, `action` or `classification`, so
+                    // three of §03 §4.2's four dimensions cannot be matched — but it does carry
+                    // `resource` (§02 §6), and that one is enforced. The scope check used to be
+                    // skipped whole because of the three that are missing, which meant a mandate
+                    // could not bound what an agent spends cognition on at all: `resources`
+                    // constrained every effect and no cognition. §03 §5 now says so.
+                    // `kind:name`, the same spelling `execution.target` uses for every other record
+                    // (`mcp:notes`, `repo:acme/backend`), so one `resources` pattern in a scope
+                    // means the same thing wherever it is written. §03 §5 states the mapping.
+                    let (Some(kind), Some(name)) = (
+                        env.pointer("/resource/kind").and_then(Value::as_str),
+                        env.pointer("/resource/name").and_then(Value::as_str),
+                    ) else {
+                        return Err(Error::new(
+                            "schema-missing-member",
+                            "resource.kind and resource.name are required to check scope",
+                        ));
+                    };
+                    let resource = format!("{kind}:{name}");
                     let chain_ok = self
-                        .walk_mandate(env, &roots, &subject_key, &emitted_at, &policy, None)
+                        .walk_mandate_for_resource(
+                            env,
+                            &roots,
+                            &subject_key,
+                            &emitted_at,
+                            &policy,
+                            &resource,
+                        )
                         .await?;
                     plan.human_root = Some(chain_ok);
                     // Cognition is where money is spent, so this is the path a monetary cap is
@@ -630,15 +653,8 @@ impl Ingest {
                         .to_owned(),
                 };
                 plan.human_root = Some(
-                    self.walk_mandate_with_depth(
-                        env,
-                        roots,
-                        subject_key,
-                        emitted_at,
-                        3,
-                        Some(&request),
-                    )
-                    .await?,
+                    self.walk_mandate_with_depth(env, roots, subject_key, emitted_at, 3, &request)
+                        .await?,
                 );
                 plan.effective_class = Some(declared_class.to_owned());
                 let root_approvers = self.root_approvers(emitted_at).await?;
@@ -954,24 +970,37 @@ impl Ingest {
         Ok(())
     }
 
-    async fn walk_mandate(
+    /// The cognition path: every check of §03 §5, with scope matched on `resources` alone.
+    async fn walk_mandate_for_resource(
         &self,
         env: &Value,
         roots: &[KeyId],
         subject_key: &KeyId,
         at: &str,
         policy: &Policy,
-        request: Option<&MandateRequest>,
+        resource: &str,
     ) -> Result<String> {
-        self.walk_mandate_with_depth(
-            env,
+        let max_depth = policy.max_delegation_depth();
+        let mandate_ref = env["mandate-ref"]
+            .as_str()
+            .ok_or_else(|| Error::new("schema-missing-member", "mandate-ref"))?;
+        let mandates = self.store.mandate_ancestry(mandate_ref, max_depth).await?;
+        let ids: Vec<String> = mandates.keys().cloned().collect();
+        let revocations = self.store.revocations_targeting(&ids).await?;
+        let params = VerifyParams {
             roots,
-            subject_key,
+            revocations: &revocations,
             at,
-            policy.max_delegation_depth(),
-            request,
-        )
-        .await
+            subject_key,
+            max_delegation_depth: max_depth,
+        };
+        let ok = stozher_core::mandate::verify_mandate_chain_for_resource(
+            &mandates,
+            mandate_ref,
+            resource,
+            &params,
+        )?;
+        Ok(ok.human_root)
     }
 
     async fn walk_mandate_with_depth(
@@ -981,7 +1010,7 @@ impl Ingest {
         subject_key: &KeyId,
         at: &str,
         max_depth: u32,
-        request: Option<&MandateRequest>,
+        request: &MandateRequest,
     ) -> Result<String> {
         let mandate_ref = env["mandate-ref"]
             .as_str()
@@ -996,10 +1025,10 @@ impl Ingest {
             subject_key,
             max_delegation_depth: max_depth,
         };
-        let ok = match request {
-            Some(request) => verify_mandate_chain(&mandates, mandate_ref, request, &params)?,
-            None => verify_mandate_chain_unscoped(&mandates, mandate_ref, &params)?,
-        };
+        // No unscoped branch. It existed for `cognition` alone, and §03 §5 now says how a
+        // cognition envelope is scoped — on the one dimension it carries. Every record reaching
+        // this function supplies a full request tuple; there is no path here that skips the check.
+        let ok = verify_mandate_chain(&mandates, mandate_ref, request, &params)?;
         Ok(ok.human_root)
     }
 

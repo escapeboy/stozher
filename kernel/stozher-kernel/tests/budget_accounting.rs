@@ -20,7 +20,7 @@
 use std::collections::BTreeMap;
 
 use serde_json::json;
-use stozher_kernel::codes;
+use stozher_kernel::{Outcome, codes};
 use stozher_testkit::{EFFECT_STREAM, World, world};
 
 /// Accrued spend under one mandate, as the store holds it.
@@ -279,4 +279,55 @@ async fn the_budget_route_reports_the_whole_chain_so_a_component_can_block_befor
     // The accrued figure is what makes the cap actionable: a cap without a total is a number a
     // component can do nothing with.
     assert_eq!(entry["spent"]["requests"].as_str(), Some("3"));
+}
+
+/// §03 §5: a `cognition` envelope is matched on the one scope dimension it can supply.
+///
+/// Until 2026-08-04 the check was skipped whole because three of §03 §4.2's four dimensions are
+/// absent from a cognition envelope — and the fourth, `resource`, is present. The consequence was
+/// that `resources` in a mandate's scope constrained every effect and no cognition, so a mandate
+/// could not bound what an agent spends on at all. That is the opposite of what an operator writing
+/// `resources` naming one model intends, and it failed open.
+#[tokio::test]
+async fn a_mandate_that_does_not_cover_the_model_refuses_the_spend_on_it() {
+    let world = world().await;
+
+    // A mandate whose scope names one model. Everything else about it is the standing mandate the
+    // fixture already grants, so the only variable is `resources`.
+    let narrow = world
+        .grant_standing(
+            &"c0".repeat(16),
+            json!({
+                "scope": {
+                    "components": ["*"],
+                    "actions": ["*"],
+                    "classes": ["read", "benign", "consequential"],
+                    "resources": ["model:claude-haiku-4-5"]
+                }
+            }),
+        )
+        .await;
+
+    let permitted = world
+        .cognition(json!({
+            "mandate-ref": narrow,
+            "resource": { "kind": "model", "name": "claude-haiku-4-5" }
+        }))
+        .await;
+    world.accept(&permitted, &[]).await;
+
+    // The paired negative, and the whole point: a different model under the same mandate.
+    let refused = world
+        .cognition(json!({
+            "mandate-ref": narrow,
+            "resource": { "kind": "model", "name": "claude-opus-5" }
+        }))
+        .await;
+    match world.submit(&refused, &[]).await {
+        Outcome::Rejected { reason, .. } => assert_eq!(
+            reason, "mandate-scope-not-permitted",
+            "refused, but not for the scope"
+        ),
+        other => panic!("spend on a model the mandate does not name was accepted: {other:?}"),
+    }
 }

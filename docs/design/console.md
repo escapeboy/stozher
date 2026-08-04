@@ -7,7 +7,7 @@ One console, two reasons it gets opened:
 
 ## 1. Pending approvals — the daily driver
 
-Why they open it every day. Queue of gate-parked actions: subject, mandate chain (one click to human root), action class, evidence preview, approve/deny with signature. Deny reasons feed drift learning (tier 3). Gates are kernel-native — the approval-gate pattern is borrowed from FleetQ, the FleetQ app is not a dependency (build plan S4).
+Why they open it every day. Queue of gate-parked actions: subject, mandate chain (one click to human root), action class, the call's arguments as `spec/06 §4.4` supplies them — with the digest they are checked against, and an explicit statement when the component held none — approve/deny with signature. Deny reasons feed drift learning (tier 3). Gates are kernel-native — the approval-gate pattern is borrowed from FleetQ, the FleetQ app is not a dependency (build plan S4).
 
 ## 2. Audit explorer — the reason they buy it
 

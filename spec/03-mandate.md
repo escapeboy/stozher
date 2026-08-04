@@ -123,6 +123,23 @@ A *request* (the tuple the verifier checks a mandate against) is:
 each match at least one pattern in the corresponding array. Otherwise
 `mandate-scope-not-permitted`.
 
+**A `cognition` envelope supplies one dimension of that tuple, and it is matched on that one.** §02
+§6 gives it `mandate-ref` and `resource` and denies it `execution`, so `component`, `action` and
+`classification` do not exist to be matched and MUST be treated as unconstrained. `resource` does
+exist and MUST be matched exactly as it is for any other record: a verifier MUST evaluate
+`resources` and MUST refuse with `mandate-scope-not-permitted` when no pattern covers it.
+
+The identifier is `<kind>:<name>` from the envelope's `resource` object — `model:claude-opus-5` for
+`{ "kind": "model", "name": "claude-opus-5" }` — which is the spelling `execution.target` already
+uses (`mcp:notes`, `repo:acme/backend`), so one pattern in a scope means the same thing wherever it
+is written.
+
+This is stated because the alternative was in force and was worse: skipping the check entirely
+because three of the four dimensions are absent meant a mandate could not bound what an agent spends
+cognition on **at all** — `resources: ["model:cheap-*"]` constrained every effect and no cognition,
+which is the opposite of what an operator writing that line intends. A verifier MUST NOT skip
+`scope_permits` for a `cognition` envelope on the grounds that the tuple is incomplete.
+
 ### 4.3 Budget
 
 `budget` members are OPTIONAL; each present member is a cap on the total consumed under **this
