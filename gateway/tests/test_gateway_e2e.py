@@ -243,12 +243,40 @@ async def test_the_gate(world: dict[str, Any]) -> None:
     # Nothing the gateway emitted was refused.
     status, rejections = kernel.request("GET", "/v1/rejections?limit=100")
     assert status == 200
-    assert rejections["count"] == 0, rejections["rejections"]
+    assert rejections["count"] == 0, _why_refused(kernel, rejections["rejections"])
 
     # The mandate walk answers "on whose authority" for the consequential effect.
     status, walk = kernel.request("GET", f"/v1/envelopes/{record['id']}/mandate")
     assert status == 200, walk
     assert walk["human-root"] == kernel.human_root.subject
+
+
+
+def _why_refused(kernel: Kernel, rejections: list[dict[str, Any]]) -> str:
+    """A refusal, said in one line per record, with the *action* that was refused.
+
+    DEF-7 cost a round of CI-log archaeology because this assertion handed pytest the raw record
+    list, which pytest truncated at the interesting part: the reason and the position survived, the
+    action did not. The position is on the record; the action is one lookup away on the stream the
+    record names. Resolving it here means the next occurrence explains itself in its own failure
+    message instead of sending someone to `gh run view --log`.
+    """
+    lines = []
+    for record in rejections:
+        stream, seq = record.get("claimed-stream"), record.get("claimed-seq")
+        action = "<unresolved>"
+        if stream is not None and seq is not None:
+            status, page = kernel.request("GET", f"/v1/envelopes?stream={stream}&limit=100")
+            if status == 200:
+                for entry in page.get("envelopes", []):
+                    envelope = entry.get("envelope", entry)
+                    if envelope.get("seq") == seq:
+                        action = str(envelope.get("execution", {}).get("action", "<no action>"))
+                        break
+        lines.append(
+            f"{record.get('reason')} at {stream} seq {seq} — action {action} — {record.get('detail')}"
+        )
+    return "\n".join(lines)
 
 
 def _approve(world: dict[str, Any], request_hash: str, key: Path, classify: str | None = None) -> None:
