@@ -71,14 +71,26 @@ same author as the specification. A rule that both the text and the corpus omit 
 this gate by construction — which is exactly the class of gap an outside implementer is hired to
 find.
 
-**The report is outstanding.** The implementation was the means; the deliverable was an account of
-where `spec/` was ambiguous, silent, wrong, or learnable *only* from the vectors. That account has
-been requested and not yet received. **The gaps this exercise was run to surface are, as of this
-record, unsurfaced.** A follow-up amending this ADR is owed once the report lands.
+**The report was never produced, and this did not change.** The implementation was the means; the
+deliverable was an account of where `spec/` was ambiguous, silent, wrong, or learnable *only* from
+the vectors. It was requested three times, twice in writing after the code was finished. No
+`REPORT.md` was written and no file in the sandbox was touched afterwards. **The gaps this exercise
+was run to surface are unsurfaced, and this is now the recorded outcome rather than a pending item.**
 
-**The sandbox attestation is outstanding.** The implementer was asked, plainly, whether it read
-anything outside its directory. The answer has not yet been given. The blindness above is what was
-*constructed*; it is not yet what was *confirmed*.
+The artifact carries no substitute: 1,985 lines across 12 modules, and **not one comment marking a
+place where the specification was insufficient** — no "spec does not say", no assumption noted, no
+TODO. Searched for, absent.
+
+**And the failure is at least half mine.** The brief asked for an implementation *and* a report, and
+said the report was the deliverable. Only one of the two was measurable — the corpus grades the code
+and nothing grades the prose — so the measurable one is what came back. A gate that scores the easy
+half will be answered by the easy half, which is the same lesson this repository has been writing
+down all week about tests and about ledgers, arriving here from a new direction. **A rerun should
+demand the findings first and the passing implementation second.**
+
+**The sandbox attestation was never given.** The implementer was asked, plainly, whether it read
+anything outside its directory. It did not answer. The blindness above is what was *constructed* —
+it is not what was *confirmed*, and on the present evidence it cannot be.
 
 ## 5. What may be said, and what may not
 
@@ -87,7 +99,8 @@ either reference implementation or to the corpus generator, passes all 307 primi
 vectors, and that result was independently executed and mutation-checked.
 
 **May not be said:** that `spec/` has been shown sufficient for a human implementer; that the gaps
-in it are known; or that the exercise was audited. The first is unfalsified rather than established,
+in it are known — **they are not, and no report was produced to name them**; or that the exercise was
+audited. The first is unfalsified rather than established,
 the second awaits the report, and the third has not happened.
 
 ADR-0022's other half — the external crypto and security review — remains as that record left it: an
