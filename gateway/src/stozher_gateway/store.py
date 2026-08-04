@@ -257,6 +257,7 @@ class GatewayStore:
         build: Callable[[int, str | None], tuple[str, dict[str, Any]]],
         payloads: list[dict[str, Any]],
         created_at: str,
+        resolve_intent: str | None = None,
     ) -> str:
         """Take this stream's next `seq`, build the envelope for it and store it, atomically.
 
@@ -291,6 +292,16 @@ class GatewayStore:
                 "VALUES (?, ?, ?, ?, ?, ?)",
                 (stream, seq, envelope_id, json.dumps(envelope), json.dumps(payloads), created_at),
             )
+            if resolve_intent is not None:
+                # DEF-7, third site. "This effect is chained" and "its write-ahead record is closed"
+                # have to be one fact. They were two statements in two transactions, and a process
+                # that stopped between them left an open intent for an effect that was already on
+                # the chain — which the next session's `recover_intents` re-emitted, `authorization`
+                # and all, for the kernel to refuse `gate-authorization-replayed`.
+                connection.execute(
+                    "UPDATE intents SET resolved_at = ? WHERE intent_id = ?",
+                    (created_at, resolve_intent),
+                )
         return envelope_id
 
     def unpushed(self, limit: int = 64) -> list[tuple[str, dict[str, Any], list[dict[str, Any]]]]:

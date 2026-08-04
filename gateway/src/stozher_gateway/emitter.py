@@ -140,6 +140,7 @@ class Emitter:
         stream: str,
         body: dict[str, Any],
         payloads: list[dict[str, Any]] | None = None,
+        resolve_intent: str | None = None,
     ) -> str:
         """Chain, sign, validate and durably store one envelope. Returns its `id()`.
 
@@ -164,7 +165,9 @@ class Emitter:
         # a config-derived stream name is shared with. This lock is only to keep this process's own
         # threads off that lock, where they would contend for it and burn the busy timeout.
         with self._chain_lock:
-            return self._store.append_next(stream, build, payloads, self._clock.now())
+            return self._store.append_next(
+                stream, build, payloads, self._clock.now(), resolve_intent=resolve_intent
+            )
 
     def fold_read(
         self,

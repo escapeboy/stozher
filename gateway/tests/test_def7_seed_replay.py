@@ -222,3 +222,73 @@ def test_def7_two_callers_racing_one_approval_spend_it_once(
         f"the caller that lost the claim was refused {refusals!r}; it must either win or be told "
         "the approval is spent, never fail some other way"
     )
+
+
+def test_def7_an_intent_recovered_after_its_effect_was_chained_replays_the_approval(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """DEF-7 site 3 — `recover_intents`, the path that bypasses both claims.
+
+    Found by reading rather than by waiting: `_authorize`'s claim is the only thing standing between
+    one approval and two envelopes, and `recover_intents` never goes through `_authorize` at all. It
+    re-emits the stored body verbatim — `authorization` included — with no claim, no seen-set, and
+    nothing that knows the effect it describes may already be on the chain.
+
+    The window is the same shape as the other two, one layer out:
+
+        self._emitter.append(...)                  # chains the effect, spending the approval
+        self._store.resolve_intent(intent, ...)    # marks it done, afterwards, separately
+
+    A process that stops between those two leaves an open intent for an effect that *is* chained.
+    The next session recovers it and emits it again. That is three sequential gateway processes over
+    one file — which is exactly what `test_the_gate` runs, and why its failure is at a later `seq`
+    than the call it replays.
+
+    Deterministic: the interruption is modelled by making `resolve_intent` fail, which is what a
+    process dying in that window leaves behind.
+    """
+    harness = Harness(tmp_path)
+    _park_and_decide(harness, "create_issue", {"title": "ship it"}, approver=ROOT)
+
+    def citing_the_approval() -> list[dict[str, Any]]:
+        """Envelopes carrying this approval, whatever outcome they claim.
+
+        Filtering on `outcome == "applied"` is what the first version of this test did, and it
+        passed while the defect was live: the recovered envelope carries `attempted`, because the
+        write-ahead record is written before the effect is applied and says so. The property is not
+        about outcomes. It is that one single-use approval appears in one envelope.
+        """
+        return [
+            envelope
+            for _, envelope, _ in harness.store.unpushed(limit=100)
+            if envelope.get("authorization", {}).get("decision") is not None
+            and envelope.get("execution", {}).get("action") == "github.create_issue"
+        ]
+
+    # `resolve_intent` is made impossible to call successfully. On the defective code the applied
+    # path called it *after* the append, so this models a process stopping in that window: the call
+    # fails and the intent stays open for an effect that is already chained. On the fixed code the
+    # intent is closed inside the append's own transaction and this method is never reached, so the
+    # call simply succeeds — which is the whole property, stated as a difference in behaviour rather
+    # than as a comment.
+    monkeypatch.setattr(
+        harness.store,
+        "resolve_intent",
+        lambda *a, **k: (_ for _ in ()).throw(RuntimeError("a second statement that can fail")),
+    )
+    result = harness.call("create_issue", title="ship it")
+    assert "upstream result" in str(result), result
+
+    chained = citing_the_approval()
+    assert len(chained) == 1, f"{len(chained)} envelopes cite the approval, expected 1"
+    assert not harness.store.open_intents(harness.session.stream, harness.session.key.id), (
+        "the effect is chained and its write-ahead record is still open. The next session's "
+        "`recover_intents` will re-emit it — `authorization` and all — for the kernel to refuse "
+        "`gate-authorization-replayed`, wedging this emitter's stream (§05 §7.1). Closing the "
+        "intent must be part of the append's transaction, not a statement after it."
+    )
+
+    # And the recovery path itself, against what it now finds: nothing to recover, so nothing to
+    # replay. A second call to it must stay a no-op rather than resurrecting a closed record.
+    assert harness.enforcer.recover_intents(harness.session) == 0
+    assert len(citing_the_approval()) == 1

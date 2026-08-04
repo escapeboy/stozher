@@ -301,6 +301,7 @@ class Enforcer:
                 policy,
                 authorization=authorization,
                 started_at=started_at,
+                intent=intent,
             )
         except Exception as e:  # noqa: BLE001 - a validation refusal or a failing disk, alike
             # §06 §6: a code path that returns success without emitting is non-conformant. The
@@ -315,7 +316,6 @@ class Enforcer:
                 classification=classification.classification,
                 classification_tier=classification.tier,
             ) from e
-        self._store.resolve_intent(intent, self._clock.now())
         # Zero-touch: the upstream result is returned unchanged. The gateway may refuse, and a
         # refusal is visible; it never rewrites or summarizes what the agent asked for.
         return result
@@ -1297,12 +1297,11 @@ class Enforcer:
                 policy,
                 authorization=authorization,
                 started_at=started_at,
+                intent=intent,
             )
         except Exception:  # noqa: BLE001 - a local refusal must be loud, not fatal to the caller
             logger.exception("the gateway could not chain an envelope for %s", classification.action)
             return None
-        if intent is not None:
-            self._store.resolve_intent(intent, self._clock.now())
         return envelope_id
 
     def _chain_effect(
@@ -1316,6 +1315,7 @@ class Enforcer:
         policy: Policy,
         authorization: dict[str, Any] | None = None,
         started_at: str | None = None,
+        intent: str | None = None,
     ) -> str:
         body, payloads = self._effect_body(
             session,
@@ -1328,7 +1328,13 @@ class Enforcer:
             authorization,
             started_at,
         )
-        return self._emitter.append(session.key, session.stream, body, payloads)
+        # The intent is closed *inside* the append's transaction (DEF-7, third site): "this effect
+        # is chained" and "its write-ahead record is closed" must be one fact, or a process that
+        # stops between them leaves `recover_intents` an open record for an effect already on the
+        # chain — and recovery re-emits it, `authorization` and all.
+        return self._emitter.append(
+            session.key, session.stream, body, payloads, resolve_intent=intent
+        )
 
     def _effect_body(
         self,

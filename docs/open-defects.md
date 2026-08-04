@@ -143,17 +143,49 @@ against the symptom's frequency rather than against the symptom.** An intermitte
 rarer looks identical to an intermittent failure being fixed, and the only thing that separates them
 is a reproduction — which existed for the two sites, and not for this.
 
-### What is known about the residue
+### The third site, found by reading rather than by waiting
 
-Nothing established. The gateway's own "already claimed" line never appears in the failing run, so
-whatever emits the second envelope does not pass through site 1's claim. The e2e runs three gateway
-**processes** in sequence over one SQLite file, and the refused envelope is at `seq` 7 of a stream
-those processes share.
+The row's next step was costed as *"wait for a failure that now explains itself"*. That framing was
+wrong: `_authorize`'s claim is the only thing between one approval and two envelopes, so the
+question worth asking was **what emits an effect without going through `_authorize`**. One thing
+does, and it is in the file:
 
-**Next diagnostic, in order of cost:** read the failing run's envelope at `seq` 7 to learn which
-action replayed — the log truncates it — before proposing any third site. `gh run view --job <id>
---log` carries the full record. Only after that is it worth theorising, and this time the theory
-does not get to be the fix.
+```python
+self._emitter.append(...)                  # chains the effect, spending the approval
+self._store.resolve_intent(intent, ...)    # closes the write-ahead record, afterwards, separately
+```
+
+`recover_intents` re-emits any open write-ahead record on the next session — `record = dict(body)`,
+`authorization` included — with no claim, no seen-set and no way to know the effect it describes is
+already on the chain. A process that stops between those two statements leaves exactly that. And
+`test_the_gate` runs **three gateway processes in sequence over one file**, which is why its failure
+sits at a later `seq` than the call it replays, and why macOS and Linux disagree: what differs is
+teardown timing.
+
+**Fixed** by making the two one fact: `append_next` takes the intent and closes it *inside* the
+transaction that inserts the envelope. Both call sites hand it down; the two post-hoc
+`resolve_intent` calls are gone.
+
+**Bound** by `test_def7_an_intent_recovered_after_its_effect_was_chained_replays_the_approval`, and
+the test is worth reading for how it discriminates: it makes `Store.resolve_intent` raise, then
+asserts the call **succeeds** and leaves no open intent. On the defective code that method was
+reached and the call failed; on the fixed code it is never reached at all. Mutation-tested by
+restoring the post-hoc statement — it fails that test alone.
+
+**A test that passed while the defect was live, and why.** The first version of it counted envelopes
+with `outcome == "applied"`. The recovered envelope carries `attempted`, because the write-ahead
+record is written before the effect is applied and says so — so the count was 1 and the test was
+green over a live defect. It now counts envelopes *citing the approval*, whatever outcome they
+claim, which is the property. Found by probing what recovery actually did rather than accepting a
+green.
+
+### What is still not known
+
+Whether this third site is what CI hit. It is consistent with every observation — the later `seq`,
+the process boundary, the platform split — and consistency is not proof. The residue's rate was
+1 failure in 8 runs, so silence for a while will not settle it either. **What would:** the
+instrumentation added the same day means the next occurrence names the action in its own failure
+message, and if that action is one whose intent should have been closed, this was it.
 
 ## DEF-6 — a kernel that could not answer was recorded as one that said no
 
