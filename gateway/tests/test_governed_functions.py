@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import contextlib
 import secrets
+import sys
 import threading
 from pathlib import Path
 from typing import Any
@@ -540,22 +541,24 @@ def test_one_governor_driven_from_several_threads_builds_one_unbroken_chain(
     governor: Any,
 ) -> None:
     """ADR-0028 §6: *"nothing in the suite exercises one `Governor` from several threads. Treat
-    concurrent use as unverified until a test says otherwise."* This is that test.
+    concurrent use as unverified until a test says otherwise."*
 
-    The workload is `benign` on purpose, and the reason is worth recording because the obvious
-    choice is wrong. Written first against a `read` action, this test passed with the emitter's
-    chain lock *and* window lock each replaced by a no-op — because `read` folds into aggregates
-    (§02 §7), so ninety-six calls produced a couple of envelopes and the chaining the test claimed
-    to exercise barely ran. A concurrency test that cannot fail when the lock is removed is not
-    evidence of anything, and would have been recorded as evidence.
+    Two things had to be got right before this test was worth anything, and both were found by
+    mutating rather than by reasoning:
 
-    `benign` emits one envelope per call, so the same ninety-six calls contend for ninety-six chain
-    positions. A lost update here is silent by construction — a duplicate `seq` or a `prev-hash`
-    naming a sibling, in a chain that still verifies line by line.
+    **The class matters.** Written first against a `read` action it passed with every guard removed,
+    because `read` folds into aggregates (§02 §7) — ninety-six calls made two envelopes and the
+    chaining it claimed to exercise barely ran. `benign` emits one envelope per call, so the calls
+    contend for one chain position each.
 
-    In-process concurrency is the shape this path invites: `Governor` exists for a program that
-    already has its own threads (ADR-0028 §1), while the proxied path gets serialisation for free
-    from being an MCP server.
+    **The GIL matters more.** Even on `benign` the test passed with the emitter's chain lock, its
+    window lock, the store's thread lock and the `BEGIN IMMEDIATE` each removed in turn. CPython
+    switches threads every 5ms by default and the read-head-then-insert section finishes far inside
+    that, so a thread was essentially never preempted where it counts. `setswitchinterval(1e-6)`
+    makes the contention real. Test-only — no seam is added to shipped code for it.
+
+    A concurrency test that cannot fail when the lock is removed is not evidence, and would have
+    been filed as evidence (ADR-0013 §2).
     """
     now = clock_module.now()
     governor._gateway.store.cache_policy(
@@ -569,30 +572,35 @@ def test_one_governor_driven_from_several_threads_builds_one_unbroken_chain(
     )
 
     threads = 8
-    per_thread = 12
+    per_thread = 24
     errors: list[BaseException] = []
     barrier = threading.Barrier(threads)
+    previous_interval = sys.getswitchinterval()
+    sys.setswitchinterval(1e-6)
 
-    with governor:
+    try:
+        with governor:
 
-        @governor.governed(server="ops", schema={"type": "object", "properties": {}})
-        def touch(name: str) -> str:
-            return f"touched {name}"
+            @governor.governed(server="ops", schema={"type": "object", "properties": {}})
+            def touch(name: str) -> str:
+                return f"touched {name}"
 
-        def drive(n: int) -> None:
-            try:
-                barrier.wait(timeout=10)  # release them together, so they actually contend
-                for i in range(per_thread):
-                    touch(f"n-{n}-{i}")
-            except BaseException as exc:  # noqa: BLE001 — a thread's failure must reach the test
-                errors.append(exc)
+            def drive(n: int) -> None:
+                try:
+                    barrier.wait(timeout=30)  # release them together, so they actually contend
+                    for i in range(per_thread):
+                        touch(f"n-{n}-{i}")
+                except BaseException as exc:  # noqa: BLE001 — a thread's failure must reach the test
+                    errors.append(exc)
 
-        workers = [threading.Thread(target=drive, args=(n,)) for n in range(threads)]
-        for worker in workers:
-            worker.start()
-        for worker in workers:
-            worker.join(timeout=30)
-        assert not any(w.is_alive() for w in workers), "a governed worker did not finish"
+            workers = [threading.Thread(target=drive, args=(n,)) for n in range(threads)]
+            for worker in workers:
+                worker.start()
+            for worker in workers:
+                worker.join(timeout=120)
+            assert not any(w.is_alive() for w in workers), "a governed worker did not finish"
+    finally:
+        sys.setswitchinterval(previous_interval)
 
     assert not errors, f"governed calls raised under contention: {errors[:3]}"
 
@@ -600,16 +608,14 @@ def test_one_governor_driven_from_several_threads_builds_one_unbroken_chain(
     # Filtered by action rather than counting every effect: opening the session is itself a `benign`
     # effect (§10 §1.6), so the stream carries one envelope this workload did not produce.
     effects = [
-        e
-        for e in envelopes
-        if e["kind"] == "effect" and e["execution"]["action"] == "ops.touch"
+        e for e in envelopes if e["kind"] == "effect" and e["execution"]["action"] == "ops.touch"
     ]
     assert len(effects) == threads * per_thread, (
         f"{threads * per_thread} governed calls were made and {len(effects)} effects recorded — "
         "an audit that undercounts under load is the failure this test exists for"
     )
 
-    # The chain is whole: contiguous from 0 per stream, every link naming its predecessor. A lock
+    # The chain is whole: contiguous from 0 per stream, every link naming its predecessor. A guard
     # that did not hold across read-and-insert shows up here and nowhere else.
     by_stream: dict[str, list[dict[str, Any]]] = {}
     for envelope in envelopes:
