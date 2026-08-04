@@ -144,9 +144,31 @@ that is a change to `Enforcer`, not to `governed`.
 - **No attestation, on either path.** Nothing proves a program went through the gateway at all. A
   clean audit trail and a bypassed one are indistinguishable today (ADR-0026), and in-process does
   not make this worse — the MCP client's own config is one edit away from the same result.
-- **Thread-safety is not bound by a test.** The emitter chains under a lock and the store holds the
-  writer lock across read-and-insert, but nothing in the suite exercises one `Governor` from several
-  threads. Treat concurrent use as unverified until a test says otherwise.
+- **Thread-safety is now exercised, and is still not *discriminated*.** ~~Nothing in the suite
+  exercises one `Governor` from several threads.~~ Something does:
+  `gateway/tests/test_governed_functions.py::test_one_governor_driven_from_several_threads_builds_one_unbroken_chain`
+  drives one `Governor` from eight threads released together on a barrier, ninety-six `benign` calls
+  contending for ninety-six chain positions, and asserts every effect was recorded and every stream
+  is contiguous from 0 with each `prev-hash` naming its predecessor.
+
+  **What that is worth, stated precisely, because the obvious summary would overstate it.** The
+  observable property holds under real contention — that is more than existed before, and it is what
+  "treat concurrent use as unverified" was asking for. But four mutations were tried, each removing
+  one guard independently: the emitter's window lock, the emitter's chain lock, the store's thread
+  lock, and the `BEGIN IMMEDIATE` that makes the read-and-insert atomic. **The test passed under
+  every one of them.** Under CPython's GIL this workload does not interleave at the critical
+  section, so the test is a smoke test for concurrent use, not evidence that any particular guard is
+  load-bearing.
+
+  Recording that rather than writing "thread-safety is bound" is the whole of ADR-0013 §2: a test
+  that cannot fail when the guard is removed protects nothing, and a residual closed on one is worse
+  than one left open, because the next reader stops looking.
+
+  **What would discriminate it:** a seam that forces a yield between the head read and the insert,
+  or a free-threaded build. Neither exists here today. An earlier draft of this test used a `read`
+  action and was weaker still — `read` folds into aggregates (§02 §7), so ninety-six calls produced
+  two envelopes and the chaining it claimed to exercise barely ran; the `benign` workload is that
+  correction.
 - **The scope string is the integrator's.** `server="billing"` is asserted, not authenticated. Policy
   is written against action names, so an adopter who names two different things `billing` gives them
   one policy. The proxied path derives the scope from configuration; this one does not.

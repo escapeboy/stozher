@@ -67,6 +67,15 @@ two-envelope sequence, the direct-human mandate rule and its two-root consequenc
 feed's endpoint and epoch, what a revocation costs the emitter, when the `revoke-cached` duty ends,
 and the rate-limit's home.
 
+**On the arithmetic, resolved 2026-08-04 after ADR-0029 §8 flagged it as unverified.** Nine plus
+seven is sixteen and §1's table has fifteen rows, and neither number is wrong: they count different
+things. §1 counts **rules in `spec/`**; §2a counts **asks discharged**. The two diverge at exactly one
+row — *"a named human acting directly still acts under a mandate another human granted — so changing
+the root set needs two enrolled roots"* — which is one rule answering two of the seven asks above
+(the direct-human mandate rule, and its two-root consequence). Nine first-pass rows plus six
+second-pass rows is fifteen; nine plus seven asks is sixteen. Stated here so the next reader does not
+have to re-derive it, and so neither number gets "corrected" into agreement with the other.
+
 Recorded because the failure mode was mine and it is a common one: an inventory built from a grep
 answers the question the grep asked. The asks were phrased as *"spec text needed"*, *"should gain"*,
 *"spec decision needed"* — prose, not `MUST`. The number in the design note was the only thing that

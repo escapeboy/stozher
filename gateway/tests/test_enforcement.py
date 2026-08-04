@@ -1008,3 +1008,47 @@ def test_every_effect_carries_its_arguments_as_a_payload_beside_the_envelope(
     # forwarded, so the arguments in the store are the only record that it was tried at all.
     assert harness.forwarded == []
     assert envelope["execution"]["outcome"] == "attempted"
+
+
+def test_the_approved_effect_carries_no_argument_values_in_any_signed_byte(
+    harness: Harness,
+) -> None:
+    """§06 §4.4 rule 6, which ADR-0029 §8 recorded as holding *structurally* and untested.
+
+    "Structure is not a test" is this project's own phrase (ADR-0013 §2: a guard no test binds is a
+    guard a future edit deletes). The structure in question is that `authorization` is built as
+    `{"request": parked.request, "decision": parked.decision}` and §06 §1.1's member set is closed —
+    so an `arguments` member has nowhere to enter. One helpful edit widening `authorization.request`
+    to "everything the submission carried" would breach the retention ceiling in a signed object,
+    and every test would still have passed.
+
+    The pairing is the point: the *envelope* carries no values, and the payload beside it carries
+    them all. §04 §5.2 binds the two by hash precisely so the values can be erased later without
+    touching a byte anyone signed.
+    """
+    secret = "delete everything in acme/backend"
+    _park_and_decide(harness, "create_issue", {"title": secret}, approver=ROOT)
+    assert "upstream result" in harness.call("create_issue", title=secret)
+
+    applied = [e for _, e, _ in harness.store.unpushed(limit=50) if e.get("kind") == "effect"]
+    assert applied, "the approved call emitted no effect"
+    envelope = applied[-1]
+    assert envelope["execution"]["outcome"] == "applied"
+
+    # The claim, over the whole signed object rather than over the members we happen to remember:
+    # nothing an approver's or emitter's signature covers contains the values themselves.
+    assert secret not in canonicalize(envelope), (
+        "argument values reached a signed envelope: " + canonicalize(envelope)
+    )
+    assert "arguments" not in envelope["authorization"]["request"], envelope["authorization"]
+    assert "arguments" not in envelope["evidence"], envelope["evidence"]
+    # `evidence` may hold the commitment and only the commitment.
+    assert envelope["evidence"]["payload-hash"]
+
+    # And the other half, so this test cannot pass by the arguments having been lost altogether —
+    # which would satisfy every assertion above while destroying the evidence ADR-0030 exists for.
+    payloads = [p for _, e, ps in harness.store.unpushed(limit=50) if e.get("kind") == "effect" for p in ps]
+    assert any(secret in canonicalize(p["payload"]) for p in payloads), (
+        "the values are in no payload either, so they were not withheld from the envelope — "
+        "they were lost"
+    )
