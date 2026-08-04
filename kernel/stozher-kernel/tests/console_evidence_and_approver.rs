@@ -373,6 +373,53 @@ async fn the_export_says_where_the_argument_values_are_without_putting_them_in_t
 }
 
 #[tokio::test]
+async fn the_audit_page_names_the_payload_route_as_the_export_does() {
+    // ADR-0030 §6, the fourth residual: the export's sentence was bound and the console's was not,
+    // so "a template edit could silently reopen half of §4". Half a fix is the shape this project
+    // keeps producing — the fact was stated on two surfaces and asserted on one.
+    //
+    // The route string is asserted rather than the prose around it: an auditor who cannot find
+    // where the argument values live is the whole failure this sentence exists to prevent, and the
+    // wording may improve without the address being allowed to disappear.
+    let world = world().await;
+    effect_with_arguments(&world, 4_999_000).await;
+
+    let page = get(&world, "/console/audit").await;
+    assert_eq!(page.status, StatusCode::OK);
+    assert!(
+        page.body.contains("/v1/payloads/"),
+        "the audit page no longer tells a reader where the argument values are served: {}",
+        page.body
+    );
+    // And the same guard as the export: naming the route must not become quoting the values.
+    assert!(
+        !page.body.contains("4999000"),
+        "argument values leaked onto the audit page, which has no retention ceiling of its own"
+    );
+}
+
+#[test]
+fn the_baseline_profile_keeps_the_retention_numbers_it_is_documented_to_keep() {
+    // ADR-0030 §6, the third residual: the tests bound the *mechanism* — a payload survives inside
+    // its `retain-until` and is swept after — against a `retain-until` each test chose for itself.
+    // The numbers in the shipped profile were bound by nothing, so editing them would have broken
+    // no test while changing how long every deployment keeps the arguments of a call that ran.
+    //
+    // `genesis.rs`'s `POLICY_EVIDENCE_SECONDS` is derived from the `consequential` value below and
+    // documented as such, so these two must not be allowed to drift apart either.
+    let document = stozher_kernel::policy::baseline_conservative(
+        "2026.01.1",
+        "2026-01-01T00:00:00.000Z",
+        &["human:root"],
+    );
+    let ttl = &document["evidence-ttl"];
+    assert_eq!(ttl["read"].as_str(), Some("P0D"), "{ttl}");
+    assert_eq!(ttl["benign"].as_str(), Some("P30D"), "{ttl}");
+    assert_eq!(ttl["consequential"].as_str(), Some("P365D"), "{ttl}");
+    assert_eq!(ttl["prohibited"].as_str(), Some("P3650D"), "{ttl}");
+}
+
+#[tokio::test]
 async fn the_export_renders_as_a_document_that_says_it_is_not_the_record() {
     // "NDJSON is not a document" — a compliance officer hand-wrote the cover memo for their auditor
     // because the product emitted no artefact a lawyer reads.
