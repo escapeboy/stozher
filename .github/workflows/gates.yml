@@ -1,0 +1,162 @@
+# The gates, run by something that is not the author's laptop.
+#
+# `docs/product-completion-design.md` §62 put CI in scope with the reason already written: *"the
+# product's thesis is 'provable, not asserted'; unverifiable claims contradict it."* Until this file
+# existed, every "371 passed / 0 failed" in every commit message on this repository was a claim from
+# one machine, checkable by nobody — which is the exact shape of the thing this product is against.
+# `gateway/tests/support.py` even carries `# pragma: no cover - CI always has cargo`, written by
+# someone who assumed this file was already here.
+#
+# The jobs mirror what a run actually does, in the same order and with the same flags. A CI that
+# runs a *tidier* command than the developer is a second opinion about a different program.
+#
+# Only first-party actions (`actions/*`) are used, and Rust comes from the runner's preinstalled
+# rustup rather than a marketplace action. For a project whose subject is what a component is
+# permitted to do, a third-party action holding a token is not a convenience worth the surface.
+
+name: gates
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  kernel:
+    name: kernel — fmt, clippy, tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Toolchain
+        run: |
+          rustup toolchain install stable --profile minimal --component rustfmt,clippy
+          rustup default stable
+          rustc --version && cargo --version
+
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            kernel/target
+          key: cargo-${{ runner.os }}-${{ hashFiles('kernel/Cargo.lock') }}
+          restore-keys: cargo-${{ runner.os }}-
+
+      - name: fmt
+        working-directory: kernel
+        run: cargo fmt --all --check
+
+      # `-D warnings` because this project treats clippy as a reviewer rather than a linter, and a
+      # warning nobody must act on is a warning nobody reads.
+      - name: clippy
+        working-directory: kernel
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings
+
+      # `--test-threads=1` is the documented invocation, not a workaround: several suites drive a
+      # real store on a real file and a parallel run is a different experiment.
+      # `--locked` for the reason `gateway/pyproject.toml` states about its own upper bound — a clean
+      # build must fail when the lock is stale, rather than resolving something nobody tested.
+      - name: test
+        working-directory: kernel
+        run: cargo test --workspace --locked -- --test-threads=1
+
+  gateway:
+    name: gateway — ruff, mypy --strict, tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # The gateway suite builds and boots the real kernel binary for its integration tests
+      # (`support.py`), so this job needs cargo too. That is the point of those tests: an
+      # out-of-process witness rather than a mock agreeing with itself.
+      - name: Toolchain
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup default stable
+
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            kernel/target
+          key: cargo-gw-${{ runner.os }}-${{ hashFiles('kernel/Cargo.lock') }}
+          restore-keys: cargo-gw-${{ runner.os }}-
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install
+        working-directory: gateway
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]"
+
+      - name: ruff
+        working-directory: gateway
+        run: ruff check .
+
+      - name: mypy --strict
+        working-directory: gateway
+        run: mypy --strict src
+
+      # The quarantine (`-m open_defect`) is deliberately not run here. It is *expected to fail* when
+      # it holds anything, so a job that ran it would be red for a known reason and stop being read —
+      # which is the failure `gateway/pyproject.toml` describes at length. What guards it instead is
+      # `tests/test_defect_register.py`, which is in this default run and binds the register to the
+      # markers in both directions, plus a no-orphan check.
+      - name: pytest
+        working-directory: gateway
+        run: pytest -q
+
+  corpus:
+    name: corpus — the vectors are byte-stable
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install
+        run: pip install pynacl
+
+      # The corpus is the only artifact that asks both implementations the same question, so a
+      # generator whose output has drifted from the committed files is a silent divergence between
+      # the Rust kernel and the Python gateway — not a formatting nit. `--exit-code` makes
+      # "regenerating changes something" a failure rather than a diff nobody looks at.
+      - name: Regenerate and compare
+        run: |
+          python3 spec/vectors/generate_vectors.py
+          git diff --exit-code -- spec/vectors/
+
+  citations:
+    name: records — every cited test exists
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install
+        working-directory: gateway
+        run: pip install -e ".[dev]"
+
+      # Cheap and independent of the suites: `docs/` cites tests by name, and a rename that leaves a
+      # decision record pointing at nothing makes the record unfalsifiable. Run on its own so the
+      # signal is legible when the rest is green.
+      - name: Citations resolve
+        working-directory: gateway
+        run: pytest -q tests/test_doc_citations.py
