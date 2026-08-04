@@ -335,11 +335,20 @@ class Enforcer:
             record["emitted-at"] = now
             record["execution"] = {**record["execution"], "finished-at": now}
             try:
-                self._emitter.append(session.key, session.stream, record, payloads)
+                # DEF-7, the fourth site — and the one that mattered, because this is the only path
+                # that *re-emits*. A recovered record carries its `authorization` verbatim, so a
+                # second recovery hands one single-use approval to a second envelope and the kernel
+                # refuses it `gate-authorization-replayed`, wedging the stream for everything
+                # behind it. `claim_gate_use` cannot guard this: the claim was written by the
+                # original spend and reads "already claimed" in the legitimate case too. The only
+                # fact that separates them is whether the effect reached the chain — so chaining it
+                # and closing its record must be one transaction, not two.
+                self._emitter.append(
+                    session.key, session.stream, record, payloads, resolve_intent=intent_id
+                )
             except Exception:  # noqa: BLE001 - one unchainable record must not strand the rest
                 logger.exception("a write-ahead record could not be recovered into the chain")
                 continue
-            self._store.resolve_intent(intent_id, now)
             recovered += 1
         if recovered:
             logger.error(

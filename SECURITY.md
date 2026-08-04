@@ -18,10 +18,15 @@ owner's word, which is what it is, rather than as a report you can read.
 
 Two further things belong in the same breath:
 
-- **The corpus half of the release gate was waived, not met.** The plan's definition of done was an
-  independent implementation, written from `spec/` alone by someone who had not read this code,
-  passing the vector corpus. No such implementation exists. The corpus has been exercised by two
-  implementations, both written here, from the same reading of the same text.
+- **The corpus half of the release gate was waived and then met — by an agent, not a human.** The
+  plan's definition of done was an independent implementation, written from `spec/` alone by someone
+  who had not read this code, passing the vector corpus. On 2026-08-04 one was: 12 modules written
+  from `spec/*.md` and the corpus with no access to either reference implementation and none to the
+  corpus generator, passing **307 of 307 primitive vectors** and mutation-checked (ADR-0033). Read
+  ADR-0033 §4 before quoting that: an agent's blindness is a fresh context, not an independent mind,
+  and a rule that both the text *and* the corpus omit is invisible to this gate by construction. The
+  same exercise, rerun with the report demanded first, found **four real gaps** in `spec/` — one of
+  them a required wire value the text never defined at all.
 - **The release immediately before this one found twelve real defects** — eleven disagreements
   between those two implementations, found by *reading clauses* rather than running tests, plus one
   in the parser this file already named the highest-value target. All twelve had been green under the

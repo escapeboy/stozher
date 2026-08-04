@@ -46,9 +46,49 @@ directions, so the next open defect has somewhere to go and cannot be recorded w
 | DEF-4 | closed | **spec hole** (tooling/documentation), closed in the implementation | high for adoption, none for security | There was no way to obtain a verified policy without a live kernel, so a cold CI container could not open a session at all. `policy export-bundle` is the way in; the offline profile itself always worked. |
 | DEF-5 | not a defect | — | — | Proposed: ambient-state authorization on the `Governor` path. Investigated and **not found**; four independent bindings recompute authority per call. |
 | DEF-6 | closed | implementation defect, introduced by DEF-2's fix | high (availability) | One `503 x-store-unavailable` — the kernel's own *"could not answer; retry"* — wedged the emitter's stream permanently. Found by an intermittent `blocked` where `parked` was expected; reproduced deterministically. |
-| DEF-7 | observed | two sites fixed; the residue has no established mechanism | high (availability); **no confidence loss** — the kernel refused correctly throughout | A catalog seed could be applied twice, spending one single-use approval on two envelopes; the kernel refused the second `gate-authorization-replayed` and the emitter's stream wedged. Found by CI on Linux (run **30905170959**, 1 of 3 runs) — never on the author's macOS in eight days; reproduced deterministically with no concurrency; **two** check-then-act sites found and fixed (`Store.claim_gate_use`), each bound by a reproduction that fails deterministically when reverted — **and the original CI failure still reproduces on Linux at 1-in-2** (run 30910475650, the commit containing both fixes). Two real defects are closed inside this one; the defect the row was opened for is not. |
+| DEF-7 | observed | four check-then-act sites, all fixed; the fourth is the one CI was failing on | high (availability); **no confidence loss** — the kernel refused correctly throughout | A single-use approval spent on two envelopes; the kernel refused the second `gate-authorization-replayed` and the emitter's stream wedged. Found by CI on Linux (run **30905170959**) — never on the author's macOS in eight days. Three sites were found and fixed on 2026-08-04 and **CI stayed red**: 13 of the following 34 runs failed, 12 of them the gateway job on one signature. The fourth site is `Enforcer.recover_intents`, and it is the only path that *re-emits* — see below. Fixed, with `gateway/tests/test_def7_recovery_replay.py` failing deterministically when reverted. **The row stays `observed` until CI says otherwise**, which is the whole lesson of the first close. |
+| DEF-8 | observed | unestablished; kernel-side, and a different mechanism from DEF-7 | medium (CI reliability); no product impact established | `Store::open` on a **freshly created, uniquely named** scratch file failed `x-store-unavailable: database is locked` inside `s6_divergent_decisions_contend_for_the_core_stream`. Observed once in 34 runs — GitHub Actions run **30928079238**, job `kernel — fmt, clippy, tests`, panic at `stozher-testkit/src/lib.rs:161`. The obvious explanation was checked and is **wrong**: `scratch()` includes a nanosecond stamp, so the six iterations do not share a path, and the raw pool at `concurrency.rs:1191` is closed. `busy_timeout` is 30s on every kernel connection, which makes a genuine `SQLITE_BUSY` on a new file hard to account for. No mechanism, therefore no reproduction, therefore this status. |
 
-## DEF-7 — one approval, two envelopes. Open, with a deterministic reproduction.
+## DEF-7, the fourth site — recovery is the only path that re-emits, and it closed its record last
+
+*Written 2026-08-04, after three sites were fixed and CI stayed red for another 34 runs.*
+
+**What the log said, and what nobody read closely enough the first time.** Twelve of the thirteen
+red runs were the gateway job on one signature:
+
+    the kernel refused this session's stream gw:test-mbp:claude-code at seq 3
+    (gate-authorization-replayed: request 690c6f9e… was already used)
+
+The refusal comes from the **kernel**. The three sites fixed earlier all guard the *spend* — they
+stop this component handing one approval to two envelopes, and when they fire it is the *gateway*
+that refuses. A kernel-side refusal means the gateway believed it was spending an approval for the
+first time. So the surviving path was never one of the three.
+
+**It is `Enforcer.recover_intents`, and the giveaway was already written down.** `Store.append_next`
+grew its `resolve_intent` parameter for exactly this hazard, and its own docstring names the
+consumer: *"which the next session's `recover_intents` re-emitted, `authorization` and all"*. The
+producer of the open record was threaded through it. The re-emitter was not, and kept the same two
+statements in two transactions:
+
+    self._emitter.append(session.key, session.stream, record, payloads)   # chains the effect
+    self._store.resolve_intent(intent_id, now)                            # closes the record, after
+
+Recovery re-emits a write-ahead record **verbatim, `authorization` included**. `claim_gate_use`
+cannot guard it: the claim was written by the original spend, so it reads *already claimed* in the
+legitimate case too. The local ledger cannot separate "the envelope never reached the chain" from
+"it did and the record failed to close" — only atomicity can, which is why the fix is the append's
+own transaction and not another check.
+
+**Why Linux and not macOS.** `resolve_intent` opens its own connection and takes SQLite's writer
+lock. Under a busy database it can raise `database is locked` instead of returning. A lost `UPDATE`
+needs no crash and no signal — it needs a lock timeout, which is a wide window and not a microsecond
+one. That is consistent with 38% of runs; a crash-only window is not.
+
+**Status stays `observed`.** The mechanism is established, the reproduction fails deterministically
+when reverted, and the fix is in — and the last time this row was closed it was closed on frequency
+evidence and the close was wrong. It closes when CI says so, not when the argument sounds finished.
+
+## DEF-7 as it was first found — one approval, two envelopes, with a deterministic reproduction.
 
 **Found by CI on its first run, on a machine that was not the author's.** Eight days of running this
 suite many times a day on macOS never produced it; the first Linux run did — `test_the_gate`, an
