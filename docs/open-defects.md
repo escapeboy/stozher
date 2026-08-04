@@ -46,7 +46,7 @@ directions, so the next open defect has somewhere to go and cannot be recorded w
 | DEF-4 | closed | **spec hole** (tooling/documentation), closed in the implementation | high for adoption, none for security | There was no way to obtain a verified policy without a live kernel, so a cold CI container could not open a session at all. `policy export-bundle` is the way in; the offline profile itself always worked. |
 | DEF-5 | not a defect | — | — | Proposed: ambient-state authorization on the `Governor` path. Investigated and **not found**; four independent bindings recompute authority per call. |
 | DEF-6 | closed | implementation defect, introduced by DEF-2's fix | high (availability) | One `503 x-store-unavailable` — the kernel's own *"could not answer; retry"* — wedged the emitter's stream permanently. Found by an intermittent `blocked` where `parked` was expected; reproduced deterministically. |
-| DEF-7 | closed | implementation defect (gateway bookkeeping) | high (availability); **no confidence loss** — the kernel refused correctly throughout | A catalog seed could be applied twice, spending one single-use approval on two envelopes; the kernel refused the second `gate-authorization-replayed` and the emitter's stream wedged. Found by CI on Linux (run **30905170959**, 1 of 3 runs) — never on the author's macOS in eight days; reproduced deterministically with no concurrency; fixed by claiming the decision in one atomic statement before spending it (`Store.claim_gate_use`). The reproduction is now the regression test, unquarantined and green. |
+| DEF-7 | observed | two sites fixed; the residue has no established mechanism | high (availability); **no confidence loss** — the kernel refused correctly throughout | A catalog seed could be applied twice, spending one single-use approval on two envelopes; the kernel refused the second `gate-authorization-replayed` and the emitter's stream wedged. Found by CI on Linux (run **30905170959**, 1 of 3 runs) — never on the author's macOS in eight days; reproduced deterministically with no concurrency; **two** check-then-act sites found and fixed (`Store.claim_gate_use`), each bound by a reproduction that fails deterministically when reverted — **and the original CI failure still reproduces on Linux at 1-in-2** (run 30910475650, the commit containing both fixes). Two real defects are closed inside this one; the defect the row was opened for is not. |
 
 ## DEF-7 — one approval, two envelopes. Open, with a deterministic reproduction.
 
@@ -99,40 +99,50 @@ cheaper half of that plan — read whether the catalog write and the decision's 
 transaction — answered it in one file read. **Recording the hypothesis as a hypothesis is what made
 the cheap check the obvious next move instead of the expensive one.**
 
-### Fixed, at two sites — and the first fix was half of one
+### Two sites fixed, and the defect this row was opened for is not
 
 `Store.claim_gate_use` is the mechanism: the same `INSERT OR IGNORE` into `gate_seen`, whose
 `request_hash` is a PRIMARY KEY, **read for its outcome instead of run for its effect**. Exactly one
 caller wins it, across threads and across processes, in one statement that cannot be half-done.
 
-It had to go in **two** places, and the first attempt put it in one:
+**Site 1 — `_seed_catalog`.** The seed's decision is claimed before the envelope that spends it, and
+the seed's verification is given the seen-set the call path always had (it was passed `set()`, so a
+seed this very process had spent verified as fresh). Bound by
+`test_def7_a_seed_whose_catalog_write_did_not_land_is_applied_again`, which needs no concurrency.
 
-1. `_seed_catalog` — the site the reproduction was built for. The seed's decision is now claimed
-   before the envelope that spends it, and the seed's verification is given the seen-set the call
-   path always had (it was passed `set()`, so a seed this very process had spent verified as fresh).
-2. `_authorize` — the *call's own* approval. This one looked already correct: `record_gate_use` was
-   written **before** the effect is emitted, which reads like claim-before-spend. It is not.
-   `INSERT OR IGNORE` run and never checked means two callers in the window both "succeed" and both
-   go on to emit. **Reading the outcome is the whole difference between writing a marker and holding
-   a claim.**
+**Site 2 — `_authorize`, the call's own approval.** This looked correct: `record_gate_use` is written
+*before* the effect is emitted, which reads like claim-before-spend. It is not. An `INSERT OR IGNORE`
+nobody reads means two callers in the window both "succeed" and both emit. Bound by
+`test_def7_two_callers_racing_one_approval_spend_it_once`, which fails **6 of 6** when the site is
+reverted and passes 5 of 5 with it — deterministic in both directions.
 
-Site 2 was found by the fix for site 1 not working: with only the seed claimed,
-`test_the_gate` still produced `gate-authorization-replayed` — 1 run in 6, now on macOS as well as
-on Linux, where eight days of running it had produced none. The first fix made the defect *easier to
-see*, which is the only reason the second site was found rather than shipped past.
+Both are real defects and both are closed. Neither is the one this row was opened for.
 
-That is this repository's own recurring shape — a fix applied to N−1 of N sites — and it is recorded
-here rather than smoothed over, because the run that produced it had spent the previous week
-cataloguing exactly that pattern in other people's work and then repeated it.
+### The correction, which is the important part of this section
 
-**Evidence:** `gateway/tests/test_def7_seed_replay.py`, unquarantined and green; mutation-tested by
-disabling the claim, which fails that test and nothing else. `test_the_gate` 8/8 in isolation and the
-full gateway suite 5/5 at 224 passed, against 1-in-6 before.
+**This row was marked `closed` on 2026-08-04 and that was wrong.** The evidence offered for it was
+local: 224 passed × 5, `test_the_gate` 8 of 8 in isolation, against roughly 1-in-6 before. Every one
+of those numbers was true and none of them was the claim. CI on the very commit carrying both fixes
+failed the same way — `gate-authorization-replayed`, `seq` 7, same stream — run **30910475650**,
+while the *same commit* on the other branch passed (30910472179). The residue reproduces on Linux at
+roughly 1 in 2.
 
-**Bounds on that evidence, stated:** the reproduction covers site 1 deterministically. Site 2's fix
-is bound by the *disappearance* of an intermittent failure, which is weaker — it is consistent with
-the fix and does not prove it. A deterministic reproduction for site 2 would need two callers
-interleaved inside `_authorize`, and is owed.
+The mistake has a name and this repository has been cataloguing it all week: **a fix was verified
+against the symptom's frequency rather than against the symptom.** An intermittent failure getting
+rarer looks identical to an intermittent failure being fixed, and the only thing that separates them
+is a reproduction — which existed for the two sites, and not for this.
+
+### What is known about the residue
+
+Nothing established. The gateway's own "already claimed" line never appears in the failing run, so
+whatever emits the second envelope does not pass through site 1's claim. The e2e runs three gateway
+**processes** in sequence over one SQLite file, and the refused envelope is at `seq` 7 of a stream
+those processes share.
+
+**Next diagnostic, in order of cost:** read the failing run's envelope at `seq` 7 to learn which
+action replayed — the log truncates it — before proposing any third site. `gh run view --job <id>
+--log` carries the full record. Only after that is it worth theorising, and this time the theory
+does not get to be the fix.
 
 ## DEF-6 — a kernel that could not answer was recorded as one that said no
 

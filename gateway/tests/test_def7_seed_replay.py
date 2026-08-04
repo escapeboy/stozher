@@ -34,6 +34,8 @@ by something else is still unestablished, and `docs/open-defects.md` says so.
 
 from __future__ import annotations
 
+import sys
+import threading
 from pathlib import Path
 from typing import Any
 
@@ -44,7 +46,7 @@ from stozher_gateway.canonical import object_hash
 from stozher_gateway.gate import ActionRequest, action_request
 from stozher_gateway.refusal import RefusalError
 
-from .test_enforcement import ROOT, Harness
+from .test_enforcement import ROOT, Harness, _park_and_decide
 
 
 def _seed_decision(request_hash: str) -> dict[str, Any]:
@@ -156,3 +158,67 @@ def test_def7_a_seed_whose_catalog_write_did_not_land_is_applied_again(
     # fixing the bookkeeping still fails here.
     citations = [envelope["authorization"]["decision"]["sig"]["key"] for envelope in both]
     assert len(citations) == len(set(map(str, citations))) or len(both) == 1, citations
+
+
+def test_def7_two_callers_racing_one_approval_spend_it_once(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """DEF-7 site 2 — the call's own approval, and the site the first fix missed.
+
+    This is the reproduction `docs/open-defects.md` recorded as owed. Site 1 was bound by state; this
+    one is genuinely about two callers in a window, so it is bound by contention — and by the same
+    lesson ADR-0028 §6 paid for: at CPython's stock 5ms switch interval the window never opens, and a
+    concurrency test that cannot fail is not evidence. `setswitchinterval(1e-6)` is what makes it
+    real. Test-only; no seam in shipped code.
+
+    What the defect was: `record_gate_use` is `INSERT OR IGNORE`, written *before* the effect is
+    emitted — which reads like claim-before-spend and is not, because nobody read its outcome. Two
+    callers both "succeeded" and both went on to emit against one single-use approval.
+    """
+    harness = Harness(tmp_path)
+    _park_and_decide(harness, "create_issue", {"title": "ship it"}, approver=ROOT)
+
+    results: list[str] = []
+    refusals: list[str] = []
+    barrier = threading.Barrier(2)
+
+    def spend() -> None:
+        try:
+            barrier.wait(timeout=30)
+            results.append(str(harness.call("create_issue", title="ship it")))
+        except RefusalError as e:
+            refusals.append(str(e.document.get("reason-code")))
+        except BaseException as e:  # noqa: BLE001 — a thread's failure must reach the test
+            refusals.append(f"unexpected: {e!r}")
+
+    previous = sys.getswitchinterval()
+    sys.setswitchinterval(1e-6)
+    try:
+        threads = [threading.Thread(target=spend) for _ in range(2)]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join(timeout=60)
+        assert not any(t.is_alive() for t in threads), "a racing caller did not finish"
+    finally:
+        sys.setswitchinterval(previous)
+
+    # One approval, one spend. The loser is refused locally and legibly rather than emitting an
+    # envelope the kernel will refuse `gate-authorization-replayed` — which is the difference
+    # between a component that asks twice and one that knows it already asked.
+    applied = [
+        envelope
+        for _, envelope, _ in harness.store.unpushed(limit=100)
+        if envelope.get("execution", {}).get("action") == "github.create_issue"
+        and envelope.get("execution", {}).get("outcome") == "applied"
+    ]
+    assert len(applied) == 1, (
+        f"{len(applied)} effects were emitted against one single-use approval. Both cite the same "
+        "decision; the kernel refuses the second `gate-authorization-replayed` and the emitter's "
+        "stream wedges (§05 §7.1)."
+    )
+    assert len(results) + len(refusals) == 2, (results, refusals)
+    assert refusals in ([], ["gate-authorization-replayed"]), (
+        f"the caller that lost the claim was refused {refusals!r}; it must either win or be told "
+        "the approval is spent, never fail some other way"
+    )
