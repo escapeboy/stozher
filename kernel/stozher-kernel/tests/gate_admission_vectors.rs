@@ -66,6 +66,48 @@ async fn post(world: &World, uri: &str, body: &Value) -> Answer {
     }
 }
 
+async fn get(world: &World, uri: &str) -> Answer {
+    let request = Request::builder()
+        .method("GET")
+        .uri(uri)
+        .header("authorization", format!("Bearer {TOKEN}"))
+        .body(Body::empty())
+        .expect("a request");
+    let response = http::router(Arc::clone(&world.kernel))
+        .oneshot(request)
+        .await
+        .expect("the router responds");
+    let status = response.status();
+    let bytes = response
+        .into_body()
+        .collect()
+        .await
+        .expect("a body")
+        .to_bytes();
+    Answer {
+        status,
+        body: String::from_utf8_lossy(&bytes).into_owned(),
+    }
+}
+
+/// Submit `n` distinct mismatching submissions, each of which records.
+async fn lie(world: &World, n: u32) {
+    for i in 0..n {
+        let committed = json!({"title": "ship it", "n": i});
+        let body = submission(
+            &request_for(world, &committed),
+            &json!({"title": "ship it to production", "n": i}),
+        );
+        let answer = post(world, "/v1/gate/requests", &body).await;
+        assert_eq!(
+            answer.status,
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "{}",
+            answer.body
+        );
+    }
+}
+
 fn request_for(world: &World, arguments: &Value) -> Value {
     world.action_request(&Ask {
         requester: &world.agent,
@@ -273,4 +315,76 @@ async fn every_gate_admission_vector_decides_as_the_corpus_says() {
             expected["record"]
         );
     }
+}
+
+#[tokio::test]
+async fn a_mismatch_is_surfaced_as_a_finding_and_not_as_a_longer_list() {
+    // ADR-0032 §5 named this gap and this test closes it. The records were already on the page —
+    // `/console/rejections` lists every refusal — but listed is not surfaced: a reader scanning a
+    // flat table of refused submissions has no reason to notice that a dozen of them share one
+    // submitter, which is the only fact that distinguishes a broken component from noise.
+    let world = world().await;
+    let limit = world.kernel.config.gate_rate_limit;
+    let threshold = (limit.per_subject / 2).max(1);
+
+    let quiet = get(&world, "/console/rejections").await;
+    assert_eq!(quiet.status, StatusCode::OK, "{}", quiet.body);
+    assert!(
+        !quiet.body.contains("had not committed to"),
+        "an empty rejection stream must not report a finding"
+    );
+
+    // One short of the threshold: still a row in the table, still not a finding. A page that named
+    // a single mismatch would be the approval-fatigue mistake §09 §7 describes, one surface over.
+    lie(&world, threshold - 1).await;
+    let below = get(&world, "/console/rejections").await;
+    assert!(
+        !below.body.contains("had not committed to"),
+        "{} mismatches were reported as a finding below the threshold of {threshold}: {}",
+        threshold - 1,
+        below.body
+    );
+
+    lie(&world, 1).await;
+    let page = get(&world, "/console/rejections").await;
+    assert!(
+        page.body.contains("had not committed to"),
+        "the finding did not appear at the threshold of {threshold}: {}",
+        page.body
+    );
+    assert!(
+        page.body.contains("agent:test-harness"),
+        "the finding must name the caller, not merely count: {}",
+        page.body
+    );
+}
+
+#[tokio::test]
+async fn at_the_cap_the_finding_says_the_count_stopped_and_the_component_may_not_have() {
+    // The honest half of §06 §4.4 rule 9's bound. Past the cap the kernel stops recording, so the
+    // number on the page stops moving — and a reader who took that as "it stopped happening" would
+    // have drawn exactly the wrong conclusion from a safety measure.
+    let world = world().await;
+    let limit = world.kernel.config.gate_rate_limit;
+
+    lie(&world, limit.per_subject).await;
+    let page = get(&world, "/console/rejections").await;
+    assert!(
+        page.body.contains("this count has stopped growing and the"),
+        "at the cap the finding must say why it stopped counting: {}",
+        page.body
+    );
+
+    // And the refusal itself changes shape at the cap, which is the wire-visible half.
+    let committed = serde_json::json!({"title": "one more"});
+    let over = post(
+        &world,
+        "/v1/gate/requests",
+        &submission(
+            &request_for(&world, &committed),
+            &serde_json::json!({"title": "something else"}),
+        ),
+    )
+    .await;
+    assert_eq!(over.status, StatusCode::TOO_MANY_REQUESTS, "{}", over.body);
 }

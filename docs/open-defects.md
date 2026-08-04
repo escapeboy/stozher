@@ -241,3 +241,17 @@ proposed in `docs/proposals/DEF-4-policy-bundle.md`; no `spec/` edit was made fo
 2026-08-03, fix run. **DEF-2 closed** — `spec/05 §7.1` names the refused state, the grace is
 reason-gated then class-bound, and `kernel.resume_stream` makes a wedge reversible under a root
 signature without validating anything it bridges.
+
+2026-08-03, same run. **DEF-6 closed** (`ae0d127`, `26eafe9`) — `push_pending` treated anything that
+was not an acceptance as a verdict about the bytes, so one `503 x-store-unavailable` (the kernel's
+own *"could not answer; retry"*) wedged the emitter's stream permanently. Found as an intermittent
+`blocked` where `parked` was expected, and reproduced deterministically before it was fixed rather
+than filed as a flake. The row was marked closed in the table above on the day and **this entry was
+not written until 2026-08-04**, which is the same ledger-staleness the spec-debt inventory was found
+to have; recorded late rather than backdated.
+
+2026-08-04. **No defect opened or closed.** The run closed the last of `docs/spec-debt.md` — row 8,
+`spec/06 §4.4` rule 9, ADR-0032 — and reconciled five stale claims in that inventory. Noted here
+because "the defect register did not change" is a fact worth being able to read, and because the
+`gate-arguments-hash-mismatch` record it added is now a **finding** on `/console/rejections`: the
+class of event this register exists for, arriving through a surface rather than through a log.

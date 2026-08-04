@@ -114,11 +114,33 @@ not something the current harness can do without a fault-injection seam it does 
 
 ## 5. What this does not settle
 
-The record exists, is chained, is signed, and appears in `/v1/rejections`. **Nothing surfaces it to a
-human on its own.** The console has no view that says "these components submitted arguments they had
-not committed to this week", and the §09 §7 spike surface covers the approval queue, not this. An
-auditor who knows to look will find it; one who does not, will not. That is a smaller gap than the
-one this closes and it is not closed here.
+**Amended 2026-08-04, the same day, because the paragraph that stood here overstated its own gap.**
+
+It said *"Nothing surfaces it to a human on its own."* That was wrong in the direction that flatters
+the finding. `/console/rejections` reads the stream with no reason filter, so a mismatch record
+appeared on the page from the moment it was written — with its reason, its submitter and its detail.
+What was missing was not visibility but a **finding**: the record sat undifferentiated among every
+other refusal, and a reader scanning a flat table has no reason to notice that eleven rows share a
+submitter. Writing "nothing surfaces it" instead of "nothing distinguishes it" is the same failure
+class as a ledger that lists paid debt, pointed the other way — and it was caught by opening the page
+rather than by re-reading the sentence.
+
+**Now closed.** `Store::argument_mismatch_spikes` groups the window's records by caller, and
+`/console/rejections` carries a named band above the table over the same window and the same cap that
+bound the record path, at the same half-cap threshold the §09 §7 gate spike uses. Bound by
+`gate_admission_vectors.rs::a_mismatch_is_surfaced_as_a_finding_and_not_as_a_longer_list`, which
+asserts the band is *absent* one short of the threshold — a finding that fires on a single mismatch
+is the approval-fatigue mistake §09 §7 describes, one surface over. Mutation-tested: a threshold of 1
+fails that test alone.
+
+The band also says what the number means at the cap, because the bound makes the count lie by
+omission: past the cap the kernel stops recording, so the figure stops moving while the component may
+not have. `at_the_cap_the_finding_says_the_count_stopped_and_the_component_may_not_have` binds that
+sentence; deleting it fails that test alone.
+
+No vector. The admission decision is cross-implementation and is in `gate-admission.json`; which
+console page names which finding is not a wire contract, and the §09 §7 gate spike it mirrors has no
+vector either.
 
 The wire contract also changed shape for one caller: a subject at the mismatch cap now receives `429
 gate-rate-limited` where it previously received `422 gate-arguments-hash-mismatch`. That is visible

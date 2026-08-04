@@ -1227,6 +1227,45 @@ impl Store {
         Ok(u32::try_from(as_u64(&row, "recorded")).unwrap_or(u32::MAX))
     }
 
+    /// Callers whose recorded argument mismatches since `since` reach `threshold` — the same
+    /// finding as [`Self::gate_request_spikes`], over the other thing §09 §7's cap now bounds.
+    ///
+    /// The records are already listed on the rejections page, undifferentiated among every other
+    /// refusal. That is visibility, not a finding: "a component submitted values its own signature
+    /// does not cover" is a statement about the *component*, and a reader scanning a flat list of
+    /// refused submissions has no reason to notice that eleven of them share a submitter.
+    ///
+    /// # Errors
+    ///
+    /// [`codes::STORE_UNAVAILABLE`].
+    pub async fn argument_mismatch_spikes(
+        &self,
+        since: &str,
+        threshold: u32,
+    ) -> Result<Vec<Value>> {
+        let rows = sqlx::query(
+            "SELECT submitted_by, COUNT(*) AS recorded, MAX(received_at) AS latest FROM rejections \
+             WHERE reason = ?1 AND received_at >= ?2 AND submitted_by IS NOT NULL \
+             GROUP BY submitted_by HAVING COUNT(*) >= ?3 ORDER BY recorded DESC",
+        )
+        .bind(crate::gatequeue::ARGUMENTS_HASH_MISMATCH)
+        .bind(since)
+        .bind(i64::from(threshold))
+        .fetch_all(&self.pool)
+        .await
+        .map_err(db)?;
+        Ok(rows
+            .iter()
+            .map(|r| {
+                serde_json::json!({
+                    "submitted-by": r.get::<String, _>("submitted_by"),
+                    "recorded": as_u64(r, "recorded"),
+                    "latest": r.get::<Option<String>, _>("latest")
+                })
+            })
+            .collect())
+    }
+
     /// Subjects whose parked requests since `since` reach `threshold` — the spike §09 §7 requires
     /// an interface to surface *as a finding*, rather than as a queue that is merely longer.
     ///

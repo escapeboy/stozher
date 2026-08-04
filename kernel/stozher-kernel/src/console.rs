@@ -577,6 +577,22 @@ struct RejectionsPage {
     count: String,
     head_hash: String,
     rows: Vec<RejectionRow>,
+    /// §06 §4.4 rule 9, surfaced the way §09 §7 surfaces its own cap: as a finding, not as a
+    /// longer list. ADR-0032 §5 named the absence of this.
+    mismatches: Vec<MismatchRow>,
+    mismatch_window: String,
+    mismatch_cap: String,
+}
+
+/// A caller that has submitted arguments its own requests do not commit to, often enough to name.
+struct MismatchRow {
+    submitted_by: String,
+    recorded: String,
+    latest: String,
+    /// At or over the cap, so further mismatches from this caller are refused *without* a record.
+    /// Worth saying out loud: past this point the finding stops growing, and the reason it stops is
+    /// not that the component stopped.
+    capped: bool,
 }
 
 #[derive(Template)]
@@ -1412,12 +1428,39 @@ async fn rejections(State(kernel): State<Arc<Kernel>>, headers: HeaderMap) -> Re
         Err(e) => return unavailable(&e),
     };
     let verified = crate::store::verify_rejection_chain(&chain, store.rejection_stream());
+    // The same window and the same cap that bound the record path (§06 §4.4 rule 9), so the finding
+    // and the refusal cannot drift apart, and the same half-cap threshold as the gate spike: the
+    // point of a finding is to arrive before the thing it warns about, not with it.
+    let limit = kernel.config.gate_rate_limit;
+    let now = kernel.ingest.clock().now();
+    let watch_from = match crate::clock::shift(&now, -limit.window_seconds) {
+        Ok(since) => since,
+        Err(e) => return unavailable(&e),
+    };
+    let mismatches = match store
+        .argument_mismatch_spikes(&watch_from, (limit.per_subject / 2).max(1))
+        .await
+    {
+        Ok(mismatches) => mismatches,
+        Err(e) => return unavailable(&e),
+    };
     render(&RejectionsPage {
         title: "Refused submissions",
         chain_valid: verified.is_ok(),
         count: listed.len().to_string(),
         head_hash: verified.ok().flatten().unwrap_or_else(|| "—".to_owned()),
         rows: listed.iter().map(rejection_row).collect(),
+        mismatch_window: limit.window_seconds.to_string(),
+        mismatch_cap: limit.per_subject.to_string(),
+        mismatches: mismatches
+            .iter()
+            .map(|m| MismatchRow {
+                submitted_by: m["submitted-by"].as_str().unwrap_or_default().to_owned(),
+                recorded: m["recorded"].to_string(),
+                latest: m["latest"].as_str().unwrap_or("-").to_owned(),
+                capped: m["recorded"].as_u64().unwrap_or(0) >= u64::from(limit.per_subject),
+            })
+            .collect(),
     })
 }
 
