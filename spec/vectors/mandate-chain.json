@@ -1,7 +1,7 @@
 {
   "v": "stozher/0.1",
   "kind": "mandate-chain",
-  "description": "Mandate chain verification (spec 03 section 5). Resolve `leaf-ref` in `mandates`, then walk to a human root using `roots`, `revocations`, `request`, `at`, `subject-key` and `max-delegation-depth`. On success `expected.human-root` and `expected.depth` MUST match; on failure `expected.error` MUST match.",
+  "description": "Mandate chain verification (spec 03 section 5). Resolve `leaf-ref` in `mandates`, then walk to a human root using `roots`, `revocations`, `at`, `subject-key`, `max-delegation-depth` and either `request` (the full tuple of section 4.2) or `resource-only` (the cognition form: match `resources` alone, the other three dimensions unconstrained). `max-delegation-depth`. On success `expected.human-root` and `expected.depth` MUST match; on failure `expected.error` MUST match.",
   "roots": [
     "ed25519:09b3c43478cc065aeeeba98ee919e6b007ff3ff122f86e0a4a3fbc5898092d3a",
     "ed25519:767e4626d1fccefbac1670e43e1b88f0635f07b3556a6f2c3bb8dac4175bbf5d"
@@ -1340,6 +1340,37 @@
       "expected": {
         "valid": false,
         "error": "mandate-unresolved"
+      }
+    },
+    {
+      "name": "cognition-resource-within-scope",
+      "description": "cognition on a resource the mandate's `resources` covers",
+      "leaf-ref": "caa82f3d9731544985d3ee0e8763623e21b1373818d6913681f23a17a8916d86",
+      "subject-key": "ed25519:9d88362815e38caea55513e6eade12df477c22bcf69bdc8659aa1c13d53c3e50",
+      "resource-only": "repo:acme/backend",
+      "at": "2026-07-26T09:15:00.000Z",
+      "max-delegation-depth": 3,
+      "revocations": [],
+      "expected": {
+        "valid": true,
+        "error": null,
+        "human-root": "human:mila",
+        "root-key": "ed25519:767e4626d1fccefbac1670e43e1b88f0635f07b3556a6f2c3bb8dac4175bbf5d",
+        "depth": 0
+      }
+    },
+    {
+      "name": "cognition-resource-outside-scope",
+      "description": "cognition on a resource no `resources` pattern covers — the three dimensions a cognition envelope cannot supply are unconstrained, the one it can is not",
+      "leaf-ref": "caa82f3d9731544985d3ee0e8763623e21b1373818d6913681f23a17a8916d86",
+      "subject-key": "ed25519:9d88362815e38caea55513e6eade12df477c22bcf69bdc8659aa1c13d53c3e50",
+      "resource-only": "model:some-model-nobody-granted",
+      "at": "2026-07-26T09:15:00.000Z",
+      "max-delegation-depth": 3,
+      "revocations": [],
+      "expected": {
+        "valid": false,
+        "error": "mandate-scope-not-permitted"
       }
     }
   ]

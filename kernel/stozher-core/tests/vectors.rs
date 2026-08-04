@@ -545,7 +545,14 @@ fn check_mandate_chain(report: &mut Report, id: &str, doc: &Value, vector: &Valu
         .unwrap_or_default();
     let subject_key =
         KeyId::parse(vector["subject-key"].as_str().expect("subject-key")).expect("key id");
-    let request = MandateRequest::from_value(&vector["request"]).expect("request");
+    // Either `request` (the full §4.2 tuple) or `resource-only` (the cognition form), never both.
+    // Reading whichever is present rather than defaulting: a runner that fell back to the unscoped
+    // walk for a cognition vector would pass the negative case, which is the defect the pair exists
+    // to catch — and it is the defect this implementation shipped until 2026-08-04.
+    let resource_only = vector["resource-only"].as_str();
+    let request = resource_only
+        .is_none()
+        .then(|| MandateRequest::from_value(&vector["request"]).expect("request"));
     let params = VerifyParams {
         roots: &roots,
         revocations: &revocations,
@@ -559,12 +566,14 @@ fn check_mandate_chain(report: &mut Report, id: &str, doc: &Value, vector: &Valu
         .expect("depth fits u32"),
     };
 
-    let result = verify_mandate_chain(
-        &mandates,
-        vector["leaf-ref"].as_str().expect("leaf-ref"),
-        &request,
-        &params,
-    );
+    let leaf = vector["leaf-ref"].as_str().expect("leaf-ref");
+    let result = match (&request, resource_only) {
+        (Some(request), None) => verify_mandate_chain(&mandates, leaf, request, &params),
+        (None, Some(resource)) => stozher_core::mandate::verify_mandate_chain_for_resource(
+            &mandates, leaf, resource, &params,
+        ),
+        _ => panic!("{id}: a vector carries exactly one of `request` and `resource-only`"),
+    };
     let expected = &vector["expected"];
     report.check(
         id,

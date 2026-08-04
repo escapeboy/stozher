@@ -49,13 +49,25 @@ def verify_mandate_chain(
     mandate_ref: str,
     request: MandateRequest | None,
     *,
+    resource_only: str | None = None,
     at: str,
     subject_key: str,
     roots: list[str],
     revocations: list[dict[str, Any]],
     max_depth: int = 3,
 ) -> MandateOk:
-    """Run §03 §5. `request` of ``None`` skips `scope_permits` only (the cognition entry point)."""
+    """Run §03 §5.
+
+    `request` of ``None`` skips `scope_permits`. **A `cognition` envelope must not use that**: it
+    carries `resource` (§02 §6) even though it carries no `component`, `action` or `classification`,
+    and §03 §5 requires the dimension it can supply to be matched. Pass it as `resource_only` —
+    `"<kind>:<name>"`, the spelling `execution.target` already uses — and the three dimensions the
+    envelope cannot speak to are treated as unconstrained.
+
+    Skipping the check whole because three of four dimensions are absent is what this parameter
+    exists to stop: it made `resources` bound every effect and no cognition, so a mandate could not
+    limit what an agent spends on at all.
+    """
     mandate = mandates.get(mandate_ref)
     if mandate is None:
         raise MandateRefusedError("mandate-unresolved", mandate_ref)
@@ -64,7 +76,7 @@ def verify_mandate_chain(
     revoked_at = _revocation_instants(revocations)
     depth = 0
     while True:
-        _verify_link(mandate, at, revoked_at, request)
+        _verify_link(mandate, at, revoked_at, request, resource_only)
         kind = mandate.get("mandate-kind")
         if kind in ("interactive", "standing"):
             if mandate.get("parent") is not None:
@@ -107,6 +119,7 @@ def _verify_link(
     at: str,
     revoked_at: dict[str, str],
     request: MandateRequest | None,
+    resource_only: str | None = None,
 ) -> None:
     if verify_signed_object(mandate) is None:
         raise MandateRefusedError("sig-invalid", "the mandate signature does not verify")
@@ -125,6 +138,10 @@ def _verify_link(
         raise MandateRefusedError("mandate-revoked", revoked)
     if request is not None and not scope_permits(mandate["scope"], request):
         raise MandateRefusedError("mandate-scope-not-permitted", request.action)
+    if resource_only is not None and not _matches(
+        mandate["scope"].get("resources", []), resource_only
+    ):
+        raise MandateRefusedError("mandate-scope-not-permitted", resource_only)
 
 
 def _revocation_instants(revocations: list[dict[str, Any]]) -> dict[str, str]:

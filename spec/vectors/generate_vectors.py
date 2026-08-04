@@ -1785,7 +1785,23 @@ def gen_mandate_chain() -> None:
         at: str = AT,
         revocations: list[dict] | None = None,
         max_depth: int = 3,
+        resource_only: str | None = None,
     ) -> dict:
+        # `resource-only` is the cognition form of §03 §5: the envelope supplies one dimension of
+        # §4.2's tuple and is matched on that one. A vector carries it *instead of* `request`, so a
+        # runner cannot silently treat it as a full match — the member it would read is absent.
+        if resource_only is not None:
+            return {
+                "name": name,
+                "description": desc,
+                "leaf-ref": leaf,
+                "subject-key": subject.key_id,
+                "resource-only": resource_only,
+                "at": at,
+                "max-delegation-depth": max_depth,
+                "revocations": revocations or [],
+                "expected": expected,
+            }
         return {
             "name": name,
             "description": desc,
@@ -1999,13 +2015,35 @@ def gen_mandate_chain() -> None:
             {"valid": False, "error": "mandate-unresolved"},
             "a reference to a mandate nobody has",
         ),
+        # A cognition envelope supplies `resource` and nothing else of the tuple (spec 02 section 6).
+        # The pair differs only in the resource: skipping the check because three dimensions are
+        # missing accepts both, which is what made a mandate unable to bound cognition spend at all.
+        case(
+            "cognition-resource-within-scope",
+            root_standing,
+            nightly,
+            {"valid": True, "error": None, "human-root": "human:mila", "root-key": mila.key_id, "depth": 0},
+            "cognition on a resource the mandate's `resources` covers",
+            resource_only="repo:acme/backend",
+        ),
+        case(
+            "cognition-resource-outside-scope",
+            root_standing,
+            nightly,
+            {"valid": False, "error": "mandate-scope-not-permitted"},
+            "cognition on a resource no `resources` pattern covers — the three dimensions a "
+            "cognition envelope cannot supply are unconstrained, the one it can is not",
+            resource_only="model:some-model-nobody-granted",
+        ),
     ]
 
     emit(
         "mandate-chain.json",
         "mandate-chain",
         "Mandate chain verification (spec 03 section 5). Resolve `leaf-ref` in `mandates`, then walk "
-        "to a human root using `roots`, `revocations`, `request`, `at`, `subject-key` and "
+        "to a human root using `roots`, `revocations`, `at`, `subject-key`, `max-delegation-depth` "
+        "and either `request` (the full tuple of section 4.2) or `resource-only` (the cognition form: "
+        "match `resources` alone, the other three dimensions unconstrained). "
         "`max-delegation-depth`. On success `expected.human-root` and `expected.depth` MUST match; on "
         "failure `expected.error` MUST match.",
         vectors,

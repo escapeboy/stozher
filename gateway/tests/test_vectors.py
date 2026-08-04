@@ -183,7 +183,12 @@ def handle_chain(doc: dict[str, Any], vector: dict[str, Any], label: str) -> Non
 
 def handle_mandate_chain(doc: dict[str, Any], vector: dict[str, Any], label: str) -> None:
     expected = vector["expected"]
-    request = vector["request"]
+    # A vector carries `request` (the full §4.2 tuple) or `resource-only` (the cognition form),
+    # never both. Reading whichever is present rather than defaulting one of them is deliberate:
+    # a runner that fell back to "no request" for a cognition vector would skip the scope check and
+    # pass the negative case, which is the defect these two vectors exist to catch.
+    request = vector.get("request")
+    resource_only = vector.get("resource-only")
     try:
         ok = mandate.verify_mandate_chain(
             doc["mandates"],
@@ -193,7 +198,10 @@ def handle_mandate_chain(doc: dict[str, Any], vector: dict[str, Any], label: str
                 request["action"],
                 request["classification"],
                 request["resource"],
-            ),
+            )
+            if request is not None
+            else None,
+            resource_only=resource_only,
             at=vector["at"],
             subject_key=vector["subject-key"],
             roots=doc["roots"],

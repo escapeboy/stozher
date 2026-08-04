@@ -346,11 +346,18 @@ fn replay_mandate(report: &mut Report, id: &str, doc: &Value, vector: &Value) {
         .unwrap_or_default();
     let subject_key =
         KeyId::parse(vector["subject-key"].as_str().expect("subject-key")).expect("key");
-    let request = MandateRequest::from_value(&vector["request"]).expect("request tuple");
-    let result = verify_mandate_chain(
+    // The corpus carries two forms: the full §4.2 tuple, and `resource-only` for a `cognition`
+    // envelope, which supplies one dimension and is matched on that one (§03 §5).
+    let resource_only = vector["resource-only"].as_str();
+    let request = resource_only
+        .is_none()
+        .then(|| MandateRequest::from_value(&vector["request"]).expect("request tuple"));
+    let leaf = vector["leaf-ref"].as_str().expect("leaf-ref");
+    let result = verify_any(
         &mandates,
-        vector["leaf-ref"].as_str().expect("leaf-ref"),
-        &request,
+        leaf,
+        request.as_ref(),
+        resource_only,
         &VerifyParams {
             roots: &roots,
             revocations: &revocations,
@@ -2298,4 +2305,25 @@ async fn world_with_manifest() -> World {
     let (envelope, payloads) = world.register_component(&manifest, true).await;
     world.accept(&envelope, &payloads).await;
     world
+}
+
+/// Dispatch a `mandate-chain` vector to the entry point its form names.
+///
+/// Both forms are in one file because they are one algorithm: §03 §5 with a different amount of the
+/// request tuple available. A runner that read only `request` would panic on the cognition vectors
+/// rather than checking them, which is how this test found out it was a third consumer of that file.
+fn verify_any(
+    mandates: &serde_json::Map<String, Value>,
+    leaf: &str,
+    request: Option<&MandateRequest>,
+    resource_only: Option<&str>,
+    params: &VerifyParams<'_>,
+) -> Result<stozher_core::mandate::MandateChainOk, stozher_core::error::Error> {
+    match (request, resource_only) {
+        (Some(request), None) => verify_mandate_chain(mandates, leaf, request, params),
+        (None, Some(resource)) => stozher_core::mandate::verify_mandate_chain_for_resource(
+            mandates, leaf, resource, params,
+        ),
+        _ => panic!("a mandate-chain vector carries exactly one of `request` and `resource-only`"),
+    }
 }

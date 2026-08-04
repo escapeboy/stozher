@@ -81,8 +81,8 @@
       "path": "mandate-chain.json",
       "kind": "mandate-chain",
       "role": "primitive",
-      "count": 24,
-      "description": "Mandate chain verification (spec 03 section 5). Resolve `leaf-ref` in `mandates`, then walk to a human root using `roots`, `revocations`, `request`, `at`, `subject-key` and `max-delegation-depth`. On success `expected.human-root` and `expected.depth` MUST match; on failure `expected.error` MUST match."
+      "count": 26,
+      "description": "Mandate chain verification (spec 03 section 5). Resolve `leaf-ref` in `mandates`, then walk to a human root using `roots`, `revocations`, `at`, `subject-key`, `max-delegation-depth` and either `request` (the full tuple of section 4.2) or `resource-only` (the cognition form: match `resources` alone, the other three dimensions unconstrained). `max-delegation-depth`. On success `expected.human-root` and `expected.depth` MUST match; on failure `expected.error` MUST match."
     },
     {
       "path": "authorization.json",
