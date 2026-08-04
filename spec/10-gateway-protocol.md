@@ -55,6 +55,24 @@ For each proxied MCP tool call, in this order:
 1. **Resolve** the target server and tool from the gateway's routing table.
 2. **Normalize** to an `action` identifier and a `target`, and compute
    `args-hash = object-hash(arguments)` (§01 §3.5).
+
+   The `target` of a proxied call is **`mcp:<server>`**, where `<server>` is the name the gateway
+   routes the call under. A gateway MUST emit that and MUST NOT infer a finer target from the
+   arguments.
+
+   This is pinned rather than left open because `execution.target` is a scope dimension (§03 §4.2),
+   and a value two conforming gateways spell differently is a mandate that binds under one
+   deployment and not under another. The gateway is also the component least able to do better
+   honestly: it sees a tool name and an argument object, and which argument — if any — names the
+   resource is knowledge the tool has and the proxy does not. Guessing produces a target that looks
+   specific and is a guess, which is worse in an audit than one that is coarse and true.
+
+   A finer target is **not available in `stozher/0.1`**. `spec/08 §1`'s `target-kind` declares the
+   namespace an action's targets live in, which is what an auditor needs to read a target; it does
+   not say which argument carries one, so a manifest cannot yet tell a gateway how to extract it.
+   The extraction rule is the missing piece and it is deferred, not forgotten: until it exists, a
+   resource-scoped mandate over a proxied call is scoped to the server, and an organization that
+   needs finer than that governs the tool directly (§10 §8) rather than through the proxy.
 3. **Classify** (§3). Produces `classification` and the catalog tier used.
 4. **Prohibited?** → refuse immediately (§6), emit `outcome: "attempted"` with full evidence, do not
    forward.

@@ -341,6 +341,22 @@ is present in the envelope iff it is present in the object.
   `emitted-at` is ≥ `T`, and so MUST every mandate delegated beneath it. Effects already recorded
   with `emitted-at < T` remain valid — the audit records what was permitted at the time, and
   rewriting history is not a feature.
+- **The kernel is the party that decides (a), (b) and (c); a component pulling the feed does not.**
+  The test above is stated over a mandate's *chain*, and a component holds its own leaf and nothing
+  above it, so it cannot evaluate the ancestor case at all. A component consuming the feed of §7
+  therefore MUST verify the revocation object's own signature and MUST honour every entry it can
+  verify, and MUST NOT drop one on the grounds that it cannot establish the signer's standing.
+
+  The direction matters and is chosen deliberately. Over-honouring costs availability: a mandate
+  stops working that perhaps need not have. Under-honouring costs prevention: a component keeps
+  acting under a mandate an organization has withdrawn, which turns revocation from a control into
+  a record of what should have been stopped. The first failure is visible and repairable; the
+  second is invisible and is the thing revocation exists to prevent.
+
+  This rests on the feed being the kernel's authenticated channel (§10 §1.1) rather than on the
+  component's judgement, and that is the trade being made: an attacker who can serve a component's
+  revocation feed can stop that component working, and cannot make it act.
+
 - **A revocation is preventive only once the emitter has seen it, and the kernel MUST publish it.**
   An implementation MUST expose the revocation feed for reading, with a **monotonic
   `revocation-epoch`** as its entity tag, so a component can ask "has anything changed" at the cost
