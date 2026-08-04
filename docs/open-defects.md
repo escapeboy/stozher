@@ -46,7 +46,7 @@ directions, so the next open defect has somewhere to go and cannot be recorded w
 | DEF-4 | closed | **spec hole** (tooling/documentation), closed in the implementation | high for adoption, none for security | There was no way to obtain a verified policy without a live kernel, so a cold CI container could not open a session at all. `policy export-bundle` is the way in; the offline profile itself always worked. |
 | DEF-5 | not a defect | — | — | Proposed: ambient-state authorization on the `Governor` path. Investigated and **not found**; four independent bindings recompute authority per call. |
 | DEF-6 | closed | implementation defect, introduced by DEF-2's fix | high (availability) | One `503 x-store-unavailable` — the kernel's own *"could not answer; retry"* — wedged the emitter's stream permanently. Found by an intermittent `blocked` where `parked` was expected; reproduced deterministically. |
-| DEF-7 | observed | not yet established | high if real (availability); **no confidence loss** — the kernel refused correctly | On Linux CI, `test_the_gate` saw the gateway's own effect refused `gate-authorization-replayed` at `seq` 7 and the stream wedge. Evidence: GitHub Actions run **30905170959**, job 91978477109. Failed 1 of 2 runs; the re-run passed all four jobs. Never seen on the author's macOS in eight days. |
+| DEF-7 | observed | not yet established | high if real (availability); **no confidence loss** — the kernel refused correctly | On Linux CI, `test_the_gate` saw the gateway's own effect refused `gate-authorization-replayed` at `seq` 7 and the stream wedge. Evidence: GitHub Actions run **30905170959**, job 91978477109. Failed 1 of 3 runs of that job (30905170959 first attempt; its re-run and 30906172961 both green). Never seen on the author's macOS in eight days. |
 
 ## DEF-7 — an approval spent twice, seen once, mechanism not established
 
@@ -67,9 +67,14 @@ test_the_gate — assert rejections["count"] == 0   ("Nothing the gateway emitte
 221 passed, 1 failed
 ```
 
-GitHub Actions run **30905170959**, job 91978477109. The re-run of the same job passed, and all four
-jobs are green at the same commit. One failure in two runs; never once on macOS in eight days of
-running this suite many times a day.
+GitHub Actions run **30905170959**, job 91978477109. The re-run of that job passed, and so did the
+whole workflow on the next commit (**30906172961**). **One failure in three runs of the gateway job**
+— never once on macOS in eight days of running this suite many times a day.
+
+One in three is frequent enough to be worth catching in a loop rather than waiting for, and that is
+what "running the e2e file in a loop on Linux" below is now costed against: at this rate a handful of
+iterations should produce a second observation, and a second observation is what turns the guess
+below into something to test.
 
 **What is established, and what is not.**
 
