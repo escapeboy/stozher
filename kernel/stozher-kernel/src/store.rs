@@ -2047,20 +2047,41 @@ impl Store {
                 Err(e) if is_unique_violation(&e) => {
                     // Only single-use approvals may not be reused; a standing one is expected to
                     // appear again and its existing row is simply left alone.
-                    let single_use_before = sqlx::query(
-                        "SELECT single_use FROM gate_request_hashes WHERE request_hash = ?1",
+                    let existing = sqlx::query(
+                        "SELECT single_use, envelope_id, recorded_at FROM gate_request_hashes \
+                         WHERE request_hash = ?1",
                     )
                     .bind(&gate_use.request_hash)
                     .fetch_optional(&mut *tx)
                     .await
-                    .map_err(db)?
-                    .map(|r| r.get::<i64, _>("single_use") == 1)
-                    .unwrap_or(true);
+                    .map_err(db)?;
+                    let single_use_before = existing
+                        .as_ref()
+                        .map(|r| r.get::<i64, _>("single_use") == 1)
+                        .unwrap_or(true);
                     if single_use_before || gate_use.single_use {
+                        // Name the envelope that spent it. The row has carried `envelope_id` since
+                        // the table existed and the refusal never mentioned it, so an emitter told
+                        // "already used" had no way to find out *by what* — which is how DEF-7
+                        // survived four fixes: every hypothesis was about which of the emitter's
+                        // own envelopes had duplicated, and when the emitter was finally asked, it
+                        // held exactly one. The other spender was never on its chain. A refusal
+                        // that withholds the one fact only the refuser has is a refusal that costs
+                        // a week.
+                        let by = existing
+                            .as_ref()
+                            .map(|r| {
+                                format!(
+                                    " (spent by envelope {} at {})",
+                                    r.get::<String, _>("envelope_id"),
+                                    r.get::<String, _>("recorded_at")
+                                )
+                            })
+                            .unwrap_or_default();
                         tx.rollback().await.map_err(db)?;
                         return Err(Error::new(
                             "gate-authorization-replayed",
-                            format!("request {} was already used", gate_use.request_hash),
+                            format!("request {} was already used{by}", gate_use.request_hash),
                         ));
                     }
                 }
