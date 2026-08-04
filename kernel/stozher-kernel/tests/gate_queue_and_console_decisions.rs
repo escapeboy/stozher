@@ -1149,6 +1149,43 @@ async fn an_approver_can_read_the_arguments_and_recompute_the_digest_their_signa
 }
 
 #[tokio::test]
+async fn the_page_tells_the_approver_how_to_repeat_the_check_and_not_only_what_to_compare() {
+    // §06 §4.4 rule 5's second half — *"and state how"*. ADR-0029 §8 recorded this as bound only in
+    // part: the canonical bytes and the full digest were asserted, so "a console that kept the bytes
+    // and dropped the sentence would stay green".
+    //
+    // The distinction is not cosmetic. Bytes plus a digest, with no recipe, is a page that asks an
+    // approver to take on faith that the two correspond — which is the exact trust §4.4 exists to
+    // remove. An approver who cannot reproduce the digest is approving the page, not the call.
+    let world = world().await;
+    let arguments = json!({"title": "Q3 numbers", "body": "revenue down 12%"});
+    let request = request_for(&world, &arguments);
+    park(&world, &submission(&request, &arguments)).await;
+
+    let page = get(&world, "/console/pending").await;
+    assert!(
+        page.body.contains("shasum -a 256") || page.body.contains("sha256sum"),
+        "the page shows the bytes and the digest but not how to get from one to the other: {}",
+        page.body
+    );
+    // The recipe is only a recipe if it names what the answer must be. A command with no expected
+    // value is an instruction to compute something and compare it to nothing.
+    let args_hash = request["args-hash"].as_str().expect("args-hash");
+    assert!(
+        page.body.contains(args_hash),
+        "the recipe does not say what it must print: {}",
+        page.body
+    );
+    // And it must say what to do when it disagrees, because "check this" without "refuse if it
+    // fails" is how a hurried approver rationalises a mismatch (§09 §7's weakest link).
+    assert!(
+        page.body.contains("do not approve"),
+        "the page does not say what a failed check obliges: {}",
+        page.body
+    );
+}
+
+#[tokio::test]
 async fn arguments_that_are_not_what_the_request_commits_to_never_reach_an_approver() {
     // The check is the whole reason showing them is safe: without it a component could display one
     // call to a human and execute another, and the display would be worth less than the blank.

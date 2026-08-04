@@ -157,23 +157,30 @@ a vector file is a rule a second implementation cannot quietly disagree with.
 
 ## 8. Residuals
 
-- **A lying component tells only itself.** §4 above: `gate-arguments-hash-mismatch` is a `422` and
-  nothing more. The one adversary ADR-0011 §2 designed the rule against — an emitter that displays
-  one call and executes another — is refused, correctly, and leaves no trace any human will ever see.
-  Whether that should be a rejection record is a live question this ADR does not answer.
-- **Rule 6's prohibition is unbound by a test.** Nothing asserts that `arguments` is absent from
+- ~~**A lying component tells only itself.**~~ **Answered by ADR-0032 (2026-08-04), and this bullet
+  posed the question well.** It ran: *"Whether that should be a rejection record is a live question
+  this ADR does not answer."* The answer is yes. `spec/06 §4.4` gains rule 9 — the mismatch is
+  recorded in the rejection stream (§04 §7.1), bounded by §09 §7's cap counted over the caller's own
+  records, and surfaced on `/console/rejections` as a named finding rather than a row among every
+  other refusal. Left struck rather than deleted because a question this file asked and a later
+  decision settled is the record working as intended.
+- ~~**Rule 6's prohibition is unbound by a test.**~~ **Bound 2026-08-04; see the second table in §9.**
+  The reasoning below is why it was worth binding rather than trusting. Nothing asserted that
+  `arguments` is absent from
   `authorization.request`, from an envelope, or from evidence. It holds today for a structural
   reason — a parked call emits no envelope at all, and `_effect_body` builds `authorization` from the
   request and decision objects — but structure is not a test. The nearest binding is
   `test_a_park_hands_the_notifier_the_request_and_none_of_the_arguments`, which covers the notifier
   and not the envelope.
-- **Rule 5's "and state how" is bound only in part.** The test asserts the canonical bytes and the
-  full `args-hash` are on the page; nothing asserts the page states the recipe. A console that kept
-  the bytes and dropped the sentence would stay green.
-- **ADR-0019's own count is off by one, and this ADR inherits the phrasing.** Its §1 table enumerates
-  fifteen rules; its prose says *"Sixteen of them are folded in here"* and §2a's arithmetic (nine plus
-  seven) agrees with the prose. Not resolved here — recorded so the next reader does not take either
-  number as verified.
+- ~~**Rule 5's "and state how" is bound only in part.**~~ **Bound 2026-08-04.** The sentence that
+  identified the gap — *"a console that kept the bytes and dropped the sentence would stay green"* —
+  is now the thing that fails: `the_page_tells_the_approver_how_to_repeat_the_check_and_not_only_what_to_compare`.
+- ~~**ADR-0019's own count is off by one.**~~ **Resolved 2026-08-04, and neither number was wrong.**
+  §1 counts rules in `spec/`; §2a counts asks discharged. They diverge at one row — the direct-human
+  mandate rule, which answers two asks with one rule — so fifteen rules and sixteen asks are both
+  right. Recorded in ADR-0019 §2a so the next reader does not "correct" one into the other. Flagging
+  it as unverified rather than guessing was the right call: the guess would have been that a row went
+  missing.
 
 ## 9. What now fails if this stops being true
 
@@ -194,11 +201,13 @@ a vector file is a rule a second implementation cannot quietly disagree with.
 
 **Claims above with no test behind them**, stated rather than papered over:
 
+**All three were resolved on 2026-08-04** — two bound, one answered by a later decision:
+
 | Claim | Status |
 |---|---|
-| Rule 6 — `arguments` is never copied into `authorization.request`, an envelope, or evidence | **No test.** Holds structurally; see §8. |
-| Rule 5 — the interface *states how* to repeat the check | **Partly.** The canonical bytes and full digest are asserted; the recipe sentence is not. |
-| A `gate-arguments-hash-mismatch` is surfaced to anyone but the submitter | **False, and not a test gap** — nothing does this. §8, first bullet. |
+| Rule 6 — `arguments` is never copied into `authorization.request`, an envelope, or evidence | **Bound**: `gateway/tests/test_enforcement.py::test_the_approved_effect_carries_no_argument_values_in_any_signed_byte`. It searches the whole canonical envelope for the value rather than the members anyone remembered to check, and pairs that with the opposite assertion — the values *are* in the payload beside it — so the test cannot pass by the arguments having been lost instead of withheld. Mutation-tested by widening `authorization.request` to carry the call's arguments, the exact helpful edit "holds structurally" would not have survived. |
+| Rule 5 — the interface *states how* to repeat the check | **Bound**: `kernel/stozher-kernel/tests/gate_queue_and_console_decisions.rs::the_page_tells_the_approver_how_to_repeat_the_check_and_not_only_what_to_compare`. Bytes plus a digest with no recipe is a page asking an approver to take the correspondence on faith, which is the trust §4.4 exists to remove. It also asserts the page says what a failed check obliges — "check this" without "refuse if it fails" is how a hurried approver rationalises a mismatch. |
+| A `gate-arguments-hash-mismatch` is surfaced to anyone but the submitter | ~~**False** — nothing does this.~~ **True since ADR-0032** (2026-08-04): `spec/06 §4.4` rule 9 makes the mismatch a rejection-stream record, and `/console/rejections` names the callers as a finding. §8's first bullet below is superseded and struck. |
 
 ## Related
 

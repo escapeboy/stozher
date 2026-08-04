@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import contextlib
 import secrets
+import threading
 from pathlib import Path
 from typing import Any
 
@@ -26,7 +27,7 @@ from stozher_gateway.canonical import object_hash, sha256_hex
 from stozher_gateway.config import GatewayConfig
 from stozher_gateway.governed import Governor
 from stozher_gateway.refusal import RefusalError
-from stozher_gateway.signing import SigningKey
+from stozher_gateway.signing import SigningKey, object_id
 
 from .support import baseline_policy
 
@@ -533,3 +534,94 @@ def test_importing_the_package_does_not_import_the_runtime() -> None:
     )
     done = subprocess.run([sys.executable, "-c", probe], capture_output=True, text=True)
     assert done.returncode == 0, done.stderr
+
+
+def test_one_governor_driven_from_several_threads_builds_one_unbroken_chain(
+    governor: Any,
+) -> None:
+    """ADR-0028 §6: *"nothing in the suite exercises one `Governor` from several threads. Treat
+    concurrent use as unverified until a test says otherwise."* This is that test.
+
+    The workload is `benign` on purpose, and the reason is worth recording because the obvious
+    choice is wrong. Written first against a `read` action, this test passed with the emitter's
+    chain lock *and* window lock each replaced by a no-op — because `read` folds into aggregates
+    (§02 §7), so ninety-six calls produced a couple of envelopes and the chaining the test claimed
+    to exercise barely ran. A concurrency test that cannot fail when the lock is removed is not
+    evidence of anything, and would have been recorded as evidence.
+
+    `benign` emits one envelope per call, so the same ninety-six calls contend for ninety-six chain
+    positions. A lost update here is silent by construction — a duplicate `seq` or a `prev-hash`
+    naming a sibling, in a chain that still verifies line by line.
+
+    In-process concurrency is the shape this path invites: `Governor` exists for a program that
+    already has its own threads (ADR-0028 §1), while the proxied path gets serialisation for free
+    from being an MCP server.
+    """
+    now = clock_module.now()
+    governor._gateway.store.cache_policy(
+        "2026.07.2",
+        POLICY_KEY.sign(
+            baseline_policy(
+                "2026.07.2", now, ROOT.subject, {"ops.tail_logs": "read", "ops.touch": "benign"}
+            )
+        ),
+        governor._gateway._clock.now(),
+    )
+
+    threads = 8
+    per_thread = 12
+    errors: list[BaseException] = []
+    barrier = threading.Barrier(threads)
+
+    with governor:
+
+        @governor.governed(server="ops", schema={"type": "object", "properties": {}})
+        def touch(name: str) -> str:
+            return f"touched {name}"
+
+        def drive(n: int) -> None:
+            try:
+                barrier.wait(timeout=10)  # release them together, so they actually contend
+                for i in range(per_thread):
+                    touch(f"n-{n}-{i}")
+            except BaseException as exc:  # noqa: BLE001 — a thread's failure must reach the test
+                errors.append(exc)
+
+        workers = [threading.Thread(target=drive, args=(n,)) for n in range(threads)]
+        for worker in workers:
+            worker.start()
+        for worker in workers:
+            worker.join(timeout=30)
+        assert not any(w.is_alive() for w in workers), "a governed worker did not finish"
+
+    assert not errors, f"governed calls raised under contention: {errors[:3]}"
+
+    envelopes = [e for _, e, _ in governor._gateway.store.unpushed(limit=1000)]
+    # Filtered by action rather than counting every effect: opening the session is itself a `benign`
+    # effect (§10 §1.6), so the stream carries one envelope this workload did not produce.
+    effects = [
+        e
+        for e in envelopes
+        if e["kind"] == "effect" and e["execution"]["action"] == "ops.touch"
+    ]
+    assert len(effects) == threads * per_thread, (
+        f"{threads * per_thread} governed calls were made and {len(effects)} effects recorded — "
+        "an audit that undercounts under load is the failure this test exists for"
+    )
+
+    # The chain is whole: contiguous from 0 per stream, every link naming its predecessor. A lock
+    # that did not hold across read-and-insert shows up here and nowhere else.
+    by_stream: dict[str, list[dict[str, Any]]] = {}
+    for envelope in envelopes:
+        by_stream.setdefault(envelope["stream"], []).append(envelope)
+    for stream, chain in by_stream.items():
+        chain.sort(key=lambda e: e["seq"])
+        assert [e["seq"] for e in chain] == list(range(len(chain))), (
+            f"{stream} has a gap or a duplicate position: {[e['seq'] for e in chain]}"
+        )
+        previous: str | None = None
+        for envelope in chain:
+            assert envelope["prev-hash"] == previous, (
+                f"{stream} seq {envelope['seq']} does not name its predecessor"
+            )
+            previous = object_id(envelope)
