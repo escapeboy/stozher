@@ -154,6 +154,20 @@ and #2 close here or not at all.
 
 ### 4.1 Schema migration
 
+**Built, both halves.** The kernel on 2026-08-02 (`kernel/stozher-kernel/src/migrate.rs`, schema
+version 7). The gateway on **2026-08-04** (`gateway/src/stozher_gateway/migrate.py`, version 1) —
+it had been left with exactly the problem stated below for two days longer, which is worth recording
+because "the design is written" and "both implementations have it" read the same in a plan and are
+not the same thing. The gateway's runner differs in one stated way: `sqlite3.executescript` commits
+implicitly, so it gets idempotent steps and a version stamped last rather than the kernel's real
+transaction, and its docstring says so instead of inheriting a claim it cannot keep.
+
+The classification below is what actually needed deciding, and the gateway's answer is *wider than
+the chain*: `gate_seen`, the single-use approval ledger, holds no chain and no signature and looks
+exactly like a cache — and dropping it would un-spend every approval the component has consumed,
+which is DEF-7 arriving by a second route. `test_the_classification_covers_every_table_the_database_holds`
+binds the sets to the tables the database actually holds, in both implementations.
+
 **Problem.** `store.rs` re-applies `CREATE TABLE IF NOT EXISTS` on every open. There is no
 `user_version`, no migration table, no `ALTER TABLE` anywhere. Forward-compatible by accident: the
 first additive column ships with no mechanism to reach an existing store.

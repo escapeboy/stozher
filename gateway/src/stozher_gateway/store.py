@@ -22,6 +22,8 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
+from . import migrate
+
 __all__ = ["GatewayStore", "Parked", "Wedge"]
 
 _SCHEMA = """
@@ -214,7 +216,7 @@ class GatewayStore:
             # never takes this branch.
             self._shared = sqlite3.connect(":memory:", check_same_thread=False)
         with self._connect() as connection:
-            connection.executescript(_SCHEMA)
+            migrate.run(connection)
         if str(path) != ":memory:" and path.exists():
             os.chmod(path, 0o600)
 
