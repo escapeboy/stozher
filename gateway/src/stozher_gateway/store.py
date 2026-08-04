@@ -589,6 +589,25 @@ class GatewayStore:
             ).fetchall()
         return [Parked(row) for row in rows]
 
+    def seeds_awaiting_a_decision(self) -> list[Parked]:
+        """Parked rows whose **classification question** is still unanswered, decided call or not.
+
+        `pending()` is `WHERE decision_json IS NULL`, and it used to be the only route to
+        `_collect_seed_decision`. So the moment an approver answered the *call*, its row left the
+        set and the second signature — the one that says what class the tool is — could never be
+        collected. The approver answered into a void, and the tool stayed unclassified forever
+        (2026-08-04, found by two design-partner evaluations).
+
+        Selected on the seed's own state rather than the call's, because the two are separately
+        answerable by design.
+        """
+        with self._connect() as connection:
+            rows = connection.execute(
+                "SELECT * FROM parked WHERE seed_json IS NOT NULL "
+                "AND json_extract(seed_json, '$.decision') IS NULL ORDER BY created_at"
+            ).fetchall()
+        return [Parked(row) for row in rows]
+
     def park_seed(self, request_hash: str, seed_request: dict[str, Any], catalog_class: str) -> None:
         """Record the catalog-seed request parked beside a first call, before anyone answers it.
 

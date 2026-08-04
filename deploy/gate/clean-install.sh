@@ -58,8 +58,23 @@ PORT="${STOZHER_KERNEL_PORT:-8787}"
 # The image tags are global to the docker daemon, not to the compose project, so a gate that deletes
 # and rebuilds `stozher-kernel:0.1.0` deletes and rebuilds the *host's* one — the tag another
 # install's next `up` would resolve. Overridable for the same reason `COMPOSE_PROJECT_NAME` is.
-KERNEL_IMAGE="${STOZHER_KERNEL_IMAGE:-stozher-kernel:0.1.0}"
-GATEWAY_IMAGE="${STOZHER_GATEWAY_IMAGE:-stozher-gateway:0.1.0}"
+# Read from the existing `.env` *before* falling back to the default, because the line below
+# `export`s whichever value wins — and an exported variable beats `.env` in compose interpolation.
+# Until 2026-08-04 the default was exported unconditionally, so an operator who set these in `.env`
+# exactly as `deploy/README.md` §1 instructs was overridden by this script and the gate rebuilt the
+# *host's* `stozher-kernel:0.1.0` anyway. It happened: a design-partner evaluation clobbered a
+# running production deployment's tags, leaving its container on an untagged image id. The block at
+# `GATE_CARRIED` below was written to prevent exactly this and could not, because it runs after the
+# export it needed to precede. Precedence is the ordinary one — a real environment variable still
+# wins over `.env`.
+from_env_file() {
+  [ -f .env ] || return 0
+  grep -E "^[[:space:]]*$1=" .env | tail -n 1 | cut -d= -f2- || true
+}
+KERNEL_IMAGE="${STOZHER_KERNEL_IMAGE:-$(from_env_file STOZHER_KERNEL_IMAGE)}"
+GATEWAY_IMAGE="${STOZHER_GATEWAY_IMAGE:-$(from_env_file STOZHER_GATEWAY_IMAGE)}"
+KERNEL_IMAGE="${KERNEL_IMAGE:-stozher-kernel:0.1.0}"
+GATEWAY_IMAGE="${GATEWAY_IMAGE:-stozher-gateway:0.1.0}"
 export STOZHER_KERNEL_IMAGE="$KERNEL_IMAGE" STOZHER_GATEWAY_IMAGE="$GATEWAY_IMAGE"
 while [ $# -gt 0 ]; do
   case "$1" in

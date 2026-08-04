@@ -1023,6 +1023,11 @@ class Enforcer:
             if isinstance(decision, dict):
                 self._store.record_gate_decision(parked.request_hash, decision)
             self._collect_seed_decision(parked)
+        # Separately, because the two questions are separately answerable and the call's answer used
+        # to end the seed's only chance of being read: this set is keyed on the *seed's* state, so an
+        # approver who classifies the tool after permitting the call is still heard.
+        for awaiting in self._store.seeds_awaiting_a_decision():
+            self._collect_seed_decision(awaiting)
 
     def _collect_seed_decision(self, parked: Any) -> None:
         """Ask the kernel whether the catalog-seed request parked beside this call was answered.
@@ -1144,6 +1149,23 @@ class Enforcer:
     ) -> bool:
         """Put an org-seeded catalog entry in force — its own gated, chained envelope (§10 §4.3)."""
         if parked.catalog_class is None or parked.seed is None:
+            return False
+        if not isinstance(parked.seed.get("decision"), dict):
+            # A seed nobody has answered is a *question*, not an authority. §10 §4.3 makes
+            # classifying the tool a second decision with its own signature, and an approver
+            # permitting the action while declining to classify the tool is a coherent answer.
+            #
+            # Until 2026-08-04 this fell through to `parked.seed["decision"]["request-hash"]` and
+            # raised `TypeError` — no refusal document, no audit record, and `refusal: null` at the
+            # agent. It broke the first call to every tool a deployment had not already classified,
+            # including `deploy/gate/clean-install.sh`, this project's own release gate. Found by
+            # two independent design-partner evaluations reproducing each other exactly.
+            logger.info(
+                "the catalog seed for %s.%s is not answered yet; the tool stays unclassified and "
+                "the next call parks again",
+                parked.server,
+                parked.tool,
+            )
             return False
         action = f"{self._classifier.scope(parked.server)}.{parked.tool}"
         entry = {"server": parked.server, "tool": parked.tool, "class": parked.catalog_class}
