@@ -105,3 +105,19 @@ harder to notice because nobody double-checks bad news about their own work.
 claim that has since been bound is **not** mechanically detectable — nothing distinguishes an honest
 gap from a stale one — so that half stays a reading duty, discharged at the end of the run rather
 than deferred to the next reader.
+
+**A "no test" that blames the harness must name the seam it looked for.** Twice in two days a
+residual was recorded as unbindable — ADR-0028 §6 (*"a seam that forces a yield … neither exists
+here today"*) and ADR-0032 §3.4 (*"not something the current harness can do without a
+fault-injection seam it does not have"*) — and both were wrong. The first needed one line of
+`sys.setswitchinterval`; the second needed `world_at` plus a direct connection, a pair another test
+file had been using for months for exactly this purpose. Both were written after a real attempt, and
+that is what makes them worth a rule: an honest *"I could not"* reads identically to *"I stopped"*,
+and only naming the seam that was tried lets the next reader tell them apart. If the missing seam
+cannot be named, the claim is that nobody has looked hard enough — which is a task, not a residual.
+
+**And a bound claim is only bound if the mutation fails the right assertion.** The first version of
+ADR-0032 §3.4's test took the whole `rejections` table away and got its `503` — from the *count*
+query one statement earlier, never reaching the line under test. It stayed green when the record
+path was mutated to answer `422`. A test that fails for the right reason and one that passes for the
+wrong one look the same from the green tick; the mutation is the only thing that separates them.

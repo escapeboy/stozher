@@ -388,3 +388,96 @@ async fn at_the_cap_the_finding_says_the_count_stopped_and_the_component_may_not
     .await;
     assert_eq!(over.status, StatusCode::TOO_MANY_REQUESTS, "{}", over.body);
 }
+
+/// A connection to the database that bypasses every line of kernel code — the same seam
+/// `append_only_and_decay.rs` uses to prove the storage engine, rather than this crate's manners,
+/// is what holds a guarantee.
+async fn raw(database: &std::path::PathBuf) -> sqlx::SqlitePool {
+    sqlx::SqlitePool::connect_with(sqlx::sqlite::SqliteConnectOptions::new().filename(database))
+        .await
+        .expect("opening the database directly")
+}
+
+fn scratch(name: &str) -> std::path::PathBuf {
+    let dir = std::env::temp_dir().join(format!(
+        "stozher-store-{}-{name}-{:?}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0)
+    ));
+    std::fs::create_dir_all(&dir).expect("a scratch directory");
+    dir.join("stozher.db")
+}
+
+#[tokio::test]
+async fn a_store_that_cannot_take_the_record_is_not_a_kernel_that_said_no() {
+    // ADR-0032 §3.4, which was recorded as having **no test** on the grounds that injecting a store
+    // failure at that one line needed a fault-injection seam this harness does not have. It does
+    // have one: `world_at` plus a direct connection, the same pair `append_only_and_decay.rs`
+    // already uses. The seam was not missing; I had not looked for it — the second time in two days
+    // that "this needs a seam" turned out to mean "I stopped early" (see ADR-0028 §6).
+    //
+    // The claim: §06 §4.4 rule 9's record is a MUST, so a store that cannot take it means the
+    // kernel could not *complete the admission* — not that it decided against the submission.
+    // Answering `422 gate-arguments-hash-mismatch` there would be DEF-6's mistake exactly: a moment
+    // the kernel could not answer, reported as a verdict about the bytes. A component reading that
+    // would record a refusal it can never retry, for a request the kernel never actually judged.
+    let database = scratch("rejection-write-fails");
+    let world = stozher_testkit::world_at(&database).await;
+
+    let committed = json!({"title": "ship it"});
+    let lying = || {
+        submission(
+            &request_for(&world, &committed),
+            &json!({"title": "ship it to production"}),
+        )
+    };
+
+    // Baseline in this same world, so the difference below is the store and nothing else.
+    let judged = post(&world, "/v1/gate/requests", &lying()).await;
+    assert_eq!(
+        judged.status,
+        StatusCode::UNPROCESSABLE_ENTITY,
+        "{}",
+        judged.body
+    );
+    assert_eq!(judged.json()["reason-code"].as_str(), Some(MISMATCH));
+
+    // Now make the *insert* fail and nothing else. A trigger rather than dropping the table,
+    // because §4.4 rule 9's bound reads the same table one statement earlier
+    // (`argument_mismatches_since`) — take the table away and the route answers 503 from the
+    // count, never reaching the line this test is about. That is not a hypothetical: the first
+    // version of this test renamed the table, passed, and went on passing when the record path was
+    // mutated to answer `422`. The mutation is what found it.
+    let direct = raw(&database).await;
+    sqlx::query(
+        "CREATE TRIGGER injected_rejection_write_failure BEFORE INSERT ON rejections \
+         BEGIN SELECT RAISE(ABORT, 'injected: the store cannot take this record'); END",
+    )
+    .execute(&direct)
+    .await
+    .expect("installing the injected failure");
+    direct.close().await;
+
+    let unanswerable = post(&world, "/v1/gate/requests", &lying()).await;
+    assert_eq!(
+        unanswerable.status,
+        StatusCode::SERVICE_UNAVAILABLE,
+        "a store that could not take the record answered as though it had judged the submission: {}",
+        unanswerable.body
+    );
+    assert_eq!(
+        unanswerable.json()["reason-code"].as_str(),
+        Some("x-store-unavailable"),
+        "{}",
+        unanswerable.body
+    );
+    // And the half that makes it worth asserting: the caller is told to retry rather than told no.
+    assert_ne!(
+        unanswerable.json()["reason-code"].as_str(),
+        Some(MISMATCH),
+        "the kernel reported a moment it could not answer as a verdict about the bytes"
+    );
+}
