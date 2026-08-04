@@ -1207,6 +1207,26 @@ impl Store {
         Ok(u32::try_from(as_u64(&row, "parked")).unwrap_or(u32::MAX))
     }
 
+    /// The caller's own recorded argument mismatches since `since` — §06 §4.4 rule 9's bound.
+    ///
+    /// Counted over the **records**, not over parked requests, and the difference is the whole point
+    /// of the method existing: a submission refused for a mismatch parks nothing, so
+    /// [`Self::gate_requests_since`] returns zero forever for a component that only ever lies. Using
+    /// it here would bound the record path against precisely the caller it must bound against.
+    pub async fn argument_mismatches_since(&self, submitted_by: &str, since: &str) -> Result<u32> {
+        let row = sqlx::query(
+            "SELECT COUNT(*) AS recorded FROM rejections \
+             WHERE submitted_by = ?1 AND reason = ?2 AND received_at >= ?3",
+        )
+        .bind(submitted_by)
+        .bind(crate::gatequeue::ARGUMENTS_HASH_MISMATCH)
+        .bind(since)
+        .fetch_one(&self.pool)
+        .await
+        .map_err(db)?;
+        Ok(u32::try_from(as_u64(&row, "recorded")).unwrap_or(u32::MAX))
+    }
+
     /// Subjects whose parked requests since `since` reach `threshold` — the spike §09 §7 requires
     /// an interface to surface *as a finding*, rather than as a queue that is merely longer.
     ///

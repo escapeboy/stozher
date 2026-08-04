@@ -507,6 +507,11 @@ def test_the_declined_files_are_the_ones_expected() -> None:
     declined = sorted(e["path"] for e in INDEX["files"] if e.get("role") == "kernel")
     assert declined == [
         "checkpoint.json",
+        # §06 §4.4 rule 9 — the order a *kernel* refuses a gate submission in, and which refusal it
+        # records. An emitter submits; it never decides admission, and it holds no rejection stream
+        # to write to. Declined for the same reason as `checkpoint.json`, and named here so the
+        # decline stays a decision.
+        "gate-admission.json",
         "manifest.json",
         "root-change.json",
         "stream-recovery.json",

@@ -246,6 +246,15 @@ A consumer reading a stream from a deployment that carries such a declaration MU
 `emitted-at` at or after it as offset by `advance-seconds`, and MUST NOT read those timestamps as
 evidence of when anything happened.
 
+**A gate submission carrying arguments its own request does not commit to is recorded here** (§06
+§4.4 rule 9). The record's `reason` is `gate-arguments-hash-mismatch`; its `submitted-by` is the
+authenticated caller; its `detail` is a JCS object carrying the request's `subject`, `action` and
+`request-hash`. It belongs in this stream for the reason the stream exists: a gate submission is not
+an envelope and §02 §2 holds no `kind` for one, while *"a component submitted values its own
+signature does not cover"* is precisely the kind of event an audit is bought for. The record is
+bounded rather than unconditional, and §06 §4.4 rule 9 states the bound and why the obvious form of
+it does not bind.
+
 ### 7.2 Resuming a wedged stream
 
 A refusal wedges its emitter's stream (§3, §03 §7, §05 §7.1). This is the exit, and it is the only
