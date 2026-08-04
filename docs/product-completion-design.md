@@ -136,6 +136,15 @@ code, passes the vector corpus.
 *That gate is the real definition of done for a protocol product, and it is the only one here we
 cannot grade ourselves.*
 
+**Met 2026-08-04 — ADR-0033.** An agent given only `spec/*.md` and the corpus, with no access to
+either reference implementation and deliberately none to `generate_vectors.py`, wrote 12 modules and
+passed **307/307 primitive vectors**, declining the seven `kernel`-role files by name. The run was
+executed by the orchestrator and mutation-checked (reversing JCS member ordering: 206/307), so the
+implementation computes rather than recognises. ADR-0022 had waived this half; it is no longer
+waived. What the result does **not** establish — that a *human* outsider would fare the same, that
+the gaps in `spec/` are known (the implementer's report is still outstanding), or that the exercise
+was audited — is in ADR-0033 §4, which should be read before this line is quoted anywhere.
+
 ### v1.0 — "someone else runs it"
 No new engineering. v1.0 is declared when: v0.9's gate passes, the external review's findings are
 closed, and **at least one design partner has run it in anger for a month**. Empirical questions #1
