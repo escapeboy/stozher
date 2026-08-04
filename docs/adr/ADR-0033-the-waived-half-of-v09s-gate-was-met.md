@@ -71,6 +71,25 @@ same author as the specification. A rule that both the text and the corpus omit 
 this gate by construction — which is exactly the class of gap an outside implementer is hired to
 find.
 
+**Amended 2026-08-04, the same day: the rerun produced the report, and it found four real gaps.**
+The paragraph below stands as written about the *first* run. A second agent, fresh sandbox, same
+blindness, was briefed with the priority inverted — `FINDINGS.md` written *during* the work, every
+one of the eleven spec files required to appear even if only as "nothing to report", and the
+implementation named as the instrument rather than the product. It returned 416 lines of findings
+**and** 307/307, with an explicit "no" on the sandbox question.
+
+Its four gaps are in `docs/spec-debt.md` §1a as rows B1–B4, **each verified against this repository
+before being recorded**. B1 is the one that matters: `policy-stale-offline` is a required wire value
+present in the corpus and in *both* reference implementations, and `grep` over all eleven spec files
+returns **zero hits**. Eight days of inside work did not surface it. The full report is preserved at
+`docs/validation/blind-sufficiency-audit-2026-08-04.md`.
+
+The auditor's own account of the shape is the finding worth carrying: *"every area where the
+specification records its own past failure is excellent. The gaps are all in places nobody has yet
+been bitten — which is precisely what a blind reader is for."*
+
+**What follows was true of the first run and is kept because the lesson in it is about the brief.**
+
 **The report was never produced, and this did not change.** The implementation was the means; the
 deliverable was an account of where `spec/` was ambiguous, silent, wrong, or learnable *only* from
 the vectors. It was requested three times, twice in writing after the code was finished. No

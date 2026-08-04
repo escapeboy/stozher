@@ -39,6 +39,38 @@ cited.
 
 </details>
 
+## 1a. Found by a blind reader — four rows, opened 2026-08-04
+
+The nine rows above were found from inside. **These were not, and that is the point of them.** They
+come from `FINDINGS.md`, written by an agent given `spec/*.md` and the corpus and nothing else — no
+`kernel/`, no `gateway/`, no `generate_vectors.py` (ADR-0033). Its verdict: *"yes, but for four
+things — and one of them is fatal on its own."*
+
+**Every row below was verified against this repository before being written here**, because an
+outside report is a claim like any other.
+
+| # | The gap | Verified how | Blocking |
+|---|---|---|---|
+| B1 | **`policy-stale-offline` is a required wire value that the specification never defines.** An implementation built from the text emits a different reason code for the same refusal, and §05 §7.1 rule 5 puts that code in front of the calling agent. | `grep` over all 11 spec files: **zero hits**. Present in `spec/vectors/sync-outcome.json` and in **both** implementations (`kernel/stozher-core/src/sync.rs`, `gateway/src/stozher_gateway/sync.py`). A string both halves know and the text does not contain. | **Yes.** Not inferable, not a judgement — a missing value. |
+| B2 | **§06 §2 declares its eleven steps complete and they are not.** Nothing validates the *shape* of `not-after` / `decided-at` before steps (8) and (9) compare them as strings, so a verifier built exactly to the algorithm accepts an approval whose `not-after` is `"z"` and never expires. | `grep -n "encoding-bad-timestamp" spec/06-gates.md`: **zero hits**. The steps do compare timestamps as strings. | **Yes** — an approval that never expires is a security property, not a formatting one. |
+| B3 | **No error-code precedence rule exists**, over roughly ninety normative codes. §02 §2.1 and §02 §9.1 give different codes for the same input and the text never says which wins. Two implementations that disagree here disagree *on the wire*, since §00 §1 makes codes part of the contract. | The auditor lost four vectors to it. The collision is in the text as described. | **Yes** for interoperability, no for safety. |
+| B4 | **Monetary comparison has three incompatible spellings of its own outcome** — `spec/03 §4.3` (`schema-type-mismatch`), `vectors/README.md` §3 (`-1\|0\|1`), and `money-compare.json` (`less\|equal\|greater\|refused`). A harness written from either document fails all 31 vectors. | `money-compare.json` carries `less/equal/greater/refused`; §03 §4.3 names `schema-type-mismatch`. Confirmed. | **No**, but cheap, and it costs a newcomer a whole file. |
+
+**The auditor's own summary of the shape**, which is worth more than the rows: *"every area where the
+specification records its own past failure is excellent (§02 §2.1, §05 §3.1, §04 §7.2, §10 §2). The
+gaps are all in places nobody has yet been bitten — which is precisely what a blind reader is for."*
+
+That sentence is the argument for having done this at all. §01 and §04 passed 65/65 and 15/15 with no
+corrections — the parts that were fought over are sound. What the insiders could not see is the
+places nothing had gone wrong yet, because a specification is proof-read by its author against
+memories of what went wrong.
+
+**Proposed text for each row is in `FINDINGS.md` §"The three worst gaps"** and was written by the
+reader who needed it, which is the right author for it. None of it is applied here: a spec change
+lands with its vectors (this file's own rule), and B1–B4 have not been through that.
+
+---
+
 **Nine rows, and as of 2026-08-04 none outstanding.** Paid rows are struck through rather than
 deleted, so a reader can tell "paid" from "never asked". Rows 1, 3, 4, 5 and DEF-2 were paid on
 2026-08-03/04; row 2 was found to have been paid earlier and never retired; rows 6, 7 and 8 were
