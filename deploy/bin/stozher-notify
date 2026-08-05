@@ -1,0 +1,206 @@
+#!/usr/bin/env python3
+"""Turn the kernel's approver ping into a macOS notification, on the operator's own machine.
+
+Why this is here and not a service
+----------------------------------
+The kernel has exactly one outbound of its own — the approver ping (ADR-0002) — and three channels:
+Slack, a generic webhook, and SMTP. None of them is "a desktop notification", and none should be: a
+notification is a property of the machine a human is sitting at, not of the deployment.
+
+So this is the generic webhook's other end, running where the human is. It is not a container, not a
+third service, and nothing about the running system depends on it. Close it and the pings stop; the
+parks do not, because a park is durable in the kernel *before* any channel is touched.
+
+What it deliberately does not do
+--------------------------------
+**It does not sign anything, and it holds no key.** Clicking the notification opens a terminal with
+the approve command *typed out and not run*. The human still reads the request and still presses
+return, in a process the agent cannot reach. Approving from inside anything an agent can call is the
+one thing this system exists to make impossible, so the convenience stops one step short of it — and
+that step is the whole product.
+
+**It shows no arguments.** The ping carries what §10 §6 permits: who asked, what for, and the handle
+to answer with. The values themselves live in the evidence payload under retention policy, and the
+place to read them is the console or `stozher-approve`, which prints them before it asks.
+
+It binds 127.0.0.1 and refuses to start otherwise. A webhook receiver reachable from the network is
+a way for anyone who can reach it to make an operator's laptop say whatever they like.
+
+Usage
+-----
+    bin/stozher-notify [--port 8898] [--token-env STOZHER_NOTIFY_TOKEN]
+
+Then, in `config/kernel-config.json`:
+
+    "notifications": [
+      { "channel": "webhook", "url-env": "STOZHER_WEBHOOK_URL", "token-env": "STOZHER_WEBHOOK_TOKEN" }
+    ]
+
+The member is `channel`, not `kind`, and the two environment variables are the ones
+`docker-compose.yml` already passes through — writing `kind` here cost a minute of downtime on
+2026-08-05, because the kernel refuses to start on a configuration it does not fully understand
+rather than running with the part it does.
+
+`STOZHER_WEBHOOK_URL=http://host.docker.internal:8898/ping` in `deploy/.env`, because the kernel is
+in a container and 127.0.0.1 there is not this machine.
+"""
+
+from __future__ import annotations
+
+import argparse
+import http.server
+import json
+import os
+import shlex
+import shutil
+import subprocess
+import sys
+from pathlib import Path
+
+DEPLOY = Path(__file__).resolve().parent.parent
+
+
+def notify(payload: dict[str, object]) -> None:
+    """One macOS notification, and the same line on stdout for whoever is watching the terminal."""
+    subject = str(payload.get("subject", "someone"))
+    action = str(payload.get("action", "an action"))
+    request_hash = str(payload.get("request-hash", ""))
+    title = "Stozher — approval needed"
+    body = f"{subject} wants to {action}"
+
+    command = approve_command(request_hash)
+    print(f"\n  {body}\n  request {request_hash}\n  {command}\n", flush=True)
+
+    # `terminal-notifier` when it is there, because clicking a notification should do something.
+    # A notification from `osascript` is *owned by Script Editor*, so clicking one opens Script
+    # Editor — which is what happened the first time this ran, and is worse than not being
+    # clickable: it looks broken.
+    #
+    # `-execute` opens Terminal with the approve command **typed and not run**. That is the whole
+    # design in one flag: one gesture to get to the decision, and the decision itself still a human
+    # reading the request and pressing return in a process no agent can reach. This receiver holds
+    # no key and `-execute` runs a command that asks before it signs.
+    if shutil.which("terminal-notifier"):
+        subprocess.run(
+            [
+                "terminal-notifier",
+                "-title", title,
+                "-message", body,
+                "-subtitle", f"request {request_hash[:16]}",
+                "-sound", "Ping",
+                # `-execute` takes a shell string. The hash is the only thing off the wire that
+                # reaches it, and `approve_command` quotes it — an unquoted hash carrying a
+                # semicolon would be a remote caller choosing what this Mac runs.
+                "-execute", decide_command(request_hash),
+            ],
+            check=False,
+            capture_output=True,
+            timeout=10,
+        )
+        return
+
+    # No `terminal-notifier`: an informative notification, and the command stays in this terminal.
+    # Deliberately not clickable rather than clickable-into-the-wrong-app.
+    script = (
+        f'display notification "{applescript(body)}" '
+        f'with title "{applescript(title)}" sound name "Ping"'
+    )
+    try:
+        subprocess.run(["osascript", "-e", script], check=False, capture_output=True, timeout=10)
+    except (OSError, subprocess.SubprocessError) as e:  # pragma: no cover - platform dependent
+        print(f"  (the notification could not be shown: {e})", flush=True)
+
+
+def decide_command(request_hash: str) -> str:
+    """What a click runs: open a Terminal on `bin/stozher-decide`, which shows and asks.
+
+    Not a keystroke into Terminal — that needs Accessibility permission and fails *silently* without
+    it, which is the worst way for an approval path to not work. `open -a Terminal <script>` needs no
+    permission and either opens or errors.
+
+    It runs a script that **asks**; it does not approve. The distinction is the product.
+    """
+    inner = f"cd {shlex.quote(str(DEPLOY))} && bin/stozher-decide {shlex.quote(request_hash)}"
+    # Terminal's own `do script`, not `open -a Terminal <file>` (which passes no arguments) and not
+    # a keystroke into it (which needs Accessibility permission and fails *silently* without it —
+    # the worst way for an approval path to not work). `do script` asks for Automation permission
+    # the first time, visibly, once.
+    applescript_text = f'tell application "Terminal" to do script "{applescript(inner)}"'
+    return f"osascript -e {shlex.quote(applescript_text)}"
+
+
+def applescript(text: str) -> str:
+    """Escape for an AppleScript string literal. Backslash first, or it escapes its own escapes."""
+    return text.replace("\\", "\\\\").replace('"', '\\"')
+
+
+def approve_command(request_hash: str) -> str:
+    """The command the human runs. Printed, never executed — this process holds no key."""
+    return f"cd {shlex.quote(str(DEPLOY))} && bin/stozher-approve {shlex.quote(request_hash)} --root human:<you>"
+
+
+class Handler(http.server.BaseHTTPRequestHandler):
+    token: str | None = None
+
+    def do_POST(self) -> None:  # noqa: N802 - the stdlib's name
+        if self.path != "/ping":
+            self.send_error(404)
+            return
+        if self.token is not None:
+            presented = self.headers.get("Authorization", "")
+            if presented != f"Bearer {self.token}":
+                # A receiver that accepts anything is a way for any local process to make this
+                # laptop claim an approval is waiting. The kernel sends the token it was configured
+                # with; nothing else knows it.
+                self.send_error(401)
+                return
+        length = int(self.headers.get("Content-Length") or 0)
+        raw = self.rfile.read(length) if length else b"{}"
+        try:
+            payload = json.loads(raw.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError):
+            self.send_error(400)
+            return
+        self.send_response(204)
+        self.end_headers()
+        if isinstance(payload, dict) and payload.get("event") == "gate-parked":
+            notify(payload)
+
+    def log_message(self, *args: object) -> None:
+        """Silent. The interesting output is the ping itself, and an access log buries it."""
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description="macOS notifications for parked approvals")
+    parser.add_argument("--port", type=int, default=8898)
+    parser.add_argument(
+        "--token-env",
+        default="STOZHER_WEBHOOK_TOKEN",
+        help="environment variable holding the bearer token the kernel presents",
+    )
+    args = parser.parse_args()
+
+    Handler.token = os.environ.get(args.token_env) or None
+    if Handler.token is None:
+        print(
+            f"warning: {args.token_env} is not set, so this receiver accepts any local caller.\n"
+            "         Set it here and in the kernel's notification config, or anything on this\n"
+            "         machine can make it claim an approval is waiting.",
+            file=sys.stderr,
+        )
+
+    server = http.server.HTTPServer(("127.0.0.1", args.port), Handler)
+    print(
+        f"listening on http://127.0.0.1:{args.port}/ping — approvals will appear as notifications.\n"
+        "This holds no key and signs nothing. Ctrl-C to stop; parks keep queueing without it.",
+        flush=True,
+    )
+    try:
+        server.serve_forever()
+    except KeyboardInterrupt:
+        print("\nstopped. The queue is unaffected.", flush=True)
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

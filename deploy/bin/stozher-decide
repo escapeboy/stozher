@@ -1,0 +1,102 @@
+#!/usr/bin/env bash
+# What a clicked notification opens: the request, in full, and one question.
+#
+# This is the last step of the ping and the first step of a decision, and the two must not be the
+# same step. `bin/stozher-notify` receives the kernel's webhook and holds no key; this runs in a
+# terminal the human is looking at, shows what is actually being asked, and only then offers to run
+# `bin/stozher-approve` — which is the thing that touches the operator seed.
+#
+# Why it is a separate file from the notifier: the notifier is a network listener. A network
+# listener that can also sign is one bug away from being a signing service, and the property this
+# whole system rests on is that no such service exists.
+#
+# Usage: bin/stozher-decide <request-hash> [--root human:<you>]
+
+set -euo pipefail
+
+DEPLOY="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$DEPLOY"
+
+HASH="${1:-}"
+ROOT=""
+shift || true
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --root) ROOT="$2"; shift 2 ;;
+    *) shift ;;
+  esac
+done
+
+if [ -z "$HASH" ]; then
+  echo "usage: bin/stozher-decide <request-hash> [--root human:<you>]" >&2
+  exit 2
+fi
+
+# The root is read from the deployment's own configuration when it was not given, so a clicked
+# notification does not have to carry it — and so it is right rather than remembered.
+if [ -z "$ROOT" ]; then
+  ROOT="$(python3 -c "
+import json
+d = json.load(open('config/kernel-config.json'))
+roots = d.get('roots', [])
+print(roots[0]['subject'] if len(roots) == 1 else '')
+")"
+fi
+if [ -z "$ROOT" ]; then
+  echo "this deployment has more than one enrolled root; say which one is you:" >&2
+  echo "  bin/stozher-decide $HASH --root human:<you>" >&2
+  exit 2
+fi
+
+printf '\n\033[1mStozher — a decision is waiting\033[0m\n\n'
+
+# The arguments, verbatim, from the kernel's own queue. §06 §4.4 exists so an approver reads the
+# values rather than a digest of them, and a prompt that skipped this would be asking someone to
+# sign for something they were told about rather than something they read.
+TOKEN="$(grep -E '^STOZHER_KERNEL_TOKEN=' .env | cut -d= -f2-)"
+PORT="$(grep -E '^STOZHER_KERNEL_PORT=' .env | cut -d= -f2- || true)"
+PORT="${PORT:-8787}"
+if ! /usr/bin/curl -fsS -m 10 -H "Authorization: Bearer $TOKEN" \
+      "http://127.0.0.1:${PORT}/v1/gate/requests/${HASH}" \
+    | python3 -c "
+import json, sys
+d = json.load(sys.stdin)
+r = d.get('request', d)
+for k in ('subject', 'component', 'action', 'target', 'classification', 'not-after'):
+    if r.get(k) is not None:
+        print(f'  {k:<16}{r[k]}')
+args = d.get('arguments')
+print()
+if args is None:
+    # §06 §4.4 rule 8: a queue that cannot show the values says so rather than rendering nothing.
+    print('  arguments        NOT AVAILABLE — the component submitted none, or they had no')
+    print('                   canonical form. Approving means signing for a call you cannot read.')
+else:
+    print('  arguments:')
+    for line in json.dumps(args, indent=2, ensure_ascii=False).splitlines():
+        print(f'    {line}')
+"; then
+  echo "  could not read the request from the kernel — it may have expired, or the kernel is down." >&2
+  echo "  hash: $HASH" >&2
+  exit 1
+fi
+
+printf '\n  request-hash    %s\n' "$HASH"
+printf '  you             %s\n\n' "$ROOT"
+
+read -r -p "Approve this? [y/N/d=deny] " answer
+case "$answer" in
+  y|Y)
+    exec bin/stozher-approve "$HASH" --root "$ROOT"
+    ;;
+  d|D)
+    read -r -p "Reason (a denial without one is refused): " reason
+    exec bin/stozher-approve "$HASH" --root "$ROOT" --deny --reason "$reason"
+    ;;
+  *)
+    # Not answering is a legitimate answer and leaves the request exactly where it was: parked,
+    # answerable until `not-after`, and visible in the console. Nothing is recorded here, because
+    # "someone looked and did not decide" is not a decision (§06 §5: one request, one answer).
+    echo "left parked. Nothing was signed."
+    ;;
+esac
