@@ -33,6 +33,22 @@ from stozher_gateway.kernel_client import KernelResponse, KernelUnreachableError
 from .test_enforcement import Harness
 
 
+def _request(action: str) -> dict[str, Any]:
+    """The members a real gate-request carries. A thinner fixture passes the happy path and then
+    fails inside the refusal builder, which is where the first version of this file went wrong."""
+    return {
+        "action": action,
+        "target": "mcp:github",
+        "classification": "consequential",
+        "subject": "agent:claude-code",
+        "key": "ed25519:" + "1" * 64,
+        "component": "gateway",
+        "mandate-ref": "m" * 32,
+        "policy-version": "2026.07.1",
+        "args-hash": "a" * 64,
+    }
+
+
 class _KernelThatComesBack:
     """Unreachable until `up` is set, then queueing normally. Records what it was offered."""
 
@@ -64,7 +80,7 @@ def test_a_park_held_while_the_kernel_was_down_is_offered_when_a_session_opens(
 
     harness.store.park(
         "e" * 64,
-        {"action": "github.create_issue", "target": "mcp:github"},
+        _request("github.create_issue"),
         "github",
         "create_issue",
         "consequential",
@@ -95,7 +111,7 @@ def test_an_answered_park_is_not_offered_again(harness: Harness) -> None:
 
     harness.store.park(
         "f" * 64,
-        {"action": "github.create_issue", "target": "mcp:github"},
+        _request("github.create_issue"),
         "github",
         "create_issue",
         "consequential",
@@ -134,7 +150,7 @@ def test_a_re_offered_park_still_carries_what_the_approver_must_read(harness: Ha
     request_hash = "a1" * 32
     harness.store.park(
         request_hash,
-        {"action": "github.create_issue", "target": "mcp:github"},
+        _request("github.create_issue"),
         "github",
         "create_issue",
         "consequential",
@@ -150,3 +166,42 @@ def test_a_re_offered_park_still_carries_what_the_approver_must_read(harness: Ha
         "the re-offered park carried no arguments; §06 §4.4 rule 7 makes that blank permanent, and "
         "the approver is asked to sign for a call nobody can describe"
     )
+
+
+def test_one_park_the_kernel_refuses_does_not_stop_the_session(harness: Harness) -> None:
+    """A recovery loop must not be able to stop a session from starting.
+
+    Found by installing this on a real deployment an hour after writing `requeue_parks`. A park from
+    five days earlier was re-offered, the kernel refused it `gate-request-expired` — correctly, a
+    request's `not-after` is an hour — and `_queue_with_kernel` *raises* on a kernel refusal by
+    design, because for a fresh park that refusal means "this is in no queue and reporting it as
+    parked would be a lie". Propagating out of `requeue_parks` it meant something else entirely:
+    **enforcement mode did not start at all**, so the gateway served its tools ungoverned.
+
+    One stale row turned into a total outage of the thing that governs. That is worse than the
+    invisibility `requeue_parks` was written to fix, and it is the failure mode of every recovery
+    loop that treats one item's failure as its own.
+    """
+    class _RefusesEverything(_KernelThatComesBack):
+        def park_gate_request(
+            self, request: dict[str, Any], arguments: Any = None
+        ) -> KernelResponse:
+            return KernelResponse(status=422, body={"reason-code": "gate-request-expired"})
+
+    harness.enforcer._kernel = _RefusesEverything()
+
+    for i, request_hash in enumerate(("b1" * 32, "b2" * 32)):
+        harness.store.park(
+            request_hash,
+            _request(f"github.tool_{i}"),
+            "github",
+            f"tool_{i}",
+            "consequential",
+            None,
+            True,
+            clock_module.now(),
+        )
+
+    # Must not raise, and must not stop after the first refusal.
+    assert harness.enforcer.requeue_parks(harness.session) == 0
+    assert len(harness.store.pending()) == 2, "a refused re-offer discarded the park it was for"

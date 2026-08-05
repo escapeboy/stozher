@@ -381,8 +381,26 @@ class Enforcer:
             return 0
         landed = 0
         for parked in self._store.pending():
-            if self._queue_with_kernel(parked.request, parked.arguments) is None:
-                landed += 1
+            try:
+                if self._queue_with_kernel(parked.request, parked.arguments) is None:
+                    landed += 1
+            except RefusalError as refused:
+                # `_queue_with_kernel` *raises* when the kernel refuses, and for a fresh park that
+                # is right: the request is in no queue and calling it `parked` would be a lie. Here
+                # it is wrong, and it was wrong in production within an hour of this loop being
+                # written — a park from five days earlier was re-offered, refused
+                # `gate-request-expired` because a request's `not-after` is one hour, and the
+                # exception came out of session open. **Enforcement mode did not start**, so the
+                # gateway served its tools ungoverned. One stale row became a total outage of the
+                # thing that governs, which is worse than the invisibility this loop was fixing.
+                #
+                # A recovery loop must never be able to stop a session from starting. The park is
+                # left where it is, and the next session tries again.
+                logger.warning(
+                    "a held park could not be re-offered (%s); it stays local and will be offered "
+                    "again next session",
+                    refused.document.get("reason-code", "unknown"),
+                )
         if landed:
             logger.info(
                 "%d park(s) held locally are now in the kernel's queue and visible to a human",
