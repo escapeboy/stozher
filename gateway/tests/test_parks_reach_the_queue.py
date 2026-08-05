@@ -205,3 +205,28 @@ def test_one_park_the_kernel_refuses_does_not_stop_the_session(harness: Harness)
     # Must not raise, and must not stop after the first refusal.
     assert harness.enforcer.requeue_parks(harness.session) == 0
     assert len(harness.store.pending()) == 2, "a refused re-offer discarded the park it was for"
+
+
+def test_a_park_past_its_not_after_is_not_offered_again_for_ever(harness: Harness) -> None:
+    """A request that cannot be answered must not be asked about once per session, for ever.
+
+    §06 §2 step (9) refuses any decision over an expired request, so re-offering one is a request
+    that is guaranteed to fail. On a deployment whose only park was five days old this produced a
+    `422 gate-request-expired` on every session open — noise an operator learns to scroll past, and
+    then scrolls past something real.
+
+    The row stays: it is this component's record that the call was asked for and never answered.
+    """
+    kernel = _KernelThatComesBack()
+    kernel.up = True
+    harness.enforcer._kernel = kernel
+
+    dead = _request("github.create_issue")
+    dead["not-after"] = "2026-07-31T10:48:50.802Z"
+    harness.store.park(
+        "c1" * 32, dead, "github", "create_issue", "consequential", None, True, clock_module.now()
+    )
+
+    assert harness.enforcer.requeue_parks(harness.session) == 0
+    assert kernel.offered == [], "an expired request was offered to the queue"
+    assert len(harness.store.pending()) == 1, "the record of an unanswered call was discarded"

@@ -380,7 +380,19 @@ class Enforcer:
         if self._kernel is None:
             return 0
         landed = 0
+        now = self._clock.now()
         for parked in self._store.pending():
+            # A request past its `not-after` can never be queued — §06 §2 step (9) refuses any
+            # decision over it — so re-offering one is a request that cannot succeed, made once per
+            # session, for ever. It showed up as a `422 gate-request-expired` on every single
+            # session open of a deployment whose only park was five days old, which is the kind of
+            # noise an operator learns to scroll past and then scrolls past something real.
+            #
+            # Skipped rather than deleted: the row is this component's record that the call was
+            # asked for and never answered, and `/console/attempts` is where that belongs.
+            not_after = parked.request.get("not-after")
+            if isinstance(not_after, str) and not_after < now:
+                continue
             try:
                 if self._queue_with_kernel(parked.request, parked.arguments) is None:
                     landed += 1

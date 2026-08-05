@@ -81,6 +81,22 @@ else:
   exit 1
 fi
 
+# A dead request cannot be answered — §06 §2 step (9) refuses any decision over it — so offering to
+# sign one wastes a signature on a certainty. `bin/stozher-approve` signs first and learns second,
+# which is how a demonstration on 2026-08-05 burned one and reported `gate-request-expired` from the
+# far side. The information needed to know better is on the screen above: `not-after`.
+NOT_AFTER="$(/usr/bin/curl -fsS -m 10 -H "Authorization: Bearer $TOKEN" \
+  "http://127.0.0.1:${PORT}/v1/gate/requests/${HASH}" \
+  | python3 -c "import json,sys; d=json.load(sys.stdin); r=d.get('request',d); print(r.get('not-after',''))" 2>/dev/null || true)"
+NOW="$(date -u +%Y-%m-%dT%H:%M:%S.000Z)"
+if [ -n "$NOT_AFTER" ] && [ "$NOT_AFTER" \< "$NOW" ]; then
+  printf '\n  request-hash    %s\n\n' "$HASH"
+  printf '\033[1mThis request expired at %s.\033[0m\n' "$NOT_AFTER"
+  printf 'Nothing can be approved: a decision over a dead request is refused (spec/06 §2 step 9).\n'
+  printf 'The agent has to ask again, and the new request is the one to answer.\n\n'
+  exit 1
+fi
+
 printf '\n  request-hash    %s\n' "$HASH"
 printf '  you             %s\n\n' "$ROOT"
 
