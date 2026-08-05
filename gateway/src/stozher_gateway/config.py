@@ -224,6 +224,16 @@ class GatewaySection(BaseModel):
     enabled: bool = False
     device: str = Field(default="local", pattern=r"^[A-Za-z0-9._-]{1,64}$")
     component: str = "gateway"
+    #: §02's `correlation-ref`, stamped on every envelope this gateway emits. Opaque to the kernel
+    #: and never interpreted by it — the kernel stores and indexes it, and
+    #: `GET /v1/envelopes?correlation-ref=` and `?correlation-prefix=` are how it is read back.
+    #:
+    #: DEF-21: a legal evaluation asked "what did the agent do on the Acme matter?" and could not
+    #: answer it, because every envelope's `target` is `mcp:<server>` and nothing carried a matter.
+    #: The member existed and was queryable; **nothing set it**, so the dimension was real in the
+    #: protocol and unreachable in practice. One gateway process serves one caller on one device, so
+    #: configuring it per process is the grain that fits — a matter, a tenant, a case, an incident.
+    correlation_ref: str | None = Field(default=None, max_length=128)
     state_db: Path | None = None
     #: A root-signed policy bundle to seed the local caches from at startup, for a component that
     #: has never reached a kernel (`bundle.py`). Verified against `org.roots` before it is trusted,

@@ -1453,6 +1453,12 @@ class Enforcer:
         }
         if authorization is not None:
             body["authorization"] = authorization
+        # DEF-21. The one dimension an organization uses to ask "what happened on *this* matter",
+        # and the kernel already stores and indexes it (`?correlation-ref=`, `?correlation-prefix=`).
+        # Nothing set it, so the member was real in the protocol and unreachable in practice — a
+        # legal evaluation could not answer that question and concluded the dimension did not exist.
+        if self._config.gateway.correlation_ref is not None:
+            body["correlation-ref"] = self._config.gateway.correlation_ref
         payloads = [
             {"payload-hash": payload_hash, "media-type": "application/json", "payload": payload}
         ]

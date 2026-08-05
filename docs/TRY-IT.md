@@ -143,11 +143,12 @@ so check it rather than believe it.
 | | |
 |---|---|
 | DEF-14 / ADR-0034 | one `classification` decides gate, retention, offline behaviour and record granularity at once |
-| DEF-16 | offline, a park's `result` says `parked` when nothing reached a queue — the `hint` says so, the `result` does not |
-| DEF-17 | `/v1/payloads/<hash>` cannot distinguish "decayed" from "never existed" |
-| DEF-18 | the rate limiter drops consequential work rather than queueing it |
-| DEF-20 | no per-action approver and no quorum in `gate-rules` |
-| DEF-21 | no matter/case/tenant dimension on an envelope |
+| DEF-22 | no quorum: `authorization` carries one `decision`, so "two partners must both sign" cannot be written |
+| DEF-18, residue | an organization steadily above the park cap has no queue to fall into, only a slower loop |
+
+Everything else the four evaluations found is closed, with a test that fails when the fix is
+reverted. `docs/open-defects.md` has the list and what each one turned out to be — including the two
+where the report was wrong in the system's favour and the row says so.
 
 And the two things no amount of engineering closes: **no human has ever operated this** — the four
 evaluations were agents, which is reproducible operational evidence and not market signal — and the
