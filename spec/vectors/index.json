@@ -116,7 +116,7 @@
       "path": "policy-evaluation.json",
       "kind": "policy-evaluation",
       "role": "primitive",
-      "count": 14,
+      "count": 19,
       "description": "Classification and the gate rule (spec 05 section 3). Evaluate `request` against `policy`: the resulting class MUST equal `expected.class` and the gate rule's verdict MUST equal `expected.decision`. `request.manifest-class` is the class a registered manifest proposes, or null when the component has none."
     },
     {

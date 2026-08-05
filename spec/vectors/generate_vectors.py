@@ -3265,10 +3265,64 @@ def gen_policy_evaluation() -> None:
     )
 
     vectors = []
+    # §05 §3.2 — `actions` narrows a gate rule. The shape a firm asked for and could not write: a
+    # partner approves filings, an associate approves everything else. Four cases, because the
+    # interesting half of a first-match-wins rule is the *order*: the narrow entry must be reachable
+    # (1), must not swallow what it does not name (2), an absent `actions` must still mean "any" (3),
+    # and a prefix pattern must work like §03 §4.1 says everywhere else (4).
+    NARROWED = [
+        {
+            "classes": ["consequential"],
+            "actions": ["court.file_motion"],
+            "decision": "gate",
+            "approvers": ["human:partner"],
+        },
+        {"classes": ["consequential"], "decision": "gate", "approvers": ["human:associate"]},
+        {"classes": ["prohibited"], "decision": "deny"},
+        {"classes": ["read", "benign"], "decision": "allow"},
+    ]
+    PREFIXED = [
+        {
+            "classes": ["consequential"],
+            "actions": ["court.*"],
+            "decision": "deny",
+        },
+        {"classes": ["consequential"], "decision": "gate", "approvers": ["human:associate"]},
+        {"classes": ["prohibited"], "decision": "deny"},
+        {"classes": ["read", "benign"], "decision": "allow"},
+    ]
+    NARROWED_CASES = {
+        "gate-rule-narrowed-to-an-action-matches-it": (NARROWED, "court.file_motion", "gate"),
+        "gate-rule-narrowed-to-an-action-does-not-catch-another": (
+            NARROWED,
+            "court.read_docket",
+            "gate",
+        ),
+        "gate-rule-with-a-prefix-pattern-matches-the-segment": (PREFIXED, "court.file_motion", "deny"),
+        "gate-rule-with-a-prefix-pattern-leaves-the-rest": (PREFIXED, "email.send", "gate"),
+        # The query wildcard. `*` is not an action name; it is a caller asking whether the class is
+        # gated at all, and it matches every entry including a narrowed one. The two reference
+        # implementations disagreed here on the day the member was added — one treated `*` as a
+        # literal that matched nothing — so it is a vector rather than a comment.
+        "gate-rule-query-wildcard-matches-a-narrowed-rule": (PREFIXED, "*", "deny"),
+    }
+    for narrow_name, (rules, narrow_action, narrow_decision) in NARROWED_CASES.items():
+        case(
+            narrow_name,
+            {**empty, "by-action": {narrow_action: "consequential"}},
+            request(action=narrow_action),
+            "consequential",
+            narrow_decision,
+            "spec 05 section 3.2: gate-rules[].actions narrows an entry, first match wins in "
+            "document order",
+        )
+
     for name, classification, req, cls, decision, desc in cases:
         gate_rules = None
         if name == "a-class-no-gate-rule-names-is-denied":
             gate_rules = [{"classes": ["consequential"], "decision": "gate", "approvers": ["human:ivan"]}]
+        if name in NARROWED_CASES:
+            gate_rules = NARROWED_CASES[name][0]
         vectors.append(
             {
                 "name": name,

@@ -75,11 +75,12 @@ fn every_policy_evaluation_vector_matches_this_implementation() {
             continue;
         }
 
-        let decision = match policy.decision_for(&class) {
-            Decision::Allow => "allow",
-            Decision::Gate { .. } => "gate",
-            Decision::Deny => "deny",
-        };
+        let decision =
+            match policy.decision_for(&class, request["action"].as_str().unwrap_or_default()) {
+                Decision::Allow => "allow",
+                Decision::Gate { .. } => "gate",
+                Decision::Deny => "deny",
+            };
         let expected_decision = vector["expected"]["decision"].as_str().unwrap_or_default();
         if decision != expected_decision {
             failures.push(format!(

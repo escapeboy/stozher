@@ -672,7 +672,11 @@ fn window_of(mandate: &Value) -> Result<(&str, &str)> {
 }
 
 /// A pattern covers a value: exact equality, `"*"`, or a `.`-segment prefix `"x.*"` (§03 §4.1).
-fn matches(pattern: &str, value: &str) -> bool {
+///
+/// Public because §05 §3.2's `gate-rules[].actions` is the same vocabulary and must not become a
+/// second implementation of it. One definition of what a pattern means, or the two drift and the
+/// drift is a policy that binds under one evaluator and not the other.
+pub fn matches(pattern: &str, value: &str) -> bool {
     if pattern == "*" || pattern == value {
         return true;
     }

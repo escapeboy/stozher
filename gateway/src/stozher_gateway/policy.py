@@ -196,11 +196,27 @@ class Policy:
 
     # -- §05 §3 step 4: the gate rule --------------------------------------------------------
 
-    def decision_for(self, classification: str) -> Decision:
-        """The first matching `gate-rules` entry decides."""
+    def decision_for(self, classification: str, action: str = "*") -> Decision:
+        """The first matching `gate-rules` entry decides (§05 §3.2).
+
+        `actions` narrows an entry to some actions; absent, it means "any", which is what every
+        entry written before the member existed says. `action="*"` is the caller asking "who may
+        approve at all in this deployment" rather than "who may approve *this* call", and it matches
+        every entry — a rule narrowed to some actions must not narrow that answer.
+
+        First match wins, in document order and not by specificity, unlike `reclassify` above. A
+        policy author writes the narrow rule first and reads the document top to bottom (DEF-20).
+        """
         for rule in self.document.get("gate-rules", []):
-            if classification in rule.get("classes", []):
-                return Decision(str(rule.get("decision", "deny")), list(rule.get("approvers", [])))
+            if classification not in rule.get("classes", []):
+                continue
+            patterns = rule.get("actions")
+            if patterns is not None and not any(
+                _dimension_score(pattern, action) is not None or action == "*"
+                for pattern in patterns
+            ):
+                continue
+            return Decision(str(rule.get("decision", "deny")), list(rule.get("approvers", [])))
         # No rule matched. The absence of a permission is not a permission.
         return Decision("deny", [])
 

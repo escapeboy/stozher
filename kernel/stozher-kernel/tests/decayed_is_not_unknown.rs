@@ -56,14 +56,13 @@ async fn a_hash_that_was_never_recorded_is_unknown_and_not_decayed() {
     let world = world().await;
     let never = "f".repeat(64);
 
-    assert_eq!(
-        world
+    assert!(
+        !world
             .ingest()
             .store()
             .payload_was_committed(&never)
             .await
             .expect("reading the commitment record"),
-        false,
         "a hash no envelope ever cited reads as committed"
     );
 }
@@ -93,7 +92,10 @@ async fn a_decayed_payload_is_still_recorded_as_having_existed() {
         .decay_payloads(world.clock.now().as_str())
         .await
         .expect("the sweep");
-    assert!(decayed.contains(&hash), "the payload did not decay: {decayed:?}");
+    assert!(
+        decayed.contains(&hash),
+        "the payload did not decay: {decayed:?}"
+    );
 
     assert!(
         world

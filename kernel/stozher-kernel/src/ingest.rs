@@ -837,9 +837,10 @@ impl Ingest {
         self.validate_commitment(env, manifest.as_ref(), subject)
             .await?;
 
-        // §05 §3 step 4 — the gate rule.
-        let decision = policy.decision_for(&effective);
+        // §05 §3 step 4 — the gate rule. The action is read first because a rule may narrow on it
+        // (§05 §3.2).
         let action = env["execution"]["action"].as_str().unwrap_or_default();
+        let decision = policy.decision_for(&effective, action);
         let root_approved = ROOT_APPROVED_ACTIONS.contains(&action) || kind == "policy-change";
         let requires_gate = match &decision {
             // A gated action that was never applied — parked, denied, timed out — legitimately has
@@ -1469,7 +1470,11 @@ impl Ingest {
             }
         }
         // An agent that can approve is a system with no gates (§06 §5).
-        let permitted = match policy.decision_for("consequential") {
+        // `*` for the action: this is asking "who may approve at all in this deployment", not
+        // "who may approve *this* call", so a rule narrowed to some actions must not narrow the
+        // answer. A `*` matches every rule's `actions` and therefore the first `consequential`
+        // gate rule, which is the same entry this used to find (§05 §3.2).
+        let permitted = match policy.decision_for("consequential", "*") {
             Decision::Gate { approvers } => self.approver_keys(&approvers, at, "").await?,
             Decision::Allow | Decision::Deny => self.root_approvers(at).await?,
         };
@@ -1658,7 +1663,7 @@ impl Ingest {
             return Ok(roots);
         };
         let policy = Policy::parse(&document, &self.config.policy_key)?;
-        match policy.decision_for(classification) {
+        match policy.decision_for(classification, action) {
             Decision::Gate { approvers } => self.approver_keys(&approvers, at, action).await,
             Decision::Allow | Decision::Deny => Ok(roots),
         }

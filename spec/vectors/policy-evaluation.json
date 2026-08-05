@@ -1219,6 +1219,472 @@
         "class": "benign",
         "decision": "deny"
       }
+    },
+    {
+      "name": "gate-rule-narrowed-to-an-action-matches-it",
+      "description": "spec 05 section 3.2: gate-rules[].actions narrows an entry, first match wins in document order",
+      "policy": {
+        "v": "stozher/0.1",
+        "kind": "policy",
+        "policy-version": "2026.07.1",
+        "issued-at": "2026-07-26T08:00:00.000Z",
+        "classification": {
+          "by-action": {
+            "court.file_motion": "consequential"
+          },
+          "reclassify": [],
+          "default-unknown": "consequential"
+        },
+        "gate-rules": [
+          {
+            "classes": [
+              "consequential"
+            ],
+            "actions": [
+              "court.file_motion"
+            ],
+            "decision": "gate",
+            "approvers": [
+              "human:partner"
+            ]
+          },
+          {
+            "classes": [
+              "consequential"
+            ],
+            "decision": "gate",
+            "approvers": [
+              "human:associate"
+            ]
+          },
+          {
+            "classes": [
+              "prohibited"
+            ],
+            "decision": "deny"
+          },
+          {
+            "classes": [
+              "read",
+              "benign"
+            ],
+            "decision": "allow"
+          }
+        ],
+        "evidence-ttl": {
+          "read": "P0D",
+          "benign": "P30D",
+          "consequential": "P365D",
+          "prohibited": "P3650D"
+        },
+        "budgets": {
+          "defaults": {
+            "requests": 10000,
+            "money-eur": "50.00"
+          }
+        },
+        "delegation": {
+          "max-depth": 3,
+          "max-standing-lifetime": "P90D"
+        },
+        "offline": {
+          "read": "allow",
+          "benign": "allow",
+          "consequential": "block",
+          "prohibited": "block"
+        },
+        "aggregate-max-window": "PT5M",
+        "revoke-cached": false,
+        "max-staleness-seconds": 300,
+        "checkpoint-interval": "PT1H",
+        "profile": "vector-fixture",
+        "sig": {
+          "alg": "ed25519",
+          "key": "ed25519:4e05c3ea19acf2ece1ad5d7602ef4f563f09b08e10ea294006aa8b655aa38f29",
+          "value": "493de83ce43bf0efd2b3573f01d15960e6fcc5cff21aba470caee8dfe2d1a9a7d0f5633309f3ba5a0f91a59955ccb63da074aec004b7fdf7ffbdfcf6269d1a05"
+        }
+      },
+      "request": {
+        "subject": "agent:claude-code/ivan-mbp",
+        "action": "court.file_motion",
+        "resource": "repo:acme/backend",
+        "manifest-class": null
+      },
+      "expected": {
+        "class": "consequential",
+        "decision": "gate"
+      }
+    },
+    {
+      "name": "gate-rule-narrowed-to-an-action-does-not-catch-another",
+      "description": "spec 05 section 3.2: gate-rules[].actions narrows an entry, first match wins in document order",
+      "policy": {
+        "v": "stozher/0.1",
+        "kind": "policy",
+        "policy-version": "2026.07.1",
+        "issued-at": "2026-07-26T08:00:00.000Z",
+        "classification": {
+          "by-action": {
+            "court.read_docket": "consequential"
+          },
+          "reclassify": [],
+          "default-unknown": "consequential"
+        },
+        "gate-rules": [
+          {
+            "classes": [
+              "consequential"
+            ],
+            "actions": [
+              "court.file_motion"
+            ],
+            "decision": "gate",
+            "approvers": [
+              "human:partner"
+            ]
+          },
+          {
+            "classes": [
+              "consequential"
+            ],
+            "decision": "gate",
+            "approvers": [
+              "human:associate"
+            ]
+          },
+          {
+            "classes": [
+              "prohibited"
+            ],
+            "decision": "deny"
+          },
+          {
+            "classes": [
+              "read",
+              "benign"
+            ],
+            "decision": "allow"
+          }
+        ],
+        "evidence-ttl": {
+          "read": "P0D",
+          "benign": "P30D",
+          "consequential": "P365D",
+          "prohibited": "P3650D"
+        },
+        "budgets": {
+          "defaults": {
+            "requests": 10000,
+            "money-eur": "50.00"
+          }
+        },
+        "delegation": {
+          "max-depth": 3,
+          "max-standing-lifetime": "P90D"
+        },
+        "offline": {
+          "read": "allow",
+          "benign": "allow",
+          "consequential": "block",
+          "prohibited": "block"
+        },
+        "aggregate-max-window": "PT5M",
+        "revoke-cached": false,
+        "max-staleness-seconds": 300,
+        "checkpoint-interval": "PT1H",
+        "profile": "vector-fixture",
+        "sig": {
+          "alg": "ed25519",
+          "key": "ed25519:4e05c3ea19acf2ece1ad5d7602ef4f563f09b08e10ea294006aa8b655aa38f29",
+          "value": "81d2389074ed8887f0bd5226c58f8dd70dc432c919b1bcd7868e0b662aa3bde2a89346f2ae48f052680695bb897f1437895c97d7e92af64a25690327daa7380f"
+        }
+      },
+      "request": {
+        "subject": "agent:claude-code/ivan-mbp",
+        "action": "court.read_docket",
+        "resource": "repo:acme/backend",
+        "manifest-class": null
+      },
+      "expected": {
+        "class": "consequential",
+        "decision": "gate"
+      }
+    },
+    {
+      "name": "gate-rule-with-a-prefix-pattern-matches-the-segment",
+      "description": "spec 05 section 3.2: gate-rules[].actions narrows an entry, first match wins in document order",
+      "policy": {
+        "v": "stozher/0.1",
+        "kind": "policy",
+        "policy-version": "2026.07.1",
+        "issued-at": "2026-07-26T08:00:00.000Z",
+        "classification": {
+          "by-action": {
+            "court.file_motion": "consequential"
+          },
+          "reclassify": [],
+          "default-unknown": "consequential"
+        },
+        "gate-rules": [
+          {
+            "classes": [
+              "consequential"
+            ],
+            "actions": [
+              "court.*"
+            ],
+            "decision": "deny"
+          },
+          {
+            "classes": [
+              "consequential"
+            ],
+            "decision": "gate",
+            "approvers": [
+              "human:associate"
+            ]
+          },
+          {
+            "classes": [
+              "prohibited"
+            ],
+            "decision": "deny"
+          },
+          {
+            "classes": [
+              "read",
+              "benign"
+            ],
+            "decision": "allow"
+          }
+        ],
+        "evidence-ttl": {
+          "read": "P0D",
+          "benign": "P30D",
+          "consequential": "P365D",
+          "prohibited": "P3650D"
+        },
+        "budgets": {
+          "defaults": {
+            "requests": 10000,
+            "money-eur": "50.00"
+          }
+        },
+        "delegation": {
+          "max-depth": 3,
+          "max-standing-lifetime": "P90D"
+        },
+        "offline": {
+          "read": "allow",
+          "benign": "allow",
+          "consequential": "block",
+          "prohibited": "block"
+        },
+        "aggregate-max-window": "PT5M",
+        "revoke-cached": false,
+        "max-staleness-seconds": 300,
+        "checkpoint-interval": "PT1H",
+        "profile": "vector-fixture",
+        "sig": {
+          "alg": "ed25519",
+          "key": "ed25519:4e05c3ea19acf2ece1ad5d7602ef4f563f09b08e10ea294006aa8b655aa38f29",
+          "value": "2a673e738645bc120833562a69089dfcd92450a1cb3f017af05208419cc2703982ad4c4519d28359292dbd320ff8e17c7b4c5a48c76d5dd4eeb49e493391c90e"
+        }
+      },
+      "request": {
+        "subject": "agent:claude-code/ivan-mbp",
+        "action": "court.file_motion",
+        "resource": "repo:acme/backend",
+        "manifest-class": null
+      },
+      "expected": {
+        "class": "consequential",
+        "decision": "deny"
+      }
+    },
+    {
+      "name": "gate-rule-with-a-prefix-pattern-leaves-the-rest",
+      "description": "spec 05 section 3.2: gate-rules[].actions narrows an entry, first match wins in document order",
+      "policy": {
+        "v": "stozher/0.1",
+        "kind": "policy",
+        "policy-version": "2026.07.1",
+        "issued-at": "2026-07-26T08:00:00.000Z",
+        "classification": {
+          "by-action": {
+            "email.send": "consequential"
+          },
+          "reclassify": [],
+          "default-unknown": "consequential"
+        },
+        "gate-rules": [
+          {
+            "classes": [
+              "consequential"
+            ],
+            "actions": [
+              "court.*"
+            ],
+            "decision": "deny"
+          },
+          {
+            "classes": [
+              "consequential"
+            ],
+            "decision": "gate",
+            "approvers": [
+              "human:associate"
+            ]
+          },
+          {
+            "classes": [
+              "prohibited"
+            ],
+            "decision": "deny"
+          },
+          {
+            "classes": [
+              "read",
+              "benign"
+            ],
+            "decision": "allow"
+          }
+        ],
+        "evidence-ttl": {
+          "read": "P0D",
+          "benign": "P30D",
+          "consequential": "P365D",
+          "prohibited": "P3650D"
+        },
+        "budgets": {
+          "defaults": {
+            "requests": 10000,
+            "money-eur": "50.00"
+          }
+        },
+        "delegation": {
+          "max-depth": 3,
+          "max-standing-lifetime": "P90D"
+        },
+        "offline": {
+          "read": "allow",
+          "benign": "allow",
+          "consequential": "block",
+          "prohibited": "block"
+        },
+        "aggregate-max-window": "PT5M",
+        "revoke-cached": false,
+        "max-staleness-seconds": 300,
+        "checkpoint-interval": "PT1H",
+        "profile": "vector-fixture",
+        "sig": {
+          "alg": "ed25519",
+          "key": "ed25519:4e05c3ea19acf2ece1ad5d7602ef4f563f09b08e10ea294006aa8b655aa38f29",
+          "value": "50e9818b4dfafbe8a1207f9d344e86c8e491bd359e45a7331c10f76468bc6e86489cf6bcea6bd269fda31e7a74672aea50274883218f8c43931da91da3159c04"
+        }
+      },
+      "request": {
+        "subject": "agent:claude-code/ivan-mbp",
+        "action": "email.send",
+        "resource": "repo:acme/backend",
+        "manifest-class": null
+      },
+      "expected": {
+        "class": "consequential",
+        "decision": "gate"
+      }
+    },
+    {
+      "name": "gate-rule-query-wildcard-matches-a-narrowed-rule",
+      "description": "spec 05 section 3.2: gate-rules[].actions narrows an entry, first match wins in document order",
+      "policy": {
+        "v": "stozher/0.1",
+        "kind": "policy",
+        "policy-version": "2026.07.1",
+        "issued-at": "2026-07-26T08:00:00.000Z",
+        "classification": {
+          "by-action": {
+            "*": "consequential"
+          },
+          "reclassify": [],
+          "default-unknown": "consequential"
+        },
+        "gate-rules": [
+          {
+            "classes": [
+              "consequential"
+            ],
+            "actions": [
+              "court.*"
+            ],
+            "decision": "deny"
+          },
+          {
+            "classes": [
+              "consequential"
+            ],
+            "decision": "gate",
+            "approvers": [
+              "human:associate"
+            ]
+          },
+          {
+            "classes": [
+              "prohibited"
+            ],
+            "decision": "deny"
+          },
+          {
+            "classes": [
+              "read",
+              "benign"
+            ],
+            "decision": "allow"
+          }
+        ],
+        "evidence-ttl": {
+          "read": "P0D",
+          "benign": "P30D",
+          "consequential": "P365D",
+          "prohibited": "P3650D"
+        },
+        "budgets": {
+          "defaults": {
+            "requests": 10000,
+            "money-eur": "50.00"
+          }
+        },
+        "delegation": {
+          "max-depth": 3,
+          "max-standing-lifetime": "P90D"
+        },
+        "offline": {
+          "read": "allow",
+          "benign": "allow",
+          "consequential": "block",
+          "prohibited": "block"
+        },
+        "aggregate-max-window": "PT5M",
+        "revoke-cached": false,
+        "max-staleness-seconds": 300,
+        "checkpoint-interval": "PT1H",
+        "profile": "vector-fixture",
+        "sig": {
+          "alg": "ed25519",
+          "key": "ed25519:4e05c3ea19acf2ece1ad5d7602ef4f563f09b08e10ea294006aa8b655aa38f29",
+          "value": "1ee26b6d155c090fb37fd9a1ea1acf5b0aa1913466ea853c0d591bccdf4e7fae303f459e58adb6fa496b7e38649e2b1fe75a96c8cb18e72860c7204a18b40b0b"
+        }
+      },
+      "request": {
+        "subject": "agent:claude-code/ivan-mbp",
+        "action": "*",
+        "resource": "repo:acme/backend",
+        "manifest-class": null
+      },
+      "expected": {
+        "class": "consequential",
+        "decision": "deny"
+      }
     }
   ]
 }

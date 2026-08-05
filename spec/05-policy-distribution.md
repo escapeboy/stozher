@@ -108,7 +108,8 @@ order:
    queryable as violations.
 3. **Mandate.** Verify the chain (§03 §5). Failure blocks (`outcome: "blocked"`).
 4. **Gate rule.** The first matching `gate-rules` entry decides `allow` | `gate` | `deny`. `gate`
-   requires an approval signature per §06 before the effect may be applied.
+   requires an approval signature per §06 before the effect may be applied. Matching is defined in
+   §3.2.
 5. **Budget.** Exhausted budget blocks (§03 §4.3).
 
 `prohibited` before mandate is deliberate: an organization must be able to state "nobody, under any
@@ -152,6 +153,37 @@ by string equality, so a policy reclassifying `github.*` was silently ignored by
 honoured by the kernel. That combination is the worst one available: the emitter applies an effect
 believing it is `read`, and the kernel refuses the record of it
 (`policy-component-override-attempt`). The action happens and the audit does not have it.
+
+### 3.2 How a `gate-rules` entry matches
+
+An entry carries `classes` (MUST) and MAY carry `actions`. It matches an effect when the effect's
+**effective class** is in `classes` **and** — if `actions` is present — some pattern in `actions`
+matches the effect's `execution.action`. Patterns are the vocabulary of §03 §4.1: an exact string,
+`*`, or a `<prefix>.*` segment prefix. An absent `actions` means "any action", which is what every
+entry written before this member existed says.
+
+**Entries are tried in document order and the first match wins.** Order is the author's, and it is
+the only precedence rule: unlike `reclassify` (§3.1), a gate rule is not scored for specificity.
+This is deliberate — a policy author writing "filings need a partner, everything else needs an
+associate" writes the narrow rule first and reads the document top to bottom, and a specificity
+score would silently reorder their intent.
+
+An implementation MUST reject an `actions` member that is not an array of strings
+(`schema-type-mismatch`), and MUST accept an entry that omits it.
+
+**The query wildcard.** An implementation asking *"does any rule gate this class at all"* — rather
+than *"what happens to this call"* — evaluates with the action `*`, and `*` MUST match every entry
+including a narrowed one. A rule scoped to some actions must not narrow the answer to a question
+that was not about an action. This is stated because it is the kind of thing two implementations
+settle differently and neither notices: ours did, for about ten minutes, and the vector
+`gate-rule-query-wildcard-matches-a-narrowed-rule` is what asked them both.
+
+**Why `actions` and not a second dimension.** The alternative considered was giving a gate rule the
+full `subject`/`action`/`resource` triple that `reclassify` has. It was rejected here and only here:
+`resource` is presently `mcp:<server>` for every proxied call (§10 §2), so two of the three
+dimensions would be unusable at the point they were introduced, and a member that cannot be
+exercised is one nobody can be told is wrong. The wider question is open — see the note in §3.1 and
+`docs/adr/ADR-0034`.
 
 ## 4. Retention and TTL
 

@@ -1125,7 +1125,12 @@ async fn get_payload(
         //
         // `payload_refs` outlives the bytes by construction — the sweep touches `payloads` alone —
         // so the record was already there and nothing was asking it.
-        Ok(None) => match kernel.ingest.store().payload_was_committed(&payload_hash).await {
+        Ok(None) => match kernel
+            .ingest
+            .store()
+            .payload_was_committed(&payload_hash)
+            .await
+        {
             Ok(true) => json(
                 StatusCode::GONE,
                 &serde_json::json!({

@@ -341,7 +341,11 @@ def handle_policy_evaluation(doc: dict[str, Any], vector: dict[str, Any], label:
         request.get("manifest-class"),
     )
     equal(classification, vector["expected"]["class"], f"{label}/class")
-    equal(policy.decision_for(classification).kind, vector["expected"]["decision"], f"{label}/decision")
+    equal(
+        policy.decision_for(classification, request["action"]).kind,
+        vector["expected"]["decision"],
+        f"{label}/decision",
+    )
 
 
 def handle_gate_arguments(doc: dict[str, Any], vector: dict[str, Any], label: str) -> None:

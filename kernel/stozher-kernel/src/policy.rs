@@ -300,7 +300,7 @@ impl Policy {
     /// A class no rule matches is denied. A policy that forgot a class must not become a policy that
     /// permits it.
     #[must_use]
-    pub fn decision_for(&self, class: &str) -> Decision {
+    pub fn decision_for(&self, class: &str, action: &str) -> Decision {
         let Some(rules) = self.document["gate-rules"].as_array() else {
             return Decision::Deny;
         };
@@ -310,6 +310,30 @@ impl Policy {
                 .is_some_and(|classes| classes.iter().any(|c| c.as_str() == Some(class)));
             if !matches {
                 continue;
+            }
+            // §05 §3.2. An absent `actions` means "any action", which is what every entry written
+            // before the member existed says. Present, it narrows the rule to those actions —
+            // "a partner approves filings, an associate approves everything else" was the shape a
+            // design partner needed and could not write (DEF-20). First match wins, in document
+            // order and not by specificity: a policy author writes the narrow rule first and reads
+            // top to bottom, and a score would silently reorder their intent.
+            // `action == "*"` is a *query* wildcard, not an action name: a caller asking "does any
+            // rule gate this class at all" rather than "what happens to this call". It matches
+            // every entry, including a narrowed one, so a rule scoped to some actions cannot narrow
+            // the answer to a question that was not about an action. Both implementations must
+            // agree on this or a policy binds under one and not the other — which is what the two
+            // of them did for about ten minutes, until `gate-rule-query-wildcard-matches-a-narrowed-rule`
+            // caught it (§05 §3.2).
+            if action != "*" {
+                if let Some(actions) = rule.get("actions").and_then(Value::as_array) {
+                    if !actions
+                        .iter()
+                        .filter_map(Value::as_str)
+                        .any(|pattern| stozher_core::mandate::matches(pattern, action))
+                    {
+                        continue;
+                    }
+                }
             }
             return match rule["decision"].as_str() {
                 Some("allow") => Decision::Allow,
@@ -440,11 +464,29 @@ impl Policy {
                 Error::new("schema-type-mismatch", "a gate rule must be an object")
             })?;
             for key in map.keys() {
-                if !["classes", "decision", "approvers"].contains(&key.as_str()) {
+                // `actions` is §05 §3.2's addition: it narrows an entry to some actions, and its
+                // absence means "any", so every document written before it existed is unchanged.
+                if !["classes", "decision", "approvers", "actions"].contains(&key.as_str()) {
                     return Err(Error::new(
                         "schema-unknown-member",
                         format!("gate-rules[].{key}"),
                     ));
+                }
+            }
+            if let Some(actions) = map.get("actions") {
+                let patterns = actions.as_array().ok_or_else(|| {
+                    Error::new(
+                        "schema-type-mismatch",
+                        "gate-rules[].actions must be an array",
+                    )
+                })?;
+                for pattern in patterns {
+                    if pattern.as_str().is_none() {
+                        return Err(Error::new(
+                            "schema-type-mismatch",
+                            "gate-rules[].actions must be an array of strings",
+                        ));
+                    }
                 }
             }
             let classes = map
@@ -564,7 +606,10 @@ impl Policy {
         // action requiring a human signature cannot acquire one offline.
         let consequential_offline = offline.get("consequential").and_then(Value::as_str);
         if consequential_offline == Some("allow")
-            && matches!(self.decision_for("consequential"), Decision::Gate { .. })
+            && matches!(
+                self.decision_for("consequential", "*"),
+                Decision::Gate { .. }
+            )
         {
             return Err(Error::new(
                 codes::POLICY_OFFLINE_ALLOWS_GATED,
