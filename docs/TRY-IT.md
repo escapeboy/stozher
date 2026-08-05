@@ -74,6 +74,10 @@ bin/stozher-approve <seed-hash>    --root human:<you>   # the classification
 
 `bin/stozher-console` lists both. Approve both, then retry the call.
 
+**And if you want to ask "what happened on the Acme matter?" later**, set `gateway.correlation_ref`
+before you start — it stamps every envelope, and the kernel answers
+`GET /v1/envelopes?correlation-ref=` over it. It is per gateway process, so one process per matter.
+
 **Approving the classification may do nothing, and it will now tell you so.** The published policy's
 `default-unknown` is `consequential`, and a seeded class weaker than that is discarded — the log says
 which action and what to publish instead. That is the design, not a fault (DEF-15).
@@ -94,8 +98,11 @@ and `/console/pending` prints a command you can run to recompute `args-hash` you
 second queue entry, ~35 minutes in, then approved ten refunds in seven seconds — one of them
 €50,000, all correctly signed. If that happens to you, it is the finding, not a personal failing.
 
-Note also the cap: 30 parks per subject per 300s, and the excess is refused `retryable: false`, which
-means the work is *dropped* and not deferred (DEF-18, open).
+Note the cap: 30 parks per subject per 300s. The excess is refused, and since 2026-08-05 that
+refusal is `retryable` and carries `retry-after-seconds` — it used to say `retryable: false`, which
+meant an agent never came back and the work simply vanished (DEF-18). What is still open is the
+question underneath: an organization *steadily* above the cap has no queue to fall into, only a
+slower loop.
 
 ### 3.2 Do the four classes fit your work?
 
@@ -106,7 +113,9 @@ places all four evaluations got stuck:
   `read` folds into a counted aggregate with no per-event record, so keeping one means classifying
   it as `benign`, which may be a sentence you cannot sign;
 - the same action name that is harmless on one target and severe on another. `execution.target` can
-  only be `mcp:<server>`, so a policy rule keyed on anything finer matches nothing, silently.
+  only be `mcp:<server>`, so a policy rule keyed on anything finer matches nothing, silently. A gate
+  rule *can* now name the actions it is about (`gate-rules[].actions`, §05 §3.2), so "filings need a
+  partner, everything else needs an associate" is writable — but the target still is not.
 
 Both are recorded in ADR-0034, undecided. Your answer changes what gets built.
 
