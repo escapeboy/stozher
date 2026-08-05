@@ -9,12 +9,15 @@ policy means refusing to act, not guessing.
 
 from __future__ import annotations
 
+import logging
 from typing import Any, NamedTuple
 
 from . import clock as clock_module
 from .envelope import CLASSES
 from .signing import verify_signed_object
 from .sync import WEDGE_GRACE_DEFAULT_SECONDS
+
+logger = logging.getLogger(__name__)
 
 __all__ = ["Decision", "Policy", "PolicyError", "class_weight"]
 
@@ -148,6 +151,23 @@ class Policy:
         unknown = str(classification.get("default-unknown", "consequential"))
         if catalog_class in CLASSES and class_weight(str(catalog_class)) > class_weight(unknown):
             return str(catalog_class)
+        if catalog_class in CLASSES and str(catalog_class) != unknown:
+            # DEF-15. The rule above is right and stays; the silence was the defect. An approver
+            # signed a classification for this tool and it changed nothing, because the default is
+            # already at least as strong — and nothing told them. Two design-partner evaluations
+            # found this independently, one of them describing the signature they had just given as
+            # "a silent no-op". A signed decision that has no effect must say so; otherwise the
+            # approver's model of the system is wrong in the direction that matters, and they will
+            # keep signing.
+            logger.warning(
+                "the signed catalog class %r for %s had no effect: the published policy says "
+                "nothing about this action and its default-unknown is %r, which is already at "
+                "least as strong. Publish it in `by-action` to make it binding — "
+                "`stozher-gateway catalog policy-fragment` prints the map.",
+                str(catalog_class),
+                action,
+                unknown,
+            )
         return unknown
 
     def names(self, subject: str, action: str, resource: str) -> bool:
