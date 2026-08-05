@@ -21,10 +21,10 @@ import logging
 
 import pytest
 
+from stozher_gateway import clock as clock_module
 from stozher_gateway.policy import Policy
 
 from .test_enforcement import POLICY_KEY, ROOT, baseline_policy
-from stozher_gateway import clock as clock_module
 
 
 def _policy(default_unknown: str) -> Policy:
