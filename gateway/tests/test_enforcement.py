@@ -694,7 +694,14 @@ def test_a_park_the_kernel_refused_does_not_blame_the_network(harness: Harness) 
     # receipts against zero queue entries — `bin/stozher-approve` answered "was never queued" for
     # every one. §06 §4.1's word for a call that did not happen and cannot proceed is `blocked`.
     def refused_by_kernel(_request: dict[str, Any], _arguments: Any = None) -> Any:
-        return KernelResponse(status=429, body={"reason-code": "gate-rate-limited"})
+        # `retry-after-seconds` is what the real kernel sends, and the kernel's own side of that is
+        # asserted in `gate_queue_and_console_decisions.rs::one_subject_cannot_grow_the_queue_without_bound`
+        # — the two halves are bound separately on purpose, because a stub that agreed with this
+        # file about a value the kernel does not send would be this suite agreeing with itself.
+        return KernelResponse(
+            status=429,
+            body={"reason-code": "gate-rate-limited", "retry-after-seconds": 300},
+        )
 
     harness.enforcer._kernel = type(
         "Stub", (), {"park_gate_request": staticmethod(refused_by_kernel)}
@@ -707,6 +714,37 @@ def test_a_park_the_kernel_refused_does_not_blame_the_network(harness: Harness) 
     assert document["reason-code"] == "gate-rate-limited"
     assert "no decision can be made about it" in document["reason"]
     assert "nothing is pending" in document["hint"]
+    # DEF-18. `blocked` is the right word for a call that did not happen — and it must not also mean
+    # "never ask again". The cap is a window, so this call is answerable in a few minutes, and a
+    # design partner measured what the opposite costs: 66 of 93 gated calls in one simulated morning
+    # refused as unretryable, which is work dropped rather than deferred. The refund never happens.
+    assert document["retryable"] is True, (
+        "a rate-limited call was reported as permanently refused; the agent will not come back and "
+        "the work is silently lost"
+    )
+    assert document["retry-after-seconds"] == 300, "the window is not passed through to the caller"
+
+    # The other direction, and it is the one that keeps the paragraph in `refusal.py` true: a
+    # kernel that refuses without saying when leaves `retryable` false. A caller told "yes" with no
+    # "when" retries immediately, which is how the cap filled in the first place.
+    def refused_without_a_window(_request: dict[str, Any], _arguments: Any = None) -> Any:
+        return KernelResponse(status=429, body={"reason-code": "gate-rate-limited"})
+
+    harness.enforcer._kernel = type(
+        "Stub",
+        (),
+        {
+            "park_gate_request": staticmethod(refused_without_a_window),
+            # `_collect_decisions` runs before the park on a repeat call and asks the kernel about
+            # the still-undecided local row. It is not what this assertion is about.
+            "gate_request": staticmethod(lambda _h: KernelResponse(status=404, body={})),
+        },
+    )()
+    with pytest.raises(RefusalError) as no_window:
+        harness.call("create_issue", title="ship it into a full queue")
+    assert no_window.value.document["retryable"] is False, (
+        "retryable was raised without a retry-after; the two travel together or neither does"
+    )
 
     # And the control: queued successfully, so the hint says nothing about being held locally.
     harness.enforcer._kernel = type(

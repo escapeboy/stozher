@@ -472,7 +472,7 @@ async fn post_gate_request(
                     "argument mismatches refused: the per-subject rate limit was reached, and this \
                      one is not recorded"
                 );
-                return refusal(
+                return refusal_retry_after(
                     StatusCode::TOO_MANY_REQUESTS,
                     crate::codes::GATE_RATE_LIMITED,
                     &format!(
@@ -482,6 +482,7 @@ async fn post_gate_request(
                         limit.window_seconds, limit.per_subject
                     ),
                     None,
+                    Some(u64::try_from(limit.window_seconds).unwrap_or(0)),
                 );
             }
             let detail = match stozher_core::jcs::canonicalize(&serde_json::json!({
@@ -559,7 +560,7 @@ async fn post_gate_request(
                 window_seconds = limit.window_seconds,
                 "gate requests refused: the per-subject rate limit was reached"
             );
-            return refusal(
+            return refusal_retry_after(
                 StatusCode::TOO_MANY_REQUESTS,
                 crate::codes::GATE_RATE_LIMITED,
                 &format!(
@@ -568,6 +569,7 @@ async fn post_gate_request(
                     queued.subject, limit.window_seconds, limit.per_subject
                 ),
                 None,
+                Some(u64::try_from(limit.window_seconds).unwrap_or(0)),
             );
         }
     }
@@ -584,11 +586,16 @@ async fn post_gate_request(
                 window_seconds = limit.window_seconds,
                 "gate requests refused under contention: the per-subject rate limit was reached"
             );
-            return refusal(
+            return refusal_retry_after(
                 StatusCode::TOO_MANY_REQUESTS,
                 crate::codes::GATE_RATE_LIMITED,
                 e.detail(),
                 None,
+                // The whole window, not the remaining part of it: the kernel would have to know
+                // when this subject's oldest parked request in the window was received to say
+                // better, and over-waiting costs a caller latency while under-waiting costs it a
+                // second refusal. The conservative direction is the one that converges.
+                Some(u64::try_from(limit.window_seconds).unwrap_or(0)),
             );
         }
         Err(e) => return unavailable(&e),
@@ -1221,6 +1228,28 @@ fn json(status: StatusCode, value: &Value) -> Response {
 }
 
 fn refusal(status: StatusCode, code: &str, reason: &str, seq: Option<u64>) -> Response {
+    refusal_retry_after(status, code, reason, seq, None)
+}
+
+/// A refusal, optionally saying when the condition that caused it ends.
+///
+/// `retryable` used to be `status == 503`, which made a 429 a *permanent* refusal. It is not: a
+/// rate limit is the definition of a transient condition, and the queue test forty lines into
+/// `one_subject_cannot_grow_the_queue_without_bound` already asserted that the window is a window.
+/// The answer said the opposite, and a design-partner evaluation measured the cost — 66 of 93 gated
+/// calls in one simulated morning refused this way. Work refused as unretryable is not deferred
+/// work; the action simply never happens (DEF-18).
+///
+/// `retry-after-seconds` is added rather than left to the caller to guess. §06 §4.1 forbids a
+/// refusal from carrying guidance on obtaining approval by other means; saying when this same
+/// request may be submitted again is not that — it is the one fact only the refuser holds.
+fn refusal_retry_after(
+    status: StatusCode,
+    code: &str,
+    reason: &str,
+    seq: Option<u64>,
+    retry_after_seconds: Option<u64>,
+) -> Response {
     json(
         status,
         &serde_json::json!({
@@ -1229,7 +1258,11 @@ fn refusal(status: StatusCode, code: &str, reason: &str, seq: Option<u64>) -> Re
             "reason-code": code,
             "reason": reason,
             "failed-at-seq": seq,
-            "retryable": status == StatusCode::SERVICE_UNAVAILABLE
+            "retryable": matches!(
+                status,
+                StatusCode::SERVICE_UNAVAILABLE | StatusCode::TOO_MANY_REQUESTS
+            ),
+            "retry-after-seconds": retry_after_seconds
         }),
     )
 }

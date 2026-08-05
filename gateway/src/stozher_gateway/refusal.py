@@ -48,6 +48,7 @@ def refusal(
     decided_by: str | None = None,
     decided_at: str | None = None,
     hint: str | None = None,
+    retry_after_seconds: int | None = None,
 ) -> RefusalError:
     """Build a refusal. `retryable` is false for everything terminal, which is everything here."""
     if result not in RESULTS:
@@ -73,8 +74,19 @@ def refusal(
         # later identical request, so a retry is the protocol rather than a loop. The tests here
         # refused it, and they were right: a caller that retried on the flag would hammer the gate,
         # which is precisely how a user's ordinary loop filled the per-subject cap and dead-ended.
-        "retryable": False,
+        # DEF-18 qualifies this, and does not overturn it. `gate-rate-limited` is the one condition
+        # here that is *transient by definition* — the cap is a window — and a design partner
+        # measured what calling it permanent costs: 66 of 93 gated calls in one simulated morning
+        # refused as unretryable, which is work dropped and not deferred. The refund never happens.
+        #
+        # The paragraph above is still right about the hazard, so the flag is only ever raised
+        # together with `retry-after-seconds`. A caller told "yes, in 300 seconds" schedules; a
+        # caller told only "yes" hammers, which is exactly how the cap filled in the first place.
+        # No `retry-after`, no `retryable` — the two travel together or neither does.
+        "retryable": retry_after_seconds is not None,
     }
+    if retry_after_seconds is not None:
+        document["retry-after-seconds"] = retry_after_seconds
     if decided_by is not None:
         document["decided-by"] = decided_by
     if decided_at is not None:

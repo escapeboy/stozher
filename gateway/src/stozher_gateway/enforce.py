@@ -998,6 +998,13 @@ class Enforcer:
                     "nothing is pending: the request never entered a queue. Whatever the kernel's "
                     "reason code names has to change before this call can be answered."
                 ),
+                # Passed through from the kernel rather than inferred from the reason code: the
+                # kernel owns the window and this component does not, and a number guessed here
+                # would be wrong the first time an operator changed the profile. Absent for every
+                # other refusal, which keeps `retryable` false for them (DEF-18).
+                retry_after_seconds=answer.body.get("retry-after-seconds")
+                if isinstance(answer.body, dict)
+                else None,
             )
         return None
 

@@ -1006,6 +1006,26 @@ async fn one_subject_cannot_grow_the_queue_without_bound() {
         answer.json()["reason-code"].as_str(),
         Some("gate-rate-limited")
     );
+    // DEF-18. The comment forty lines below already says "the window is a window": once it passes,
+    // the same subject is answerable again. The *answer* said the opposite — `retryable` was
+    // computed as `status == 503`, so a 429 told the caller never to try this again, and a design
+    // partner measured what that costs: 66 of 93 gated calls in one simulated morning refused this
+    // way, and refused work is not deferred work. The refund does not happen.
+    //
+    // A rate limit is the definition of a transient condition. Saying so is the whole fix; what a
+    // caller does with the retry is its own business, and §06 §4.1 forbids the refusal from
+    // instructing it further.
+    assert_eq!(
+        answer.json()["retryable"].as_bool(),
+        Some(true),
+        "a rate-limited request was reported as permanently refused: {}",
+        answer.body
+    );
+    assert!(
+        answer.json()["retry-after-seconds"].as_u64().is_some(),
+        "the refusal does not say when the window ends, so a caller can only guess or give up: {}",
+        answer.body
+    );
 
     // Refusing the request refused nobody's action: nothing was applied, and the call the request
     // was for is still gated and still blocked. What was refused is the queue growth.
