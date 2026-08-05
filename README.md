@@ -230,6 +230,9 @@ why. Never silently.
 
 ## Quick start
 
+**If you are evaluating this rather than reading it, start at [`docs/TRY-IT.md`](docs/TRY-IT.md)** — the same
+commands, with the four places every evaluation lost time marked, and the four questions worth answering.
+
 ```bash
 git clone https://github.com/escapeboy/stozher && cd stozher
 ./deploy/gate/clean-install.sh        # wipes, rebuilds, measures, and proves the chain
