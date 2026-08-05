@@ -240,9 +240,28 @@ fresh clone, never on a deployment you want to keep.
 
 **And it leaves you with one root, permanently.** The gate bootstraps a single
 `human:gate-operator`, and there is no post-install enrolment: changing the root set requires two
-roots, so a deployment that starts with one cannot ever add the second. That is a deliberate
-property, not an oversight — but it means the quick start is for trying the system, and a
-deployment you intend to keep starts at `deploy/README.md` §0 with a second root in hand.
+roots, so a deployment that starts with one cannot ever add the second.
+
+**What that costs, said plainly, because two design partners found it the hard way (DEF-19):** a
+single-root deployment can never un-wedge a stream. Revoke or expire a mandate — an ordinary
+incident action — and the component's stream wedges as specified; the exit (`spec/04 §7.2`) needs an
+approval, and one root approving its own request is refused `gate-self-approval`, correctly. So the
+first wedge ends that install. The gate accepts this and says so — it passes
+`--accept-unrecoverable`, because it wipes the directory it runs in and is measuring an install
+rather than producing one.
+
+**`bin/stozher-bootstrap` now refuses a single-root install** unless you pass that same flag. If you
+are keeping the deployment, have a colleague run `stozher-kernel keygen` on their own machine and
+send you the public half:
+
+```bash
+cd deploy
+bin/stozher-bootstrap --root human:<you> \
+  --second-root human:<colleague> --second-root-key ed25519:<their key>
+```
+
+They do not need to be present again until something has to be approved twice. The full install,
+the key ceremony, backup/restore and the security posture are `deploy/README.md`.
 
 Then point an agent at it:
 

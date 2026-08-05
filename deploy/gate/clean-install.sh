@@ -208,7 +208,12 @@ step "2  the ceremony (bin/stozher-bootstrap, exactly as documented)"
 # Not `rm -f .env`: the ceremony reads this file for the operator's own keys before it rewrites it,
 # and removing it here is how the project name got lost on the way into the install that needed it.
 write_env
-./bin/stozher-bootstrap --root "$ROOT_SUBJECT" --port "$PORT"
+# `--accept-unrecoverable` because this gate is *measuring an install*, not producing a
+# deployment anyone keeps: it wipes the directory it runs in, and its own README says so twice.
+# The flag is passed explicitly rather than the refusal being weakened, so the one path that
+# legitimately wants a disposable single-root install says so out loud and every other caller
+# still gets stopped (DEF-19).
+./bin/stozher-bootstrap --root "$ROOT_SUBJECT" --port "$PORT" --accept-unrecoverable
 
 set -a; . ./.env; set +a
 GATEWAY=(docker compose -f "$DEPLOY/docker-compose.yml" run --rm -T gateway)

@@ -58,6 +58,7 @@ NETWORK=""
 ROOT_SUBJECT=""
 SECOND_ROOT=""
 SECOND_ROOT_KEY=""
+ACCEPT_UNRECOVERABLE="no"
 PORT="8787"
 POLICY_VERSION="2026.07.1"
 CALLER_NAME="claude-code"
@@ -68,6 +69,7 @@ while [ $# -gt 0 ]; do
     --root) ROOT_SUBJECT="$2"; shift 2 ;;
     --second-root) SECOND_ROOT="$2"; shift 2 ;;
     --second-root-key) SECOND_ROOT_KEY="$2"; shift 2 ;;
+    --accept-unrecoverable) ACCEPT_UNRECOVERABLE="yes"; shift ;;
     --port) PORT="$2"; shift 2 ;;
     --policy-version) POLICY_VERSION="$2"; shift 2 ;;
     --caller) CALLER_NAME="$2"; shift 2 ;;
@@ -91,6 +93,39 @@ if [ -n "$SECOND_ROOT" ] || [ -n "$SECOND_ROOT_KEY" ]; then
     echo "--second-root and --second-root-key are given together: a second root is a named human" >&2
     echo "and the key they will sign with, and neither is inferable from the other." >&2
     exit 2; }
+fi
+# A single-root install is a dead end, and it used to be the default one. DEF-19, found by two
+# design-partner evaluations on the same day: revoke a mandate — an ordinary incident action — the
+# stream wedges as specified, and the recovery act (§04 §7.2) needs an approval. One root approving
+# its own request is refused `gate-self-approval`, correctly. So the deployment can never recover,
+# and nothing said so until the operator was already in it.
+#
+# Refused rather than warned. A warning at the top of a ceremony that prints many lines is a warning
+# nobody reads, and the cost of missing it is the whole deployment.
+if [ -z "$SECOND_ROOT" ] && [ "$ACCEPT_UNRECOVERABLE" != "yes" ]; then
+  cat >&2 <<'DEADEND'
+refusing to bootstrap a deployment that can never recover.
+
+With one enrolled root this install cannot un-wedge a stream, and cannot enrol a second root later
+to fix that — changing the root set needs two roots, and §03 §1 forbids a root granting to itself.
+A revoked or expired mandate wedges the component's stream, and the exit needs an approval a lone
+root cannot give itself (`gate-self-approval`). Nothing in this deployment would bring it back.
+
+Give a second root:
+
+    bin/stozher-bootstrap --root human:<you> \
+      --second-root human:<colleague> --second-root-key ed25519:<their key>
+
+They generate their key on their own machine (`stozher-kernel keygen`), and send you the public
+half. They do not need to be present again until something has to be approved twice.
+
+If you are trying the system out and accept that this install is disposable:
+
+    bin/stozher-bootstrap --root human:<you> --accept-unrecoverable
+
+which is exactly what it says: the first wedge ends this deployment.
+DEADEND
+  exit 2
 fi
 command -v docker >/dev/null || { echo "docker is required" >&2; exit 2; }
 
