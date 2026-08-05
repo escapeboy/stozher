@@ -25,7 +25,10 @@ _MAX_SAFE_INTEGER = 2**53 - 1
 #: The most distinct actions one `aggregate` window may fold (§02 §9.1, `aggregate-cardinality`).
 _AGGREGATE_MAX_ACTIONS = 1024
 
-_TIMESTAMP = re.compile(r"\A\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z\Z")
+#: `[0-9]`, never `\d`. Python's `\d` matches any Unicode decimal digit — 750 distinct non-ASCII
+#: code points passed the year position of a check whose docstring promised a 24-**byte** form, and
+#: the kernel refused every one of them (`is_ascii_digit` after `if b.len() != 24`). DEF-13.
+_TIMESTAMP = re.compile(r"\A[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]{3}Z\Z")
 _HEX64 = re.compile(r"\A[0-9a-f]{64}\Z")
 _KEY_ID = re.compile(r"\Aed25519:[0-9a-f]{64}\Z")
 _STREAM = re.compile(r"\A[A-Za-z0-9._:-]{1,128}\Z")
@@ -373,6 +376,11 @@ def is_timestamp(value: Any) -> bool:
     validates the members of `authorization` (§06 §2, `gate.py`).
     """
     if not isinstance(value, str) or not _TIMESTAMP.match(value):
+        return False
+    # The byte length, stated as well as implied by the ASCII-only pattern above. The pattern is
+    # what enforces it; this is the assertion that keeps the docstring honest if the pattern is ever
+    # relaxed, and it costs nothing. The kernel opens with the same check.
+    if len(value.encode("utf-8")) != 24:  # pragma: no cover - unreachable while the pattern is ASCII
         return False
     try:
         dt.datetime.strptime(value, "%Y-%m-%dT%H:%M:%S.%fZ")
