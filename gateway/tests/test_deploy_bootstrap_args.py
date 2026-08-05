@@ -141,7 +141,10 @@ def test_the_ceremony_runs_the_image_named_in_dot_env(sandbox: tuple[Path, Path]
         "COMPOSE_PROJECT_NAME=stozher-elsewhere\n"
         "STOZHER_KERNEL_IMAGE=stozher-kernel:from-dot-env\n"
     )
-    _run(script, "--root", "human:ivan")
+    # `--accept-unrecoverable` because this test is about image resolution, not about the root set.
+    # Without it the ceremony now stops before docker is ever invoked (DEF-19), which is the correct
+    # behaviour and would make this assert the wrong thing.
+    _run(script, "--root", "human:ivan", "--accept-unrecoverable")
     assert witness.exists(), "the run stopped before it reached the ceremony"
     tags = _ceremony_images(witness)
     assert tags == {"stozher-kernel:from-dot-env"}, (
@@ -168,10 +171,44 @@ def test_the_environment_still_wins_over_dot_env(sandbox: tuple[Path, Path]) -> 
         STOZHER_KERNEL_IMAGE="stozher-kernel:from-the-environment",
     )
     subprocess.run(
-        [str(script), "--root", "human:ivan"],
+        [str(script), "--root", "human:ivan", "--accept-unrecoverable"],
         capture_output=True,
         text=True,
         env=env,
         timeout=60,
     )
     assert _ceremony_images(witness) == {"stozher-kernel:from-the-environment"}
+
+
+def test_a_single_root_install_is_refused_before_anything_is_built(
+    sandbox: tuple[Path, Path],
+) -> None:
+    """DEF-19. A deployment that can never recover must not be the one you get by default.
+
+    With one enrolled root the recovery act of §04 §7.2 is unreachable — it needs an approval, and a
+    lone root approving its own request is refused `gate-self-approval`, correctly — and the root set
+    cannot be changed later to fix that, because changing it needs two roots. So a revoked or expired
+    mandate permanently removes a component from the fleet.
+
+    Two design partners found this on 2026-08-04, both after doing something routine. The option to
+    avoid it existed all along; nothing made anyone use it, and the warning was a comment at the top
+    of the script.
+    """
+    script, witness = sandbox
+    result = _run(script, "--root", "human:ivan")
+    assert result.returncode != 0
+    assert "can never recover" in result.stderr
+    assert "--second-root" in result.stderr, "the refusal does not say what to do instead"
+    assert "--accept-unrecoverable" in result.stderr, "the refusal offers no way past itself"
+    assert not witness.exists(), (
+        "docker was invoked before the refusal — an operator would wait through a Rust compile to "
+        "be told something knowable from the arguments"
+    )
+
+
+def test_the_disposable_case_can_say_so_and_proceed(sandbox: tuple[Path, Path]) -> None:
+    """The control. A refusal with no way past it would break `gate/clean-install.sh`, which
+    legitimately wants a throwaway single-root install — it wipes the directory it runs in."""
+    script, witness = sandbox
+    _run(script, "--root", "human:ivan", "--accept-unrecoverable")
+    assert witness.exists(), "the accepted single-root path never reached the ceremony"
