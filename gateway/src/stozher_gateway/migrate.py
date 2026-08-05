@@ -57,7 +57,7 @@ __all__ = [
 ]
 
 #: The schema version this build writes and expects.
-SCHEMA_VERSION: Final = 1
+SCHEMA_VERSION: Final = 2
 
 #: Append-only and hash-linked. Never rewritten, never dropped, additive columns only.
 CHAIN_BEARING_TABLES: Final = frozenset({"envelopes"})
@@ -105,7 +105,30 @@ def _baseline() -> str:
 #: The registry. Ordered and contiguous, asserted by `test_the_registry_is_well_formed`.
 MIGRATIONS: Final[list[Migration]] = [
     Migration(1, "baseline — the schema as it stood before there was a version", ""),
+    # The first real step, and the one the whole file was built for. Additive and nullable, on a
+    # table that is not chain-bearing: `parked` gains the canonical argument values so a park held
+    # through an outage can be re-offered to the kernel *with what the approver has to read*
+    # (§06 §4.4). Without the column the re-offer would land a request whose arguments are blank,
+    # and §06 §4.4 rule 7 makes the first accepted submission's values the recorded ones — so the
+    # blank would be permanent (DEF-16).
+    #
+    # `ALTER TABLE ... ADD COLUMN` is not idempotent in SQLite, and this runner has no transaction
+    # to roll back (see the module docstring), so the step checks first. That is the shape every
+    # later step should copy.
+    Migration(
+        2,
+        "parked gains the canonical arguments, so a re-offered park still shows the approver what "
+        "the call does",
+        "",
+    ),
 ]
+
+
+def _add_arguments_to_parked(connection: sqlite3.Connection) -> None:
+    """Step 2, written to survive being applied twice — `ADD COLUMN` in SQLite does not."""
+    columns = {row[1] for row in connection.execute("PRAGMA table_info(parked)")}
+    if "arguments_json" not in columns:
+        connection.execute("ALTER TABLE parked ADD COLUMN arguments_json TEXT")
 
 
 def version(connection: sqlite3.Connection) -> int:
@@ -133,7 +156,10 @@ def run(connection: sqlite3.Connection) -> list[int]:
             continue
         # The baseline carries no SQL of its own: it *is* the store's schema, which `GatewayStore`
         # applies on every open and which is idempotent. Stamping it is the whole step.
-        connection.executescript(step.sql or _baseline())
+        if step.to_version == 2:
+            _add_arguments_to_parked(connection)
+        else:
+            connection.executescript(step.sql or _baseline())
         applied.append(step.to_version)
     # `PRAGMA user_version` takes no parameter binding — the value is interpolated, and it is an int
     # from this module's own registry, never from input.

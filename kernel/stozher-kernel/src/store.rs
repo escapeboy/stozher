@@ -2730,6 +2730,29 @@ impl Store {
         Ok(hashes)
     }
 
+    /// Whether any envelope ever committed to this payload hash — decayed or still stored.
+    ///
+    /// `payload_refs` is written when an envelope cites a payload and is **never deleted**: the
+    /// decay sweep removes rows from `payloads` alone, which is what keeps chain verification
+    /// unaffected. So the record of "this was recorded once" already outlived the bytes, and
+    /// nothing was reading it — `GET /v1/payloads/<hash>` answered `410 decayed` for a hash the
+    /// kernel had never seen, which is a confident answer to a question it could not answer.
+    ///
+    /// The distinction is the whole of `README.md`'s retention claim. "Closed loops decay to signed
+    /// hashes" only means something if `410` says the commitment exists (DEF-17).
+    ///
+    /// # Errors
+    ///
+    /// [`codes::STORE_UNAVAILABLE`].
+    pub async fn payload_was_committed(&self, payload_hash: &str) -> Result<bool> {
+        let row = sqlx::query("SELECT 1 AS present FROM payload_refs WHERE payload_hash = ?1")
+            .bind(payload_hash)
+            .fetch_optional(&self.pool)
+            .await
+            .map_err(db)?;
+        Ok(row.is_some())
+    }
+
     /// The streams a payload decay run would touch, so they can be checkpointed first (§04 §4.6).
     ///
     /// # Errors

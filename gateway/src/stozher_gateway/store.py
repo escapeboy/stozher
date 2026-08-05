@@ -66,7 +66,13 @@ CREATE TABLE IF NOT EXISTS parked (
     decision_json TEXT,
     catalog_class TEXT,
     seed_json     TEXT,
-    consumed_at   TEXT
+    consumed_at   TEXT,
+    -- The canonical argument values (§06 §4.4), so a park held through an outage can be re-offered
+    -- with what the approver has to read. Nullable: a park whose arguments had no canonical form
+    -- is parked without them on purpose, and rule 8 makes the queue say so rather than render
+    -- nothing. Added by migration 2; present here too because a fresh store is created from this
+    -- script and never migrated.
+    arguments_json TEXT
 );
 
 CREATE TABLE IF NOT EXISTS catalog (
@@ -131,10 +137,12 @@ def _insert_parked(
     arg_schema: Any,
     first_call: bool,
     created_at: str,
+    arguments: Any | None = None,
 ) -> None:
     connection.execute(
         "INSERT OR REPLACE INTO parked (request_hash, request_json, server, tool, "
-        "proposed_class, arg_schema_json, first_call, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        "proposed_class, arg_schema_json, first_call, created_at, arguments_json) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
         (
             request_hash,
             json.dumps(request),
@@ -144,6 +152,7 @@ def _insert_parked(
             json.dumps(arg_schema),
             int(first_call),
             created_at,
+            None if arguments is None else json.dumps(arguments),
         ),
     )
 
@@ -186,6 +195,10 @@ class Parked:
         self.catalog_class: str | None = row["catalog_class"]
         self.seed: dict[str, Any] | None = json.loads(row["seed_json"]) if row["seed_json"] else None
         self.consumed_at: str | None = row["consumed_at"]
+        #: The canonical argument values submitted beside the request, if any (§06 §4.4).
+        self.arguments: Any | None = (
+            json.loads(row["arguments_json"]) if row["arguments_json"] else None
+        )
 
 
 class Wedge:
@@ -464,6 +477,7 @@ class GatewayStore:
         arg_schema: Any,
         first_call: bool,
         created_at: str,
+        arguments: Any | None = None,
     ) -> None:
         with self._connect() as connection:
             _insert_parked(
@@ -476,6 +490,20 @@ class GatewayStore:
                 arg_schema,
                 first_call,
                 created_at,
+                arguments,
+            )
+
+    def record_park_arguments(self, request_hash: str, arguments: Any | None) -> None:
+        """Keep the values the approver has to read, so a re-offered park still carries them.
+
+        Written after `park_unique` because §06 §4.4's check runs after the park — the park must
+        happen even when the arguments have no canonical form, and rule 8 then makes the queue say
+        so rather than render nothing. `None` here is that case and is stored as such (DEF-16).
+        """
+        with self._connect() as connection:
+            connection.execute(
+                "UPDATE parked SET arguments_json = ? WHERE request_hash = ?",
+                (None if arguments is None else json.dumps(arguments), request_hash),
             )
 
     def park_unique(

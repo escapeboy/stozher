@@ -358,6 +358,38 @@ class Enforcer:
             )
         return recovered
 
+    def requeue_parks(self, session: Session) -> int:
+        """Offer every locally held, unanswered park to the kernel again. Returns how many landed.
+
+        DEF-16. A park raised while the kernel was unreachable is true — the request is held, and
+        `_queue_with_kernel` is re-submitted on a retry, which repairs it. But the only thing that
+        triggered that retry was the *caller* asking again, and §06 §4.1 asks a well-behaved agent
+        to do the opposite: report the terminal answer to its user and stop. So a request parked
+        during an outage stayed local for as long as nobody happened to repeat the call, and the
+        `hint` saying so was the only thing standing between an operator and a request no human
+        would ever see.
+
+        Runs at session open beside `recover_intents` and `apply_pending_seeds`, which exist for the
+        same class of reason: work this component holds and owes to somewhere else.
+
+        Idempotent by construction — §06 §4.3 rule 1 makes the route idempotent on `request-hash`,
+        so re-offering one already queued costs a `200`. **No notification is fired**: approval
+        fatigue is an availability attack (§09 §7), and a ping per reconnect would be that attack
+        delivered by the component meant to prevent it.
+        """
+        if self._kernel is None:
+            return 0
+        landed = 0
+        for parked in self._store.pending():
+            if self._queue_with_kernel(parked.request, parked.arguments) is None:
+                landed += 1
+        if landed:
+            logger.info(
+                "%d park(s) held locally are now in the kernel's queue and visible to a human",
+                landed,
+            )
+        return landed
+
     def apply_pending_seeds(self, session: Session) -> int:
         """Put every signed-but-unapplied catalog seed in force. Returns how many were applied.
 
@@ -759,6 +791,9 @@ class Enforcer:
         # the request is already queued and *repairs* the case where the first submission never
         # arrived because the kernel was down. A park held locally against an unreachable kernel
         # otherwise stays invisible to every human for as long as the caller keeps retrying.
+        # Kept before the submission, not after: if the kernel is down this is the only copy, and
+        # it is precisely the outage case that `requeue_parks` exists for (DEF-16).
+        self._store.record_park_arguments(request_hash, arguments)
         not_queued = self._queue_with_kernel(request, arguments)
         if held is None:
             if first_call and classification.proposed:

@@ -329,6 +329,11 @@ class Gateway:
         # ordinary chokepoint, with the §06 §4.1 object and the kernel's own reason code — rather
         # than by an opaque failure to start, which is not something a calling agent can report.
         self.emitter.push_pending()
+        # Parks this component is holding because the kernel could not be reached when they
+        # were raised. Offered here rather than waiting for the caller to repeat the call:
+        # §06 §4.1 asks a well-behaved agent to report a terminal answer and stop, so waiting
+        # for a retry meant waiting for the agent to misbehave (DEF-16).
+        self.enforcer.requeue_parks(session)
         wedge = self.store.wedge(session.stream)
         if wedge is not None:
             logger.error(

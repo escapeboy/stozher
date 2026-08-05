@@ -1113,15 +1113,39 @@ async fn get_payload(
         // §04 §5.4: after deletion the evidence is reported as `decayed`, with the hash still
         // present and resolvable as a commitment. An auditor who independently holds the content can
         // still prove it is the content that was recorded.
-        Ok(None) => json(
-            StatusCode::GONE,
-            &serde_json::json!({
-                "stozher": stozher_core::VERSION,
-                "result": "decayed",
-                "payload-hash": payload_hash,
-                "reason": "the payload has decayed; the hash remains the commitment"
-            }),
-        ),
+        //
+        // But only if it *was* recorded. This used to answer `410 decayed` for any hash the store
+        // did not hold, including one no envelope had ever cited — telling an auditor that content
+        // had been recorded and had lawfully expired, about something the kernel had never seen.
+        // That is the one answer this system must not give, and it broke the retention claim from
+        // the inside: "closed loops decay to signed hashes" only means something if `410` says the
+        // commitment exists. Found by a design partner evaluating this for a regulated trial, who
+        // could not distinguish "your data was processed and deleted" from "your data was never
+        // here" (DEF-17).
+        //
+        // `payload_refs` outlives the bytes by construction — the sweep touches `payloads` alone —
+        // so the record was already there and nothing was asking it.
+        Ok(None) => match kernel.ingest.store().payload_was_committed(&payload_hash).await {
+            Ok(true) => json(
+                StatusCode::GONE,
+                &serde_json::json!({
+                    "stozher": stozher_core::VERSION,
+                    "result": "decayed",
+                    "payload-hash": payload_hash,
+                    "reason": "the payload has decayed; the hash remains the commitment"
+                }),
+            ),
+            Ok(false) => json(
+                StatusCode::NOT_FOUND,
+                &serde_json::json!({
+                    "stozher": stozher_core::VERSION,
+                    "result": "unknown",
+                    "payload-hash": payload_hash,
+                    "reason": "no envelope in this store has ever committed to this payload hash"
+                }),
+            ),
+            Err(e) => unavailable(&e),
+        },
         Err(e) => unavailable(&e),
     }
 }
