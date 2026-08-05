@@ -18,7 +18,7 @@
       "path": "jcs-canonicalization.json",
       "kind": "jcs",
       "role": "primitive",
-      "count": 22,
+      "count": 26,
       "description": "RFC 8785 canonicalization. Parse `input-json` (raw JSON text, so that member order, escapes and numeric literals are preserved exactly), canonicalize, and compare bytes against `canonical` and its SHA-256 against `canonical-sha256`."
     },
     {

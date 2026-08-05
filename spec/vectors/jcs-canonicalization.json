@@ -156,6 +156,34 @@
       "input-json": "{\"v\":\"stozher/0.1\",\"seq\":0,\"prev-hash\":null,\"kind\":\"effect\",\"identity\":{\"subject\":\"agent:x\",\"component\":\"gateway\",\"key\":\"ed25519:aa\"}}",
       "canonical": "{\"identity\":{\"component\":\"gateway\",\"key\":\"ed25519:aa\",\"subject\":\"agent:x\"},\"kind\":\"effect\",\"prev-hash\":null,\"seq\":0,\"v\":\"stozher/0.1\"}",
       "canonical-sha256": "1e0c661442a9f7c0441555fb6676ab8523599773a9a76834a4728b9b9d3d6422"
+    },
+    {
+      "name": "number-seventeen-significant-digits",
+      "description": "one ULP apart under a fast float parser; the collision the review reproduced",
+      "input-json": "{\"n\":1049841890.8179493}",
+      "canonical": "{\"n\":1049841890.8179493}",
+      "canonical-sha256": "71dfd2b417ad2003e47c0a28891cc641afbbd06d40104705d75734df2492ee7c"
+    },
+    {
+      "name": "number-twenty-one-integer-digits",
+      "description": "an integer literal beyond binary64's exact range — the rounding must still be correct",
+      "input-json": "{\"n\":123456789012345678901}",
+      "canonical": "{\"n\":123456789012345680000}",
+      "canonical-sha256": "372d7411af0dd3df2fd7d82a78dc0d0293ab61da9e4dee382c06b465ea859e93"
+    },
+    {
+      "name": "number-subnormal-boundary",
+      "description": "crosses normal/subnormal: 0x0010000000000000 vs 0x000fffffffffffff",
+      "input-json": "{\"n\":2.2250738585072011e-308}",
+      "canonical": "{\"n\":2.225073858507201e-308}",
+      "canonical-sha256": "407507c8fa07b56e2f77c92c86c17a7a99fd65e99b244ff3e70a4cfab21f0ac8"
+    },
+    {
+      "name": "number-negative-seventeen-digits",
+      "description": "the same defect on the negative side, which no existing case covered",
+      "input-json": "{\"n\":-1596336818.4097385}",
+      "canonical": "{\"n\":-1596336818.4097385}",
+      "canonical-sha256": "e7f188dc325f38ebf81be9da2848ac6eeade435f1522a0d8d5ebf5fd56f86c7f"
     }
   ]
 }

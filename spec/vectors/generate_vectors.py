@@ -446,6 +446,35 @@ def gen_jcs() -> None:
             '"identity":{"subject":"agent:x","component":"gateway","key":"ed25519:aa"}}',
             "a protocol-object-shaped input, for sanity",
         ),
+        # §01 §3.4 requires the binary64 value *obtained by parsing* the literal, which means
+        # correctly-rounded parsing and not merely fast parsing. The six long literals above this
+        # line are all values a fast parser happens to get right, so for a year the corpus asked the
+        # question and never got a wrong answer — until an external review parsed 3,087 random
+        # documents through both implementations and found them disagreeing on 5.3% of them.
+        #
+        # Each of the four below was verified to be off by one ULP under `serde_json`'s default
+        # parser and correct under `float_roundtrip`. They are here rather than in a Rust unit test
+        # because the divergence was *between* the implementations: only a vector asks both.
+        (
+            "number-seventeen-significant-digits",
+            '{"n":1049841890.8179493}',
+            "one ULP apart under a fast float parser; the collision the review reproduced",
+        ),
+        (
+            "number-twenty-one-integer-digits",
+            '{"n":123456789012345678901}',
+            "an integer literal beyond binary64's exact range — the rounding must still be correct",
+        ),
+        (
+            "number-subnormal-boundary",
+            '{"n":2.2250738585072011e-308}',
+            "crosses normal/subnormal: 0x0010000000000000 vs 0x000fffffffffffff",
+        ),
+        (
+            "number-negative-seventeen-digits",
+            '{"n":-1596336818.4097385}',
+            "the same defect on the negative side, which no existing case covered",
+        ),
     ]
     vectors = []
     for name, raw, desc in cases:
